@@ -1,5 +1,6 @@
 const fs = require('fs/promises')
 const path = require('path')
+const skillRegistry = require('../../runtime/skill_registry.ts')
 
 const ENV_CONFIG_RELATIVE_PATH = path.join('configs', 'environments', 'app.json')
 const ENV_CONFIG_PATH = path.resolve(process.cwd(), ENV_CONFIG_RELATIVE_PATH)
@@ -112,6 +113,11 @@ function registerRoutes(app, manager) {
     const result = await manager.sendCommand(name, command)
     res.status(result.ok ? 200 : 400).json(result)
   })
+
+  app.get('/api/skills', (req, res) => {
+    const skills = skillRegistry.list()
+    res.json({ ok: true, skills })
+  });
 
   // ---- 404 catch-all ----
   app.use((req, res) => {
