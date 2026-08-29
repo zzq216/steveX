@@ -199,7 +199,7 @@ function agentCardHtml(agent) {
 
         <div class="command-stack">
           <form class="command-panel" data-action="modcall">
-            <div class="command-title">Call Mod Method <span>(POST /api/mod/:method 透传)</span></div>
+            <div class="command-title">Call Mod Method <span>(Phase A 单连接：作用于已 Connect 的 mod)</span></div>
             <div class="command-row">
               <select name="method" class="method-select" aria-label="mod method">
                 <option value="">— select method —</option>

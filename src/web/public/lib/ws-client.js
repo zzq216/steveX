@@ -41,9 +41,8 @@ export function initWebSocket() {
         patchAgent(data.name, () => ({ online: false }))
         break
 
-      case 'agent:update':
-        setState({})
-        break
+      // 注：状态实时刷新走 snapshot 全量推送（后端 agent:update 只置 dirty，
+      // 不再单独广播），这里不再处理 agent:update。
 
       case 'agent:command:start':
         addLog(data.name, 'cmd-start', {

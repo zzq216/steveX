@@ -41,7 +41,7 @@ class ModWSClient extends EventEmitter {
   connect() {
     this.closing = false
     if (this.ws) {
-      try { this.ws.removeAllListeners(); this.ws.close() } catch (_) {}
+      this._closeWebSocket(this.ws)
       this.ws = null
     }
     if (this._reconnectTimer) {
@@ -50,6 +50,20 @@ class ModWSClient extends EventEmitter {
     }
     this._reconnectDelay = this.reconnectDelayMs
     this._open()
+  }
+
+  /**
+   * 关闭一个 ws 实例。先移除所有监听再 close —— 但 CONNECTING 阶段 close()
+   * 会 emit 'error'（"WebSocket was closed before the connection was established"），
+   * 所以必须重新挂一个 noop error 监听，否则 unhandled 'error' 直接炸掉进程
+   * （Disconnect 连接中的 agent 是 Phase A 的常态操作，必须安全）。
+   */
+  _closeWebSocket(ws) {
+    try {
+      ws.removeAllListeners()
+      ws.on('error', () => {})
+      ws.close()
+    } catch (_) {}
   }
 
   /** 关闭连接，停止重连，并 settle 所有在途请求。 */
@@ -63,7 +77,7 @@ class ModWSClient extends EventEmitter {
     this.ws = null
     this.connected = false
     if (ws) {
-      try { ws.removeAllListeners(); ws.close() } catch (_) {}
+      this._closeWebSocket(ws)
     }
     this._rejectAllPending('connection closed')
     this.emit('disconnected', 'closed')

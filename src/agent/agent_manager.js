@@ -43,7 +43,9 @@ class AgentManager {
     const existing = this.agents.get(name)
     if (existing?.isOnline() || existing?.isConnecting()) return true
 
-    const agent = new SteveXAgent(cfg, name)
+    // Phase A 单连接：per-agent mod 配置缺失时回退全局 config.mod
+    // （当前 env 配置的 agent 只有 mineflayer 遗留字段，无 mod 段）
+    const agent = new SteveXAgent({ ...cfg, mod: cfg.mod ?? this.config.mod }, name, this.eventBus)
     if (!agent.start()) return false
     this.agents.set(name, agent)
 
@@ -77,9 +79,16 @@ class AgentManager {
   getAgentHealth(agent) {
     const v = agent?.vitals
 
+    // mod 端 health/maxHealth 经 f1() 返回字符串（"17.0"），故与 position
+    // 一样用 Number() 强转；非法/缺省值回退 20。
+    const n = (val) => {
+      const num = Number(val)
+      return Number.isFinite(num) ? num : 20
+    }
+
     return {
-      health: (typeof v?.health === 'number') ? v.health : 20,
-      maxHealth: (typeof v?.maxHealth === 'number') ? v.maxHealth : 20
+      health: n(v?.health),
+      maxHealth: n(v?.maxHealth)
     }
   }
 
@@ -112,6 +121,19 @@ class AgentManager {
   }
 
   // ── Queries ──
+
+  /**
+   * Phase A：返回当前已创建连接的 agent 的 ModWSClient。
+   * 透传路由 /api/mod/* 请求时从这里解析 —— 与 agent 卡片的
+   * Connect/Disconnect 指向同一连接；无 agent 时返回 null（调用方 502）。
+   * Phase B 多 agent 时改为按 name 选择。
+   */
+  getModClient() {
+    for (const agent of this.agents.values()) {
+      if (agent.client) return agent.client
+    }
+    return null
+  }
 
   getStatus() {
     return [...this.agentConfigs.values()].map(cfg => {

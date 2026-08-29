@@ -2,8 +2,11 @@ const fs = require('fs/promises')
 const path = require('path')
 const { METHODS } = require('../../mod/methods')
 
+// 与 src/utils/config.js 一致：以仓库根为基准（__dirname 锚定），不依赖启动 cwd。
+// 否则从非仓库根目录启动时，面板读写会指向错误路径，而启动加载仍读正确路径。
+const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 const ENV_CONFIG_RELATIVE_PATH = path.join('configs', 'environments', 'app.json')
-const ENV_CONFIG_PATH = path.resolve(process.cwd(), ENV_CONFIG_RELATIVE_PATH)
+const ENV_CONFIG_PATH = path.join(REPO_ROOT, ENV_CONFIG_RELATIVE_PATH)
 
 /**
  * Register all API routes on the Express app.
@@ -21,8 +24,20 @@ function registerRoutes(app, manager) {
   // ---- Read environment config ----
   app.get('/api/config/environment', async (req, res) => {
     try {
-      const raw = await fs.readFile(ENV_CONFIG_PATH, 'utf8')
-      const config = JSON.parse(raw)
+      let config
+
+      try {
+        const raw = await fs.readFile(ENV_CONFIG_PATH, 'utf8')
+        config = JSON.parse(raw)
+      } catch (err) {
+        // env 文件是 gitignored 的可选覆盖层（含密钥）：首次克隆时不存在。
+        // 与 config.js 启动加载语义一致 —— 视作"尚无覆盖"返回空 {}，由保存时创建。
+        if (err.code === 'ENOENT') {
+          config = {}
+        } else {
+          throw err
+        }
+      }
 
       res.json({
         ok: true,
@@ -62,6 +77,8 @@ function registerRoutes(app, manager) {
         })
       }
 
+      // 首次保存时 configs/environments/ 目录可能不存在（gitignored，全新克隆无此目录）
+      await fs.mkdir(path.dirname(ENV_CONFIG_PATH), { recursive: true })
       await fs.writeFile(ENV_CONFIG_PATH, nextRaw, 'utf8')
 
       res.json({

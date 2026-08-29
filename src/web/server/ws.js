@@ -64,11 +64,8 @@ function setupWebSocket(server, manager) {
   })
 
   eventBus.on('agent:update', (data) => {
-    broadcast(wss, {
-      type: 'agent:update',
-      name: data.name,
-      timestamp: data.timestamp || Date.now()
-    })
+    // 状态数据以 snapshot 全量推送（1s 节流），此处只需置脏标记；
+    // 不再单独广播 agent:update 消息 —— 前端无人消费，纯冗余渲染开销。
     snapshotDirty = true
   })
 

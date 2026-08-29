@@ -6,9 +6,15 @@ const { METHODS, METHOD_NAMES } = require('../../mod/methods')
  * 透传主路径：POST /api/mod/:method，body 即 params，直接中转到 mod，
  * 响应原样回传 { ok, data } / { ok:false, error }。vision 大数据
  * （vision/snapshot 等）只走 HTTP 请求-响应，不进入 WS 广播。
+ *
+ * Phase A 单连接：客户端不在注册时绑定单例，而是每个请求从 manager 解析
+ * （manager.getModClient() = 已 Connect 的 agent 的 client）。未 Connect
+ * 时返回 502 —— 与 agent 卡片状态一致，杜绝"卡片离线但 /api/mod 可用"。
  */
 
-function registerModRoutes(app, modClient) {
+function registerModRoutes(app, manager) {
+  const getClient = () => (manager.getModClient ? manager.getModClient() : null)
+
   // ── 透传主路径：POST /api/mod/:method ──
   // 方法名含斜杠（vision/snapshot、key/up…），故用 /*splat 捕获整段余下路径
   // （Express 5 / path-to-regexp v8 命名通配符，req.params.splat 为数组）。
@@ -21,17 +27,32 @@ function registerModRoutes(app, modClient) {
       ? req.body
       : {}
 
-    const result = await modClient.call(method, params)
+    const client = getClient()
+    if (!client) {
+      return res.status(502).json({ ok: false, error: 'Mod not connected' })
+    }
+
+    const result = await client.call(method, params)
     // 上游失败（mod 错误 / 未连接 / 超时）统一 502 Bad Gateway
     res.status(result.ok ? 200 : 502).json(result)
   })
 
   // ── 状态查询：GET /api/mod/status ──
   app.get('/api/mod/status', async (req, res) => {
+    const client = getClient()
+
+    if (!client) {
+      return res.json({
+        connected: false,
+        methods: METHOD_NAMES,
+        methodCount: METHODS.length
+      })
+    }
+
     // 实时拉取一次 status，避免返回过期缓存
-    const status = await modClient.refreshStatus()
+    const status = await client.refreshStatus()
     res.json({
-      connected: modClient.isConnected(),
+      connected: client.isConnected(),
       ...status,
       methods: METHOD_NAMES,
       methodCount: METHODS.length
@@ -46,7 +67,12 @@ function registerModRoutes(app, modClient) {
       return res.status(400).json({ ok: false, error: 'Missing method (string) in body' })
     }
 
-    const result = await modClient.call(method, params && typeof params === 'object' ? params : {})
+    const client = getClient()
+    if (!client) {
+      return res.status(502).json({ ok: false, error: 'Mod not connected' })
+    }
+
+    const result = await client.call(method, params && typeof params === 'object' ? params : {})
     res.status(result.ok ? 200 : 502).json(result)
   })
 

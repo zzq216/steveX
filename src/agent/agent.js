@@ -14,9 +14,10 @@ const { ModWSClient } = require('../mod/client')
  * 连接建立后每 3s 轮询刷新一次。
  */
 class SteveXAgent {
-  constructor(config, name = 'steveX') {
+  constructor(config, name = 'steveX', eventBus = null) {
     this.config = config
     this.name = name
+    this.eventBus = eventBus
 
     this.client = null
     this.connected = false
@@ -85,6 +86,10 @@ class SteveXAgent {
   /**
    * 从 mod 拉取 player + f3 + status 刷新状态缓存。
    * 全部调用都走 ModWSClient.call()（失败不抛异常，只保持旧缓存）。
+   *
+   * 刷新完成后广播 agent:update，由 ws.js 标记 snapshotDirty 并节流广播
+   * 最新 getStatus() 快照，驱动 Web 面板实时更新（否则面板只在 connect/
+   * disconnect 时收到一次快照，之后冻结）。
    */
   async refreshState() {
     const client = this.client
@@ -109,6 +114,12 @@ class SteveXAgent {
     this.currentAction = this.busy ? 'Busy' : (this.connected ? 'Idle' : 'Offline')
 
     this.lastRefreshAt = Date.now()
+
+    // 通知事件总线状态已刷新（ws.js 侧 1s 节流广播，无需在此限频）
+    this.eventBus?.emit('agent:update', {
+      name: this.name,
+      timestamp: Date.now()
+    })
   }
 
   /** 是否已连上 mod（在线）。 */
