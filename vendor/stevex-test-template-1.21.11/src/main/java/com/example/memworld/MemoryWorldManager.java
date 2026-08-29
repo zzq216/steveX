@@ -1,5 +1,8 @@
 package com.example.memworld;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -12,6 +15,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
@@ -72,6 +76,9 @@ public final class MemoryWorldManager {
         MemoryConfig config = MemoryConfig.get();
         if (!config.autoOpenOnLaunch) return;
 
+        // 首次启动一次性初始化客户端设置（语言/音量/字幕），之后不再重复
+        applyClientDefaults(mc);
+
         String worldId = config.worldName;
         LevelStorageSource storage = mc.getLevelSource();
         Screen parent = mc.screen;
@@ -102,6 +109,45 @@ public final class MemoryWorldManager {
                     MemoryWorldManager::createVoidWorldDimensions, // 完全空世界（纯虚空）
                     parent
             );
+        }
+    }
+
+    /**
+     * 记忆端客户端设置一次性初始化（仅在第一次启动时执行）。
+     *
+     * <p>三项设置：语言 → 简体中文、主音量 → 0、隐藏式字幕 → 开。
+     * 以标记文件 {@code config/stevex-test/client_defaults.applied} 持久化"已初始化"状态，
+     * 后续启动直接跳过（语言经 options.txt 持久化，再次启动读到的就是已设值）。
+     */
+    private static void applyClientDefaults(final Minecraft mc) {
+        Path marker = mc.gameDirectory.toPath().resolve("config").resolve("stevex-test")
+                .resolve("client_defaults.applied");
+        if (Files.exists(marker)) {
+            LOGGER.info("[MemoryWorld] Client defaults already applied, skip");
+            return;
+        }
+
+        // ① 语言：简体中文。setSelected 只记录 currentCode，须 reloadResourcePacks 才真正生效
+        if (!"zh_cn".equals(mc.options.languageCode)) {
+            mc.options.languageCode = "zh_cn";
+            mc.getLanguageManager().setSelected("zh_cn");
+        }
+        // ② 主音量 0（1.21.11 无独立 soundMasterVolume，主音量 = SoundSource.MASTER 的 OptionInstance）
+        mc.options.getSoundSourceOptionInstance(SoundSource.MASTER).set(0.0);
+        // ③ 隐藏式字幕打开
+        mc.options.showSubtitles().set(true);
+        // 统一持久化到 options.txt
+        mc.options.save();
+        // 语言重载资源后生效（异步，返回的 future 可忽略）
+        mc.reloadResourcePacks();
+
+        // 写入标记，确保整个生命周期只初始化一次
+        try {
+            Files.createDirectories(marker.getParent());
+            Files.writeString(marker, Long.toString(System.currentTimeMillis()));
+            LOGGER.info("[MemoryWorld] Client defaults applied: language=zh_cn, masterVolume=0, subtitles=on");
+        } catch (IOException e) {
+            LOGGER.warn("[MemoryWorld] Failed to write client defaults marker: {}", e.getMessage());
         }
     }
 
