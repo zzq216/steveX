@@ -10,20 +10,22 @@ $Memory  = Join-Path $Root 'vendor\stevex-test-template-1.21.11'
 Write-Host "[steveX] 启动顺序：采集端 → steveX → 记忆端（各开独立窗口）"
 
 # 1) 采集端（真实世界）— 首次运行联网下载依赖/客户端，耗时较长
-Start-Process powershell -NoExit -WorkingDirectory $Capture `
-  -ArgumentList '-Command', '.\gradlew.bat runClient'
+# 注：-NoExit 是 powershell.exe 的参数，必须放在 -ArgumentList 内传给子进程
+#（Start-Process 本身没有 -NoExit 参数）。
+Start-Process powershell -WorkingDirectory $Capture `
+  -ArgumentList '-NoExit', '-Command', '.\gradlew.bat runClient'
 
 Start-Sleep -Seconds 2
 
 # 2) steveX（脑）— Web 面板 http://localhost:8090
-Start-Process powershell -NoExit -WorkingDirectory $Root `
-  -ArgumentList '-Command', 'npm start'
+Start-Process powershell -WorkingDirectory $Root `
+  -ArgumentList '-NoExit', '-Command', 'npm start'
 
 Start-Sleep -Seconds 1
 
 # 3) 记忆端（记忆世界）— 文件驱动，独立进程
-Start-Process powershell -NoExit -WorkingDirectory $Memory `
-  -ArgumentList '-Command', '.\gradlew.bat runClient'
+Start-Process powershell -WorkingDirectory $Memory `
+  -ArgumentList '-NoExit', '-Command', '.\gradlew.bat runClient'
 
 Write-Host "[steveX] 已拉起 3 个进程。"
 Write-Host "[steveX] 采集端进入世界后：Web 面板 http://localhost:8090，mod WS 端口 25550"
