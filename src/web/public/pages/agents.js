@@ -212,6 +212,22 @@ function agentCardHtml(agent) {
             </div>
             <pre class="mod-result" hidden></pre>
           </form>
+
+          <form class="command-panel" data-action="modbatch">
+            <div class="command-title">Mod Batch <span>(多行序列 + delay:毫秒 前缀，逐条走 /api/mod)</span></div>
+            <div class="command-row">
+              <textarea name="batch" class="method-params batch-input" rows="5" spellcheck="false"
+                placeholder='每行一条：可选 delay:毫秒 前缀 + JSON
+{"method":"key/up","params":{"pressed":true}}
+delay:3000 {"method":"key/up","params":{"pressed":true}}
+{"method":"key/right","params":{"pressed":true}}'></textarea>
+            </div>
+            <div class="command-row">
+              <button class="btn send" type="submit">Run Batch</button>
+              <button class="btn ghost" type="button" data-action="stop-batch" hidden>Stop</button>
+            </div>
+            <pre class="mod-result batch-result" hidden></pre>
+          </form>
         </div>
       </div>
     </article>
@@ -449,6 +465,9 @@ function handleClick(e) {
     disconnectAgent(name)
   } else if (action === 'log') {
     showLogModal(name)
+  } else if (action === 'stop-batch') {
+    const form = btn.closest('form.command-panel')
+    if (form) form.dataset.batchRunning = '0'
   }
 }
 
@@ -495,6 +514,114 @@ async function handleSubmit(e) {
       resultEl.textContent = `${method} ✕ ${result.error || 'unknown error'}`
     }
   }
+
+  if (action === 'modbatch') {
+    runModBatch(form)
+  }
+}
+
+// ── Mod Batch 批量执行（多行 + delay:毫秒 前缀）──
+// 语法与 control_panel.html 一致：每行一条 JSON，可用 delay:N 前缀插入等待。
+// 与单方法面板的区别只在编排层：这里逐条解析并按序 await，最后走同一个
+// /api/mod/:method 透传，所以延时时序在浏览器端完成，mod 端能力不变。
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function parseBatchLine(line) {
+  let rest = line.trim()
+  if (!rest || rest.startsWith('#') || rest.startsWith('//')) return null
+
+  let delayMs = 0
+  const delayMatch = rest.match(/^delay:(\d+)\s+/)
+  if (delayMatch) {
+    delayMs = parseInt(delayMatch[1], 10) || 0
+    rest = rest.slice(delayMatch[0].length).trim()
+  }
+
+  let obj
+  try {
+    obj = JSON.parse(rest)
+  } catch {
+    return { error: `invalid JSON: ${rest}` }
+  }
+
+  if (!obj || typeof obj.method !== 'string' || !obj.method) {
+    return { error: `missing method: ${rest}` }
+  }
+
+  return {
+    method: obj.method,
+    params: obj.params && typeof obj.params === 'object' && !Array.isArray(obj.params) ? obj.params : {},
+    delayMs
+  }
+}
+
+async function runModBatch(form) {
+  if (form.dataset.batchRunning === '1') return
+
+  const textarea = form.querySelector('textarea[name="batch"]')
+  const runBtn = form.querySelector('button[type="submit"]')
+  const stopBtn = form.querySelector('[data-action="stop-batch"]')
+  const resultEl = form.querySelector('.batch-result')
+
+  const cmds = []
+  const errors = []
+  textarea.value.split('\n').forEach((line, i) => {
+    const c = parseBatchLine(line)
+    if (!c) return
+    if (c.error) errors.push(`line ${i + 1}: ${c.error}`)
+    else cmds.push({ ...c, lineNo: i + 1 })
+  })
+
+  if (!cmds.length) {
+    alert(errors.length ? `No valid commands:\n${errors.join('\n')}` : 'No commands to run')
+    return
+  }
+
+  form.dataset.batchRunning = '1'
+  runBtn.disabled = true
+  stopBtn.hidden = false
+  resultEl.hidden = false
+  resultEl.className = 'mod-result batch-result'
+  resultEl.textContent = errors.length ? errors.join('\n') + '\n\n' : ''
+
+  let completed = true
+  for (let i = 0; i < cmds.length; i++) {
+    if (form.dataset.batchRunning !== '1') {
+      completed = false
+      break
+    }
+    const c = cmds[i]
+
+    if (c.delayMs > 0) {
+      resultEl.textContent += `… wait ${c.delayMs}ms → line ${c.lineNo} ${c.method}\n`
+      resultEl.scrollTop = resultEl.scrollHeight
+      await sleep(c.delayMs)
+      if (form.dataset.batchRunning !== '1') {
+        completed = false
+        break
+      }
+    }
+
+    resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} …\n`
+    resultEl.scrollTop = resultEl.scrollHeight
+    const result = await callModMethod(c.method, c.params)
+
+    if (result.ok) {
+      resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} → ${JSON.stringify(result.data)}\n`
+      resultEl.className = 'mod-result batch-result ok'
+    } else {
+      resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} ✕ ${result.error || 'unknown error'}\n`
+      resultEl.className = 'mod-result batch-result err'
+    }
+    resultEl.scrollTop = resultEl.scrollHeight
+  }
+
+  form.dataset.batchRunning = '0'
+  runBtn.disabled = false
+  stopBtn.hidden = true
+  resultEl.textContent += completed ? '— batch finished —\n' : '— batch stopped —\n'
+  resultEl.scrollTop = resultEl.scrollHeight
 }
 
 // ── Init ──

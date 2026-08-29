@@ -602,6 +602,16 @@ select {
   border-left: 3px solid var(--danger);
 }
 
+/* Mod Batch 批量面板：输入区加高，结果区等宽字体 + 更高上限 */
+.batch-input {
+  min-height: 120px;
+}
+
+.batch-result {
+  max-height: 320px;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
 .mod-endpoint {
   font-size: 13.5px;
   font-variant-numeric: tabular-nums;
