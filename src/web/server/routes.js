@@ -1,6 +1,6 @@
 const fs = require('fs/promises')
 const path = require('path')
-const skillRegistry = require('../../runtime/skill_registry.ts')
+const { METHODS } = require('../../mod/methods')
 
 const ENV_CONFIG_RELATIVE_PATH = path.join('configs', 'environments', 'app.json')
 const ENV_CONFIG_PATH = path.resolve(process.cwd(), ENV_CONFIG_RELATIVE_PATH)
@@ -98,24 +98,15 @@ function registerRoutes(app, manager) {
     res.status(ok ? 200 : 404).json({ ok })
   })
 
-  // ---- Execute command ----
-  app.post('/api/agents/:name/command', async (req, res) => {
-    const name = decodeURIComponent(req.params.name)
-    const command = (req.body.command || '').trim()
-
-    if (!command) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Missing command'
-      })
-    }
-
-    const result = await manager.sendCommand(name, command)
-    res.status(result.ok ? 200 : 400).json(result)
-  })
-
+  // ---- Skills: 语义改为 mod 48 方法清单（原 77 命令执行层已退役）----
+  // 前端可复用该接口渲染"可调用方法"下拉，等价于 GET /api/mod/methods。
   app.get('/api/skills', (req, res) => {
-    const skills = skillRegistry.list()
+    const skills = METHODS.map(m => ({
+      name: m.method,
+      description: m.description,
+      args: m.params
+    }))
+
     res.json({ ok: true, skills })
   });
 

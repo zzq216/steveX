@@ -1,8 +1,12 @@
 // ── steveX Agents page ──
 // Rendering + event handlers for the agent management view.
+//
+// 底层已改为透传采集端 mod 的 48 方法（steveX_改进方案.md）：原"Send Command"
+// 自由文本框改为"Call Mod Method"结构化调用（POST /api/mod/:method）。
+// 卡片同时展示该 agent 的 mod 连接状态（host:port / connected / busy）。
 
 import { getState, subscribe } from '../lib/state.js'
-import { connectAgent, disconnectAgent, sendCommand } from '../lib/api.js'
+import { connectAgent, disconnectAgent, callModMethod, fetchModMethods } from '../lib/api.js'
 import { escapeHtml } from '../lib/utils.js'
 import { hydrateIcons } from '../lib/icons.js'
 
@@ -12,7 +16,8 @@ const PLACEHOLDER = {
   mode: 'Survival',
   model: 'deepseek-v4-flash',
   position: { x: '~', y: '~', z: '~' },
-  action: 'Idle'
+  action: 'Idle',
+  mod: { host: null, port: null, connected: false, busy: false, error: '' }
 }
 
 // Backend getStatus() already returns canonical field names.
@@ -24,7 +29,8 @@ function getAgentView(agent) {
     mode: agent.gameMode ?? PLACEHOLDER.mode,
     model: agent.model ?? PLACEHOLDER.model,
     position: agent.position ?? PLACEHOLDER.position,
-    action: agent.currentAction ?? PLACEHOLDER.action
+    action: agent.currentAction ?? PLACEHOLDER.action,
+    mod: agent.mod ?? PLACEHOLDER.mod
   }
 }
 
@@ -74,16 +80,47 @@ function filteredAgents() {
   return list
 }
 
+// ── mod 方法清单（填充 Call Mod Method 下拉）──
+
+let METHOD_LIST = []
+
+function methodOptionsHtml() {
+  return METHOD_LIST.map(m => `<option value="${m.method}">${m.method}</option>`).join('')
+}
+
+function syncMethodSelects() {
+  document.querySelectorAll('.method-select').forEach(sel => {
+    const current = sel.value
+    sel.innerHTML = `<option value="">— select method —</option>${methodOptionsHtml()}`
+    if (current) sel.value = current
+  })
+}
+
+async function loadMethodList() {
+  try {
+    METHOD_LIST = (await fetchModMethods()) || []
+  } catch (err) {
+    console.error('[agents] Failed to load mod methods:', err)
+    METHOD_LIST = []
+  }
+  syncMethodSelects()
+}
+
 // ── Agent card template ──
 
 function agentCardHtml(agent) {
   const statusClass = agent.online ? 'online' : 'offline'
   const statusText = agent.online ? 'online' : 'offline'
-  const username = agent.username || '\u2014'
+  const username = agent.username || '—'
 
   const view = getAgentView(agent)
   const percent = getHealthPercent(view.health, view.maxHealth)
   const position = formatPosition(view.position)
+
+  const mod = view.mod
+  const modDot = mod.connected ? (mod.busy ? 'busy' : 'online') : 'offline'
+  const modEndpoint = mod.host ? `${escapeHtml(mod.host)}:${escapeHtml(mod.port)}` : '—'
+  const modBusyTag = mod.connected && mod.busy ? '<span class="pill busy-pill">busy</span>' : ''
 
   return `
     <article class="agent-card" data-agent-name="${escapeHtml(agent.name)}">
@@ -150,27 +187,30 @@ function agentCardHtml(agent) {
             </div>
 
             <div class="stat-row">
-              <div class="stat-label">Status</div>
-              <div class="stat-value"><span class="dot ${statusClass}"></span>${agent.online ? 'Online' : 'Offline'}</div>
+              <div class="stat-label">Mod</div>
+              <div class="stat-value">
+                <span class="dot ${modDot}" aria-hidden="true"></span>
+                <span class="mod-endpoint">${modEndpoint}</span>
+                ${modBusyTag}
+              </div>
             </div>
           </div>
         </div>
 
         <div class="command-stack">
-          <form class="command-panel" data-action="command" data-agent="${escapeHtml(agent.name)}">
-            <div class="command-title">Send Command <span>(to Agent)</span></div>
+          <form class="command-panel" data-action="modcall">
+            <div class="command-title">Call Mod Method <span>(POST /api/mod/:method 透传)</span></div>
             <div class="command-row">
-              <input type="text" name="message" placeholder="Enter command..." autocomplete="off" />
+              <select name="method" class="method-select" aria-label="mod method">
+                <option value="">— select method —</option>
+                ${methodOptionsHtml()}
+              </select>
               <button class="btn send" type="submit">Send</button>
             </div>
-          </form>
-
-          <form class="command-panel" data-action="message" data-agent="${escapeHtml(agent.name)}">
-            <div class="command-title">Send Message <span>(to LLM Planner)</span></div>
             <div class="command-row">
-              <input type="text" name="message" placeholder="Enter message for LLM Planner..." autocomplete="off" />
-              <button class="btn send" type="submit">Send</button>
+              <textarea name="params" class="method-params" rows="2" placeholder='Params JSON (optional) — e.g. {"pressed": true}' spellcheck="false"></textarea>
             </div>
+            <pre class="mod-result" hidden></pre>
           </form>
         </div>
       </div>
@@ -250,19 +290,19 @@ function buildLogEntryEl(entry) {
   let html = ''
   switch (entry.type) {
     case 'cmd-start':
-      html = `<span class="log-time">${time}</span> <span class="log-tag">[CMD]</span> \u2192 ${escapeHtml(entry.command)}`
+      html = `<span class="log-time">${time}</span> <span class="log-tag">[CMD]</span> → ${escapeHtml(entry.command)}`
       break
     case 'cmd-done':
-      html = `<span class="log-time">${time}</span> <span class="log-tag">[CMD]</span> \u2190 ${escapeHtml(entry.command)}<br>${escapeHtml(entry.output)}`
+      html = `<span class="log-time">${time}</span> <span class="log-tag">[CMD]</span> ← ${escapeHtml(entry.command)}<br>${escapeHtml(entry.output)}`
       break
     case 'cmd-error':
-      html = `<span class="log-time">${time}</span> <span class="log-tag">[CMD]</span> \u2715 ${escapeHtml(entry.command)}<br>${escapeHtml(entry.output)}`
+      html = `<span class="log-time">${time}</span> <span class="log-tag">[CMD]</span> ✕ ${escapeHtml(entry.command)}<br>${escapeHtml(entry.output)}`
       break
     case 'llm-input':
-      html = `<span class="log-time">${time}</span> <span class="log-tag">[LLM]</span> \u2192 <em>${escapeHtml(entry.model)}</em><br>${escapeHtml(entry.prompt ? entry.prompt.slice(0, 2000) + (entry.prompt.length > 2000 ? '\u2026' : '') : '')}`
+      html = `<span class="log-time">${time}</span> <span class="log-tag">[LLM]</span> → <em>${escapeHtml(entry.model)}</em><br>${escapeHtml(entry.prompt ? entry.prompt.slice(0, 2000) + (entry.prompt.length > 2000 ? '…' : '') : '')}`
       break
     case 'llm-output':
-      html = `<span class="log-time">${time}</span> <span class="log-tag">[LLM]</span> \u2190 <em>${escapeHtml(entry.model)}</em><br>${escapeHtml(entry.response ? entry.response.slice(0, 2000) + (entry.response.length > 2000 ? '\u2026' : '') : '')}`
+      html = `<span class="log-time">${time}</span> <span class="log-tag">[LLM]</span> ← <em>${escapeHtml(entry.model)}</em><br>${escapeHtml(entry.response ? entry.response.slice(0, 2000) + (entry.response.length > 2000 ? '…' : '') : '')}`
       break
   }
 
@@ -316,6 +356,10 @@ function updateDynamicFields(card, agent) {
   const percent = getHealthPercent(view.health, view.maxHealth)
   const position = formatPosition(view.position)
 
+  const mod = view.mod
+  const modDot = mod.connected ? (mod.busy ? 'busy' : 'online') : 'offline'
+  const modEndpoint = mod.host ? `${mod.host}:${mod.port}` : '—'
+
   // Header dot + state label
   const dot = card.querySelector('.agent-id .dot')
   if (dot) dot.className = `dot ${statusClass}`
@@ -329,7 +373,7 @@ function updateDynamicFields(card, agent) {
   // Username pill
   const usernamePill = card.querySelector('.username-pill')
   if (usernamePill) {
-    usernamePill.textContent = agent.username || '\u2014'
+    usernamePill.textContent = agent.username || '—'
   }
 
   // Update each stat row by label
@@ -379,8 +423,13 @@ function updateDynamicFields(card, agent) {
       hydrateIcons(val)
     }
 
-    if (name === 'Status') {
-      val.innerHTML = `<span class="dot ${statusClass}"></span>${agent.online ? 'Online' : 'Offline'}`
+    if (name === 'Mod') {
+      const busyTag = mod.connected && mod.busy ? '<span class="pill busy-pill">busy</span>' : ''
+      val.innerHTML = `
+        <span class="dot ${modDot}" aria-hidden="true"></span>
+        <span class="mod-endpoint">${escapeHtml(modEndpoint)}</span>
+        ${busyTag}
+      `
     }
   })
 }
@@ -411,17 +460,41 @@ async function handleSubmit(e) {
 
   const name = form.dataset.agent
   const action = form.dataset.action
-  const input = form.querySelector('input[name="message"]')
-  const value = input.value.trim()
-  if (!value) return
 
-  if (action === 'command') {
-    await sendCommand(name, value)
-  } else if (action === 'message') {
-    alert('Coming soon')
+  if (action === 'modcall') {
+    const method = form.querySelector('select[name="method"]').value
+    const raw = form.querySelector('textarea[name="params"]').value.trim()
+
+    if (!method) {
+      alert('Select a mod method first')
+      return
+    }
+
+    let params = {}
+    if (raw) {
+      try {
+        params = JSON.parse(raw)
+      } catch {
+        alert('Params must be valid JSON or empty')
+        return
+      }
+    }
+
+    const resultEl = form.querySelector('.mod-result')
+    resultEl.hidden = false
+    resultEl.className = 'mod-result'
+    resultEl.textContent = `Calling ${method} …`
+
+    const result = await callModMethod(method, params)
+
+    if (result.ok) {
+      resultEl.className = 'mod-result ok'
+      resultEl.textContent = `${method} → ${JSON.stringify(result.data, null, 2)}`
+    } else {
+      resultEl.className = 'mod-result err'
+      resultEl.textContent = `${method} ✕ ${result.error || 'unknown error'}`
+    }
   }
-
-  input.value = ''
 }
 
 // ── Init ──
@@ -429,4 +502,5 @@ async function handleSubmit(e) {
 export function initAgents(container) {
   container.addEventListener('click', handleClick)
   container.addEventListener('submit', handleSubmit)
+  loadMethodList()
 }

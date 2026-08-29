@@ -1,12 +1,15 @@
 const { EventEmitter } = require('events')
 const { SteveXAgent } = require('./agent')
-const { loadCommands } = require('../commands')
 
+/**
+ * AgentManager —— 管理多个 agent（改造后：每个 agent 是一条到采集端 mod 的
+ * WebSocket 连接，见 steveX_改进方案.md §六）。连接对象从 mineflayer bot
+ * 变为 ModWSClient，生命周期/事件总线保持不变。
+ */
 class AgentManager {
   constructor(loadConfig) {
     this.loadConfig = loadConfig
     this.config = this.loadConfig()
-    this.sharedCommands = loadCommands().commands
     this.agents = new Map()
     this.eventBus = new EventEmitter()
     this.eventBus.setMaxListeners(50)
@@ -35,11 +38,13 @@ class AgentManager {
 
   connectAgent(name) {
     const cfg = this.agentConfigs.get(name)
-    const existing = this.agents.get(name)
-    if (!cfg || existing?.isOnline() || existing?.isConnecting()) return !!cfg
+    if (!cfg) return false
 
-    const agent = new SteveXAgent(cfg, name, this.sharedCommands)
-    agent.start()
+    const existing = this.agents.get(name)
+    if (existing?.isOnline() || existing?.isConnecting()) return true
+
+    const agent = new SteveXAgent(cfg, name)
+    if (!agent.start()) return false
     this.agents.set(name, agent)
 
     this.eventBus.emit('agent:connect', { name })
@@ -53,7 +58,7 @@ class AgentManager {
 
   disconnectAgent(name) {
     const agent = this.agents.get(name)
-    if (!agent || !agent.isOnline()) return false
+    if (!agent) return false
 
     agent.shutdown()
     this.agents.delete(name)
@@ -67,73 +72,35 @@ class AgentManager {
     return true
   }
 
-  // ── Operations ──
-
-  async sendCommand(name, command) {
-    const agent = this.agents.get(name)
-    if (!agent) {
-      return { ok: false, error: 'Agent not found or not started' }
-    }
-
-    this.eventBus.emit('agent:command:start', {
-      name,
-      command,
-      timestamp: Date.now()
-    })
-
-    const result = await agent.executeCommand(command)
-
-    this.eventBus.emit('agent:command:done', {
-      name,
-      command,
-      ok: result.ok,
-      output: result.output || null,
-      error: result.error || null,
-      timestamp: Date.now()
-    })
-
-    this.eventBus.emit('agent:update', {
-      name,
-      timestamp: Date.now()
-    })
-
-    return result
-  }
-
-  // ── Runtime data helpers ──
-
-  getAgentBot(agent) {
-    return agent?.bot || agent?.minecraftBot || agent?._bot || null
-  }
+  // ── Runtime data helpers（状态全部来自 mod 缓存）──
 
   getAgentHealth(agent) {
-    const bot = this.getAgentBot(agent)
+    const v = agent?.vitals
 
     return {
-      health: bot?.health ?? 20,
-      maxHealth: bot?.maxHealth ?? 20
+      health: (typeof v?.health === 'number') ? v.health : 20,
+      maxHealth: (typeof v?.maxHealth === 'number') ? v.maxHealth : 20
     }
   }
 
-  getAgentGameMode(agent) {
-    const bot = this.getAgentBot(agent)
-
-    return bot?.game?.gameMode ?? 'Survival'
+  /** mod 未暴露游戏模式字段，透传模式下统一标记为 'N/A'。 */
+  getAgentGameMode() {
+    return 'N/A'
   }
 
   getAgentPosition(agent) {
-    const bot = this.getAgentBot(agent)
-    const pos = bot?.entity?.position
+    const xyz = agent?.position?.xyz
 
-    if (!pos) {
+    if (!Array.isArray(xyz) || xyz.length < 3) {
       return { x: '~', y: '~', z: '~' }
     }
 
-    return {
-      x: Number.isFinite(pos.x) ? pos.x.toFixed(1) : '~',
-      y: Number.isFinite(pos.y) ? pos.y.toFixed(1) : '~',
-      z: Number.isFinite(pos.z) ? pos.z.toFixed(1) : '~'
+    const fmt = (v) => {
+      const num = Number(v)
+      return Number.isFinite(num) ? num.toFixed(1) : '~'
     }
+
+    return { x: fmt(xyz[0]), y: fmt(xyz[1]), z: fmt(xyz[2]) }
   }
 
   getAgentAction(agent) {
@@ -154,15 +121,24 @@ class AgentManager {
 
       return {
         name: cfg.name,
-        username: agent?.getUsername() ?? cfg.minecraft?.username ?? cfg.name,
+        username: agent?.getUsername() ?? cfg.name,
         online,
 
-        // Runtime status for frontend live display
+        // Runtime status for frontend live display (from mod player/f3 cache)
         health,
         maxHealth,
-        gameMode: this.getAgentGameMode(agent),
+        gameMode: this.getAgentGameMode(),
         position: this.getAgentPosition(agent),
         currentAction: this.getAgentAction(agent),
+
+        // Mod connection info + live busy/error
+        mod: {
+          host: cfg.mod?.host ?? this.config.mod?.host ?? null,
+          port: cfg.mod?.port ?? this.config.mod?.port ?? null,
+          connected: online,
+          busy: agent?.busy ?? false,
+          error: agent?.modError ?? ''
+        },
 
         // Config-derived display data
         model: this.getAgentModel(cfg)

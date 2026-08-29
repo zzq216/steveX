@@ -2,12 +2,9 @@
   "agents": [
     {
       "name": "steveX",
-      "minecraft": {
-        "host": "localhost",
-        "port": 25301,
-        "username": "steveX-1",
-        "auth": "offline",
-        "version": false
+      "mod": {
+        "host": "127.0.0.1",
+        "port": 25550
       },
       "llm": {
         "provider": "deepseek",
@@ -21,5 +18,9 @@
   "web": {
     "host": "localhost",
     "port": 8090
+  },
+  "mod": {
+    "host": "127.0.0.1",
+    "port": 25550
   }
 }

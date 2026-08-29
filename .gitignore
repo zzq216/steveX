@@ -21,3 +21,8 @@ configs/environments/
 
 # IDE specific files
 steveX.code-workspace
+
+# Vendored mod build/runtime artifacts (source is tracked; these are regenerable)
+vendor/**/build/
+vendor/**/.gradle/
+vendor/**/run/

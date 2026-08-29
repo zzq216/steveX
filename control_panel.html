@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Control Panel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+  h1 { font-size: 20px; margin-bottom: 16px; color: #e94560; }
+  .layout { display: grid; grid-template-columns: 1fr 420px; gap: 16px; max-width: 1300px; }
+  .card { background: #16213e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; color: #a0a0b0; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  textarea, button { font-size: 13px; padding: 8px 12px; border-radius: 6px; border: none; }
+  textarea { background: #0f3460; color: #eee; }
+  button { background: #e94560; color: #fff; cursor: pointer; }
+  button:hover { background: #ff6b81; }
+  .row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+  #log { max-height: 300px; overflow-y: auto; font-size: 12px; font-family: monospace; }
+  #log div { padding: 2px 6px; border-bottom: 1px solid #1a1a2e; }
+  #log .err { color: #e94560; }
+  #log .ok { color: #4ecca3; }
+  .pos { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .pos span { font-size: 24px; font-weight: bold; color: #4ecca3; }
+  .pos label { font-size: 11px; color: #a0a0b0; display: block; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .status-dot.on { background: #4ecca3; }
+  .status-dot.off { background: #e94560; }
+
+  #api_wrapper { max-height: calc(100vh - 80px); overflow-y: auto; }
+  .endpoint { margin-bottom: 12px; padding: 10px; background: #0f3460; border-radius: 6px; }
+  .endpoint .method { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 6px; background: #4ecca3; color: #000; }
+  .endpoint .path { font-family: monospace; font-size: 13px; }
+  .endpoint .desc { font-size: 12px; color: #a0a0b0; margin: 4px 0; }
+  .endpoint .param { font-size: 11px; color: #f9ca24; }
+  .endpoint .sample { margin-top: 6px; display: flex; gap: 6px; align-items: center; }
+  .endpoint .sample code {
+    display: block; flex:1; background: #1a1a2e; padding: 5px 8px; border-radius: 4px;
+    font-size: 11px; font-family: monospace; white-space: pre; overflow-x: auto;
+  }
+  .endpoint .copy { font-size: 11px; padding: 4px 8px; background: #533483; border-radius: 4px; white-space: nowrap; }
+  .endpoint .copy:hover { background: #7b5ea7; }
+  .group-title { font-size: 12px; color: #e94560; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #333; }
+</style>
+</head>
+<body>
+
+<h1>
+  Agent Control Panel
+  <span id="ws_status" style="font-size:13px;font-weight:normal;margin-left:12px">
+    <span class="status-dot off"></span><span id="ws_status_text">未连接</span>
+  </span>
+</h1>
+
+<div class="layout">
+  <div>
+    <div class="card">
+      <h2>玩家位置</h2>
+      <div class="pos">
+        <div><label>X</label><span id="px">--</span></div>
+        <div><label>Y</label><span id="py">--</span></div>
+        <div><label>Z</label><span id="pz">--</span></div>
+        <div><label>Yaw</label><span id="pa">--</span></div>
+        <div><label>Pitch</label><span id="pp">--</span></div>
+        <div><label>状态</label><span id="pbusy" style="font-size:14px;color:#ff6b81;">--</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>API 调用</h2>
+      <div class="row">
+        <textarea id="batch_cmds" rows="4" style="flex:1"
+          placeholder="每行一条 JSON 或带 delay: 的序列：&#10;{"method":"key/up","params":{"pressed":true}}&#10;delay:2000 {"method":"key/up","params":{"pressed":false}}&#10;delay:1000 {"method":"camera/turn","params":{"dx":90,"dy":0}}&#10;{"method":"vision/snapshot","params":{}}"></textarea>
+        <button onclick="batchCall()" style="align-self:flex-start">发送</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>日志</h2>
+      <div id="log"></div>
+      <button style="margin-top:8px;background:#0f3460" onclick="clearLog()">清空</button>
+    </div>
+  </div>
+
+  <div id="api_wrapper" class="card">
+    <h2>API 参考</h2>
+    <input id="api_search" type="text" style="width:100%;margin-bottom:12px" placeholder="搜索..." oninput="filterApis()">
+
+    <div class="group-title">查询</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">player</span><div class="desc">玩家状态(生命/食物/饱食度/药水/状态标志)</div><div class="sample"><code>{"method":"player","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">inventory</span><div class="desc">物品栏(附魔/耐久/食物/属性等组件)</div><div class="sample"><code>{"method":"inventory","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">status</span><div class="desc">系统状态(实时 busy / 最近一次请求错误)</div><div class="sample"><code>{"method":"status","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">f3</span><div class="desc">F3 调试数据(坐标/区块/环境/准星目标/实体)</div><div class="sample"><code>{"method":"f3","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">profiler</span><div class="desc">F3+1 性能分析饼图递归树</div><div class="sample"><code>{"method":"profiler","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">tablist</span><div class="desc">Tab 在线玩家列表 + 计分板目标</div><div class="sample"><code>{"method":"tablist","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">视角</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">camera/turn</span><div class="desc">增量旋转(度)</div><div class="param">params: {"dx": 90.0, "dy": 0.0}</div><div class="sample"><code>{"method":"camera/turn","params":{"dx":90,"dy":-10}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">camera/look-at</span><div class="desc">注视坐标</div><div class="param">params: {"x":0,"y":64,"z":0}</div><div class="sample"><code>{"method":"camera/look-at","params":{"x":100,"y":70,"z":200}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">持续性按键 (pressed)</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/up</span><div class="desc">W 前进</div><div class="param">params: {"pressed":true}</div><div class="sample"><code>{"method":"key/up","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/down</span><div class="desc">S 后退</div><div class="sample"><code>{"method":"key/down","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/left</span><div class="desc">A 左移</div><div class="sample"><code>{"method":"key/left","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/right</span><div class="desc">D 右移</div><div class="sample"><code>{"method":"key/right","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/jump</span><div class="desc">空格 跳跃</div><div class="sample"><code>{"method":"key/jump","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/sprint</span><div class="desc">Ctrl 疾跑</div><div class="sample"><code>{"method":"key/sprint","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/sneak</span><div class="desc">Shift 潜行</div><div class="sample"><code>{"method":"key/sneak","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/attack</span><div class="desc">左键按住(挖矿)</div><div class="sample"><code>{"method":"key/attack","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/use</span><div class="desc">右键按住(吃/拉弓)</div><div class="sample"><code>{"method":"key/use","params":{"pressed":true}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">一次性按键</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/attack-once</span><div class="desc">左键单击(空挥)</div><div class="sample"><code>{"method":"key/attack-once","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/use-once</span><div class="desc">右键单击(放置)</div><div class="sample"><code>{"method":"key/use-once","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/drop</span><div class="desc">Q 丢弃</div><div class="sample"><code>{"method":"key/drop","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/pick-item</span><div class="desc">中键 拾取方块</div><div class="sample"><code>{"method":"key/pick-item","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/inventory</span><div class="desc">E 开背包</div><div class="sample"><code>{"method":"key/inventory","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/swap-hands</span><div class="desc">F 主副手互换</div><div class="sample"><code>{"method":"key/swap-hands","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/chat</span><div class="desc">T 打开聊天框</div><div class="sample"><code>{"method":"key/chat","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/command</span><div class="desc">/ 打开命令框</div><div class="sample"><code>{"method":"key/command","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/perspective</span><div class="desc">F5 切换视角</div><div class="sample"><code>{"method":"key/perspective","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/quick-actions</span><div class="desc">F3+F 快速动作</div><div class="sample"><code>{"method":"key/quick-actions","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">key/hotbar</span><div class="desc">切换热键栏</div><div class="param">params: {"slot":0~8}</div><div class="sample"><code>{"method":"key/hotbar","params":{"slot":3}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">容器</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">container/get</span><div class="desc">当前打开的容器全部数据(类型/槽位/进度)</div><div class="sample"><code>{"method":"container/get","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">container/slot</span><div class="desc">点击格子</div><div class="param">params: {"slot":1,"button":0,"clickType":0} — clickType: 0拾取 1快速移动 2交换 4丢弃</div><div class="sample"><code>{"method":"container/slot","params":{"slot":1,"button":0,"clickType":0}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">container/button</span><div class="desc">点击容器按钮</div><div class="param">params: {"button":0}</div><div class="sample"><code>{"method":"container/button","params":{"button":0}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">container/text</span><div class="desc">填入当前聚焦输入框文字</div><div class="param">params: {"text":"..."}</div><div class="sample"><code>{"method":"container/text","params":{"text":"hello"}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">container/close</span><div class="desc">关闭容器</div><div class="sample"><code>{"method":"container/close","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">聊天</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">chat/send</span><div class="desc">发送消息(聊天框未开则直接走连接，/ 开头为命令)</div><div class="param">params: {"text":"hello"}</div><div class="sample"><code>{"method":"chat/send","params":{"text":"hello"}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">chat/text</span><div class="desc">填入聊天框但不发送(需先 key/chat)</div><div class="param">params: {"text":"..."}</div><div class="sample"><code>{"method":"chat/text","params":{"text":"hello"}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">chat/close</span><div class="desc">关闭聊天框</div><div class="sample"><code>{"method":"chat/close","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">告示牌</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">sign/get</span><div class="desc">读取当前告示牌 4 行文字</div><div class="sample"><code>{"method":"sign/get","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">sign/set</span><div class="desc">设置某行文字</div><div class="param">params: {"line":0,"text":"..."}</div><div class="sample"><code>{"method":"sign/set","params":{"line":0,"text":"hello"}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">sign/close</span><div class="desc">保存并关闭告示牌编辑</div><div class="sample"><code>{"method":"sign/close","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">书与笔</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">book/get</span><div class="desc">读取书全部页与当前页</div><div class="sample"><code>{"method":"book/get","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">book/set</span><div class="desc">设置某页文字(page=总页数则追加)</div><div class="param">params: {"page":0,"text":"..."}</div><div class="sample"><code>{"method":"book/set","params":{"page":0,"text":"hello"}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">book/page</span><div class="desc">翻页</div><div class="param">params: {"page":1}</div><div class="sample"><code>{"method":"book/page","params":{"page":1}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">book/close</span><div class="desc">保存并关闭书</div><div class="sample"><code>{"method":"book/close","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">系统</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">sound</span><div class="desc">当前客户端播放的所有声音</div><div class="sample"><code>{"method":"sound","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">settings/get</span><div class="desc">渲染距离/模拟距离/FOV</div><div class="sample"><code>{"method":"settings/get","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">settings/set</span><div class="desc">修改设置(只改提供的字段并保存)</div><div class="param">params: {"renderDistance":12,"simulationDistance":12,"fov":70}</div><div class="sample"><code>{"method":"settings/set","params":{"renderDistance":12,"fov":80}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">视觉系统</div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">vision/snapshot</span><div class="desc">可见方块/方块实体/实体快照 + 存储统计(最长约 15s)</div><div class="sample"><code>{"method":"vision/snapshot","params":{}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+    <div class="endpoint"><span class="method">WS</span><span class="path">vision/entity</span><div class="desc">按 uuid 查询实体全量 NBT</div><div class="param">params: {"uuid":"...","force":true?} — force 跳过缓存强制刷新</div><div class="sample"><code>{"method":"vision/entity","params":{"uuid":"00000000-0000-0000-0000-000000000000"}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+
+    <div class="group-title">延时语法</div>
+    <div class="endpoint"><span class="desc">同一行前缀 delay:毫秒，用于序列操作</span><div class="sample"><code>{"method":"key/up","params":{"pressed":true}}
+delay:2000 {"method":"key/up","params":{"pressed":false}}</code><button class="copy" onclick="copySample(this)">复制</button></div></div>
+  </div>
+</div>
+
+<script>
+const WS_URL = "ws://localhost:25550";
+let ws = null;
+let requestId = 0;
+const pending = new Map();   // id → { resolve, reject }
+let connected = false;
+
+// ==================== WebSocket 连接 ====================
+
+function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    connected = true;
+    updateStatus(true);
+    log("WebSocket 已连接", "ok", true);
+    refreshPos();
+  };
+
+  ws.onclose = () => {
+    connected = false;
+    updateStatus(false);
+    log("WebSocket 已断开", "err", false);
+    // 拒绝所有等待中的请求
+    for (const [id, p] of pending) {
+      p.reject(new Error("连接已断开"));
+    }
+    pending.clear();
+  };
+
+  ws.onerror = (e) => {
+    log("WebSocket 错误", "err", false);
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      const id = msg.id;
+      const resolver = pending.get(id);
+      if (resolver) {
+        pending.delete(id);
+        if (msg.ok) {
+          resolver.resolve(msg.data);
+        } else {
+          resolver.reject(new Error(msg.error || "unknown error"));
+        }
+      }
+      // 无 id 的消息是服务端推送，直接打印
+      if (id === undefined || id === null) {
+        log("← 推送", msg, true);
+      }
+    } catch (e) {
+      log("← 无法解析: " + event.data, "err", false);
+    }
+  };
+}
+
+// ==================== 请求核心 ====================
+
+function call(method, params, timeoutMs) {
+  if (!connected) {
+    connect();
+    log("[排队] 等待连接...", "err", false);
+    return new Promise((resolve, reject) => {
+      const wait = setInterval(() => {
+        if (connected) {
+          clearInterval(wait);
+          call(method, params, timeoutMs).then(resolve).catch(reject);
+        }
+      }, 200);
+    });
+  }
+
+  const id = ++requestId;
+  const req = { id, method, params: params || {} };
+  ws.send(JSON.stringify(req));
+
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    // 按方法区分超时：vision 链路最长约 15s(深度采集+resolve 两段)，其余 20s 足够
+    const t = timeoutMs || (method.startsWith('vision/') ? 40_000 : 20_000);
+    setTimeout(() => {
+      if (pending.has(id)) {
+        pending.delete(id);
+        reject(new Error("请求超时: " + method));
+      }
+    }, t);
+  });
+}
+
+// ==================== 日志 ====================
+
+function log(msg, data, ok) {
+  const div = document.createElement('div');
+  div.className = ok ? 'ok' : 'err';
+  const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
+  div.textContent = `${new Date().toLocaleTimeString()}  ${msg}  →  ${dataStr}`;
+  document.getElementById('log').prepend(div);
+}
+
+// ==================== 状态刷新 ====================
+
+async function refreshPos() {
+  if (!connected) return;
+
+  try {
+    const s = await call("status", {});
+    const el = document.getElementById('pbusy');
+    el.textContent = s.busy ? 'BUSY' : 'IDLE';
+    el.style.color = s.busy ? '#ff6b81' : '#4ecca3';
+  } catch (e) {}
+
+  try {
+    const p = await call("f3", {});
+    document.getElementById('px').textContent = p.position.xyz[0];
+    document.getElementById('py').textContent = p.position.xyz[1];
+    document.getElementById('pz').textContent = p.position.xyz[2];
+    document.getElementById('pa').textContent = p.position.facing.yaw;
+    document.getElementById('pp').textContent = p.position.facing.pitch;
+  } catch (e) {}
+}
+
+function updateStatus(on) {
+  document.querySelector('#ws_status .status-dot').className = 'status-dot ' + (on ? 'on' : 'off');
+  document.getElementById('ws_status_text').textContent = on ? '已连接' : '未连接';
+}
+
+// ==================== 批量调用 ====================
+
+function parseLine(line) {
+  let delay = 0;
+  let json = line.trim();
+  // 支持 delay:毫秒 前缀
+  const delayMatch = json.match(/^delay:(\d+)\s+/);
+  if (delayMatch) {
+    delay = parseInt(delayMatch[1]) || 0;
+    json = json.slice(delayMatch[0].length);
+  }
+  if (!json) return null;
+  try {
+    const obj = JSON.parse(json);
+    return { method: obj.method, params: obj.params || {}, delay };
+  } catch (e) {
+    log("JSON 解析失败: " + json, "err", false);
+    return null;
+  }
+}
+
+async function batchCall() {
+  const lines = document.getElementById('batch_cmds').value.trim().split('\n').filter(l => l.trim());
+  const cmds = lines.map(parseLine).filter(Boolean);
+  if (cmds.length === 0) return;
+  log(`发送 ${cmds.length} 条请求`, "ok", true);
+
+  for (const cmd of cmds) {
+    if (cmd.delay > 0) {
+      await new Promise(r => setTimeout(r, cmd.delay));
+    }
+    try {
+      const data = await call(cmd.method, cmd.params);
+      log(`← ${cmd.method}`, data, true);
+    } catch (e) {
+      log(`← ${cmd.method}`, e.message, false);
+    }
+  }
+  refreshPos();
+}
+
+// ==================== 工具 ====================
+
+async function copySample(btn) {
+  const code = btn.parentElement.querySelector('code').textContent;
+  await navigator.clipboard.writeText(code);
+  const orig = btn.textContent;
+  btn.textContent = '已复制!';
+  setTimeout(() => btn.textContent = orig, 1000);
+}
+
+function filterApis() {
+  const q = document.getElementById('api_search').value.toLowerCase();
+  document.querySelectorAll('#api_wrapper .endpoint, #api_wrapper .group-title').forEach(el => {
+    el.style.display = q === '' || el.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function clearLog() { document.getElementById('log').innerHTML = ""; }
+
+// ==================== 启动 ====================
+
+connect();
+setInterval(refreshPos, 1000);
+</script>
+</body>
+</html>

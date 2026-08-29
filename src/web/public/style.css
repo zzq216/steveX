@@ -158,6 +158,17 @@ select:focus-visible {
   box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.09);
 }
 
+.dot.busy {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .page {
   min-width: 0;
   padding: 36px 52px 52px;
@@ -534,6 +545,72 @@ select {
 
 .command-row input::placeholder {
   color: #838291;
+}
+
+/* mod 方法透传调用面板（Phase D） */
+.method-select {
+  min-width: 0;
+  flex: 1;
+  height: 52px;
+  padding: 0 42px 0 16px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: 0;
+}
+
+.method-params {
+  min-width: 0;
+  flex: 1;
+  padding: 12px 16px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: 0;
+  resize: vertical;
+}
+
+.method-params::placeholder {
+  color: #838291;
+}
+
+.mod-result {
+  margin-top: 14px;
+  padding: 12px 14px;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: #1b1b24;
+}
+
+.mod-result.ok {
+  border-left: 3px solid var(--success);
+}
+
+.mod-result.err {
+  border-left: 3px solid var(--danger);
+}
+
+.mod-endpoint {
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.busy-pill {
+  margin-left: 6px;
+  color: #b45309;
+  background: rgba(251, 191, 36, 0.18);
 }
 
 .empty-state {

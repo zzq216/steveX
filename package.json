@@ -5,19 +5,17 @@
   "type": "commonjs",
   "main": "src/main.js",
   "scripts": {
-    "start": "node src/main.js"
+    "start": "node src/main.js",
+    "bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
+    "mc:capture": "powershell -ExecutionPolicy Bypass -File scripts/run-capture.ps1",
+    "mc:memory": "powershell -ExecutionPolicy Bypass -File scripts/run-memory.ps1",
+    "start:all": "powershell -ExecutionPolicy Bypass -File scripts/start-all.ps1"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "mineflayer": "^4.37.1",
-    "mineflayer-pathfinder": "^2.4.5",
     "express": "^5.2.1",
     "ws": "^8.20.1"
-  },
-  "devDependencies": {
-    "@types/node": "^25.9.2",
-    "typescript": "^6.0.3"
   }
 }

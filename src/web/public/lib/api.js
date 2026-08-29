@@ -30,14 +30,27 @@ export async function disconnectAgent(name) {
   return res.ok
 }
 
-export async function sendCommand(name, command) {
-  const res = await fetch(`/api/agents/${encodeURIComponent(name)}/command`, {
+// 透传调用采集端 mod 方法（POST /api/mod/:method，body 即 params）
+export async function callModMethod(method, params = {}) {
+  const res = await fetch(`/api/mod/${encodeURIComponent(method)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command })
+    body: JSON.stringify(params)
   })
-  const result = await res.json()
-  return result
+  return res.json()
+}
+
+// 获取 mod 48 方法清单（含参数签名与说明）
+export async function fetchModMethods() {
+  const res = await fetch('/api/mod/methods')
+  const data = await res.json()
+  return (data && data.methods) || []
+}
+
+// 获取 mod 连接状态（GET /api/mod/status）
+export async function fetchModStatus() {
+  const res = await fetch('/api/mod/status')
+  return res.json()
 }
 export async function fetchEnvConfig() {
   const res = await fetch('/api/config/environment')

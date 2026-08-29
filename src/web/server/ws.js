@@ -72,29 +72,6 @@ function setupWebSocket(server, manager) {
     snapshotDirty = true
   })
 
-  eventBus.on('agent:command:start', (data) => {
-    broadcast(wss, {
-      type: 'agent:command:start',
-      name: data.name,
-      command: data.command,
-      timestamp: data.timestamp
-    })
-    snapshotDirty = true
-  })
-
-  eventBus.on('agent:command:done', (data) => {
-    broadcast(wss, {
-      type: 'agent:command:done',
-      name: data.name,
-      command: data.command,
-      ok: data.ok,
-      output: data.output || null,
-      error: data.error || null,
-      timestamp: data.timestamp
-    })
-    snapshotDirty = true
-  })
-
   eventBus.on('agent:llm:input', (data) => {
     broadcast(wss, {
       type: 'agent:llm:input',

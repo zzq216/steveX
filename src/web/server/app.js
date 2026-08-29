@@ -1,6 +1,8 @@
 const express = require('express')
 const path = require('path')
 const { registerRoutes } = require('./routes')
+const { registerModRoutes } = require('./mod_routes')
+const { getModClient } = require('../../mod')
 
 /**
  * Create and configure the Express application.
@@ -19,6 +21,13 @@ function createApp(manager) {
     etag: false,
     lastModified: false
   }))
+
+  // Mod WS API passthrough routes (steveX_改进方案.md §五). mineflayer 已移除，
+  // mod 48 方法为底层感知/动作的唯一入口。
+  // Registered BEFORE registerRoutes because that one ends with a 404 catch-all
+  // middleware, which would otherwise swallow /api/mod/*.
+  const modClient = getModClient(manager.config)
+  registerModRoutes(app, modClient)
 
   // API routes
   registerRoutes(app, manager)
