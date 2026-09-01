@@ -31,13 +31,28 @@ export async function disconnectAgent(name) {
 }
 
 // 透传调用采集端 mod 方法（POST /api/mod/:method，body 即 params）
-export async function callModMethod(method, params = {}) {
-  const res = await fetch(`/api/mod/${encodeURIComponent(method)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
-  })
-  return res.json()
+export async function callModMethod(method, params = {}, options = {}) {
+  try {
+    const res = await fetch(`/api/mod/${encodeURIComponent(method)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: options.signal
+    })
+
+    const data = await res.json().catch(() => null)
+    if (!data || typeof data !== 'object') {
+      return { ok: false, error: `Invalid server response (HTTP ${res.status})` }
+    }
+    return data
+  } catch (err) {
+    const cancelled = err && err.name === 'AbortError'
+    return {
+      ok: false,
+      cancelled,
+      error: cancelled ? 'Request cancelled' : `Request failed: ${err.message || String(err)}`
+    }
+  }
 }
 
 // 获取 mod 48 方法清单（含参数签名与说明）

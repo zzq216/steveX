@@ -107,6 +107,11 @@ public class AgentWebSocketServer extends WebSocketServer {
                     sendError(conn, id, "handler returned no result");
                     return;
                 }
+                // A successful non-status request supersedes the previous failure.
+                // Keep status itself read-only so callers can inspect the last outcome.
+                if (!"status".equals(method)) {
+                    lastError = "";
+                }
                 send(conn, ok(id, result instanceof Map<?, ?> m ? m : Map.of("value", result)));
             } catch (Exception e) {
                 SteveX.LOGGER.error("[Agent] Handler error for method {}: {}", method, e.getMessage());

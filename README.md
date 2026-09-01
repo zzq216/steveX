@@ -1,5 +1,7 @@
 # steveX
 
+> **Research branch:** `research/visual-world-model` explores a Fabric-based visual world-state model. It does not replace the Mineflayer runtime retained on `main`; reusable interfaces should return to `main` through focused pull requests.
+
 一个**自包含**的 Minecraft LLM Agent 系统：单个文件夹内包含全部代码，可在另一台机器重建整条链路（含 Minecraft 客户端）。
 
 底层感知/动作**不再用 mineflayer**，而是透传采集端 mod（`stevex-template-1.21.11`，跑在 Minecraft 客户端内）的 **WebSocket JSON-RPC API（48 个方法，端口 25550）**——"一个客户端 = 一个 agent 的身体 + 眼睛"。
@@ -22,7 +24,7 @@ ModWSClient（steveX 侧 WS 客户端）
 
 | 进程 | 启动 | 作用 |
 |---|---|---|
-| 采集端（真实世界） | `npm run mc:capture` | 进入真实 MC 世界，客户端内开 WS 25550，采集深度/对象 → 写 `.nbt` |
+| 采集端（真实世界） | `npm run mc:capture` | 主菜单加载后开启 WS 25550；进入世界后可采集深度/对象并写入 `.nbt` |
 | steveX（脑） | `npm start` | Web 面板 8090，`ModWSClient` 透传 48 方法给 LLM/面板 |
 | 记忆世界 | `npm run mc:memory` | 读取采集端落盘的 `.nbt`，复现"冻结的瞬间" |
 
@@ -71,8 +73,11 @@ npm run start:all
 ```bash
 npm run mc:capture   # 1) 采集端进入真实世界（首次下载依赖耗时较长）
 npm start            # 2) steveX，Web 面板 http://localhost:8090
-npm run mc:memory    # 3) 记忆世界
+# 3) 面板 Connect 后调用 vision/snapshot，确认采集端生成 stevex/vision/*.nbt
+npm run mc:memory    # 4) 记忆世界读取上述快照
 ```
+
+完整验收步骤与预期结果见 [`docs/PR11-人工测试指南.md`](docs/PR11-人工测试指南.md)。
 
 ## 端口
 
@@ -90,7 +95,7 @@ npm run mc:memory    # 3) 记忆世界
 - 实时显示玩家坐标与连接状态
 - 批量 JSON 调用：每行一条 `{"method":"...","params":{...}}`，支持 `delay:毫秒` 前缀做时序序列
 - 内置 48 方法 API 参考，示例一键复制
-- 前提：采集端 mod 已启动并**进入世界**（25550 才有监听）
+- 前提：采集端 mod 已加载（主菜单已有 25550 监听）；`player`、`f3`、`vision/*` 等游戏状态方法需要先进入世界
 
 steveX 透传层（8090）可另用 curl 验证：
 

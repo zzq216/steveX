@@ -5,7 +5,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Mod = Join-Path $Root 'vendor\stevex-template-1.21.11'
 
 Write-Host "[steveX] 启动采集端（真实世界）: $Mod"
-Write-Host "[steveX] 进入世界后 WS API 监听端口 25550"
+Write-Host "[steveX] 主菜单加载完成后 WS API 监听端口 25550；player/f3/vision 等方法需进入世界"
 
 Set-Location $Mod
 .\gradlew.bat runClient

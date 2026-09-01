@@ -219,8 +219,8 @@ function agentCardHtml(agent) {
               <textarea name="batch" class="method-params batch-input" rows="5" spellcheck="false"
                 placeholder='每行一条：可选 delay:毫秒 前缀 + JSON
 {"method":"key/up","params":{"pressed":true}}
-delay:3000 {"method":"key/up","params":{"pressed":true}}
-{"method":"key/right","params":{"pressed":true}}'></textarea>
+delay:3000 {"method":"key/up","params":{"pressed":false}}
+{"method":"player","params":{}}'></textarea>
             </div>
             <div class="command-row">
               <button class="btn send" type="submit">Run Batch</button>
@@ -467,7 +467,10 @@ function handleClick(e) {
     showLogModal(name)
   } else if (action === 'stop-batch') {
     const form = btn.closest('form.command-panel')
-    if (form) form.dataset.batchRunning = '0'
+    if (form) {
+      form.dataset.batchRunning = '0'
+      batchControllers.get(form)?.abort()
+    }
   }
 }
 
@@ -516,7 +519,7 @@ async function handleSubmit(e) {
   }
 
   if (action === 'modbatch') {
-    runModBatch(form)
+    await runModBatch(form)
   }
 }
 
@@ -525,7 +528,54 @@ async function handleSubmit(e) {
 // 与单方法面板的区别只在编排层：这里逐条解析并按序 await，最后走同一个
 // /api/mod/:method 透传，所以延时时序在浏览器端完成，mod 端能力不变。
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const batchControllers = new WeakMap()
+const continuousKeyMethods = new Set([
+  'key/up',
+  'key/down',
+  'key/left',
+  'key/right',
+  'key/jump',
+  'key/sprint',
+  'key/sneak',
+  'key/attack',
+  'key/use'
+])
+
+function waitForDelay(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false)
+      return
+    }
+
+    const onAbort = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve(false)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, ms)
+
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function releaseActiveKeys(activeKeys) {
+  return Promise.all([...activeKeys].map(async (method) => {
+    const releaseController = new AbortController()
+    const timeout = setTimeout(() => releaseController.abort(), 5000)
+    try {
+      const result = await callModMethod(method, { pressed: false }, {
+        signal: releaseController.signal
+      })
+      return { method, result }
+    } finally {
+      clearTimeout(timeout)
+    }
+  }))
+}
 
 function parseBatchLine(line) {
   let rest = line.trim()
@@ -585,43 +635,74 @@ async function runModBatch(form) {
   resultEl.className = 'mod-result batch-result'
   resultEl.textContent = errors.length ? errors.join('\n') + '\n\n' : ''
 
-  let completed = true
-  for (let i = 0; i < cmds.length; i++) {
-    if (form.dataset.batchRunning !== '1') {
-      completed = false
-      break
-    }
-    const c = cmds[i]
+  const controller = new AbortController()
+  const activeKeys = new Set()
+  batchControllers.set(form, controller)
+  let outcome = 'finished'
 
-    if (c.delayMs > 0) {
-      resultEl.textContent += `… wait ${c.delayMs}ms → line ${c.lineNo} ${c.method}\n`
-      resultEl.scrollTop = resultEl.scrollHeight
-      await sleep(c.delayMs)
-      if (form.dataset.batchRunning !== '1') {
-        completed = false
+  try {
+    for (let i = 0; i < cmds.length; i++) {
+      if (form.dataset.batchRunning !== '1' || controller.signal.aborted) {
+        outcome = 'stopped'
         break
       }
+      const c = cmds[i]
+
+      if (c.delayMs > 0) {
+        resultEl.textContent += `… wait ${c.delayMs}ms → line ${c.lineNo} ${c.method}\n`
+        resultEl.scrollTop = resultEl.scrollHeight
+        if (!await waitForDelay(c.delayMs, controller.signal)) {
+          outcome = 'stopped'
+          break
+        }
+      }
+
+      resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} …\n`
+      resultEl.scrollTop = resultEl.scrollHeight
+
+      // The request may reach the mod even when its HTTP response is aborted.
+      // Track press intent before sending so finally can always issue a release.
+      if (continuousKeyMethods.has(c.method) && c.params.pressed !== false) {
+        activeKeys.add(c.method)
+      }
+      const result = await callModMethod(c.method, c.params, { signal: controller.signal })
+
+      if (result.cancelled) {
+        outcome = 'stopped'
+        break
+      }
+
+      if (result.ok) {
+        if (continuousKeyMethods.has(c.method) && c.params.pressed === false) {
+          activeKeys.delete(c.method)
+        }
+        resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} → ${JSON.stringify(result.data)}\n`
+        resultEl.className = 'mod-result batch-result ok'
+      } else {
+        resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} ✕ ${result.error || 'unknown error'}\n`
+        resultEl.className = 'mod-result batch-result err'
+      }
+      resultEl.scrollTop = resultEl.scrollHeight
+    }
+  } catch (err) {
+    outcome = 'failed'
+    resultEl.className = 'mod-result batch-result err'
+    resultEl.textContent += `batch failed: ${err.message || String(err)}\n`
+  } finally {
+    const releases = await releaseActiveKeys(activeKeys)
+    for (const { method, result } of releases) {
+      resultEl.textContent += result.ok
+        ? `released ${method}\n`
+        : `failed to release ${method}: ${result.error || 'unknown error'}\n`
     }
 
-    resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} …\n`
-    resultEl.scrollTop = resultEl.scrollHeight
-    const result = await callModMethod(c.method, c.params)
-
-    if (result.ok) {
-      resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} → ${JSON.stringify(result.data)}\n`
-      resultEl.className = 'mod-result batch-result ok'
-    } else {
-      resultEl.textContent += `[${i + 1}/${cmds.length}] ${c.method} ✕ ${result.error || 'unknown error'}\n`
-      resultEl.className = 'mod-result batch-result err'
-    }
+    if (batchControllers.get(form) === controller) batchControllers.delete(form)
+    form.dataset.batchRunning = '0'
+    runBtn.disabled = false
+    stopBtn.hidden = true
+    resultEl.textContent += `— batch ${outcome} —\n`
     resultEl.scrollTop = resultEl.scrollHeight
   }
-
-  form.dataset.batchRunning = '0'
-  runBtn.disabled = false
-  stopBtn.hidden = true
-  resultEl.textContent += completed ? '— batch finished —\n' : '— batch stopped —\n'
-  resultEl.scrollTop = resultEl.scrollHeight
 }
 
 // ── Init ──

@@ -10,7 +10,7 @@
  *   node test_mod_api.js --all       额外执行有副作用/较慢的方法
  *                                    （vision/snapshot、inventory、chat 等）
  *
- * 前置：采集端 mod 已启动并进入世界（run.ps1 → ./gradlew runClient）。
+ * 前置：采集端 mod 已启动并进入世界。主菜单已有 25550 监听，但玩家方法不可用。
  */
 
 const WebSocket = require('ws')
@@ -100,7 +100,8 @@ async function testDirectMod() {
   // 感知/查询
   const player = await c.call('player', {})
   check('player 返回 ok', player.ok === true)
-  check('player.vitals.health 为数字', player.ok && typeof player.data?.vitals?.health === 'number',
+  check('player.vitals.health 可转换为有限数字',
+    player.ok && Number.isFinite(Number(player.data?.vitals?.health)),
     JSON.stringify(player.data?.vitals))
 
   const f3 = await c.call('f3', {})
@@ -132,6 +133,12 @@ async function testDirectMod() {
   const unknown = await c.call('not/a/real/method', {})
   check('未知方法返回 ok:false + error', unknown.ok === false && typeof unknown.error === 'string',
     JSON.stringify(unknown.error))
+
+  const recoveredPlayer = await c.call('player', {})
+  const recoveredStatus = await c.call('status', {})
+  check('成功调用后 status.error 清空',
+    recoveredPlayer.ok === true && recoveredStatus.ok === true && recoveredStatus.data.error === '',
+    JSON.stringify(recoveredStatus.data))
 
   // busy 语义：一个慢方法（vision/snapshot）执行前后 busy 翻转（lenient 判定）
   if (all) {

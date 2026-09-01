@@ -217,6 +217,10 @@ select:focus-visible {
   color: #dc2626;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .btn {
   min-height: 52px;
   padding: 0 22px;

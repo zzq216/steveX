@@ -7,9 +7,9 @@ version = project.mod_version
 group = project.maven_group
 
 repositories {
-	maven { url 'https://maven.aliyun.com/repository/public' }
-	maven { url 'https://maven.aliyun.com/repository/central' }
-	maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+	maven { url = 'https://maven.aliyun.com/repository/public' }
+	maven { url = 'https://maven.aliyun.com/repository/central' }
+	maven { url = 'https://maven.aliyun.com/repository/gradle-plugin' }
 }
 
 dependencies {
