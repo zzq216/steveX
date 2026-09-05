@@ -28,7 +28,10 @@ import org.slf4j.LoggerFactory;
  *   "removalPixelThreshold": 2,        // v2.23：采集侧删除判定阈值（像素越过计数≥此值判消失）
  *   "removalMaxRayDist": 96.0,         // v2.23：距离球过滤半径（格）；1/z 深度量化误差限制（§7.11）
  *   "memoryCellsWriteIntervalTicks": 10, // v2.23：cells 文件重算兜底间隔（tick）
- *   "memoryCellsFile": ""              // v2.23：memory_cells.bin 路径；留空自动探测
+ *   "memoryCellsFile": "",             // v2.23：memory_cells.bin 路径；留空自动探测
+ *   "containerFile": "",               // v2.28（§5.2.2）：容器内容源 NBT 文件（containers.nbt）；留空自动探测
+ *   "containerReconcileOnPoll": true   // v2.28：每轮 reconcile 覆写容器内容（权威还原玩家改动）；
+ *                                      //   false = 仅文件变化时覆写（允许手动摆放实验）
  * }
  * }</pre>
  */
@@ -56,6 +59,11 @@ public class MemoryConfig {
     public int memoryCellsWriteIntervalTicks = 10;
     /** memory_cells.bin 自定义路径；留空则自动探测（源 terrain.nbt 同级，采集侧读同一路径）。 */
     public String memoryCellsFile = "";
+    // v2.28（§5.2.2）：容器内容记忆（独立交互通道，见 ContainerMemoryApplier）。
+    /** containers.nbt 自定义路径；留空则自动探测（源 block_entities.nbt 同级，采集侧写同一路径）。 */
+    public String containerFile = "";
+    /** 每轮 reconcile 覆写容器内容（权威还原玩家改动，定案 C）；false = 仅文件变化时覆写。 */
+    public boolean containerReconcileOnPoll = true;
 
     private static MemoryConfig INSTANCE;
 
@@ -92,6 +100,8 @@ public class MemoryConfig {
                 if (json.has("removalMaxRayDist") && json.get("removalMaxRayDist").isJsonPrimitive()) removalMaxRayDist = json.get("removalMaxRayDist").getAsDouble();
                 if (json.has("memoryCellsWriteIntervalTicks") && json.get("memoryCellsWriteIntervalTicks").isJsonPrimitive()) memoryCellsWriteIntervalTicks = json.get("memoryCellsWriteIntervalTicks").getAsInt();
                 if (json.has("memoryCellsFile") && json.get("memoryCellsFile").isJsonPrimitive()) memoryCellsFile = json.get("memoryCellsFile").getAsString();
+                if (json.has("containerFile") && json.get("containerFile").isJsonPrimitive()) containerFile = json.get("containerFile").getAsString();
+                if (json.has("containerReconcileOnPoll") && json.get("containerReconcileOnPoll").isJsonPrimitive()) containerReconcileOnPoll = json.get("containerReconcileOnPoll").getAsBoolean();
                 LOGGER.info("[MemoryWorld] Loaded config from {}", configFile);
             } catch (Exception e) {
                 LOGGER.warn("[MemoryWorld] Failed to parse config {}: {}", configFile, e.getMessage());
@@ -125,6 +135,8 @@ public class MemoryConfig {
             json.addProperty("removalMaxRayDist", removalMaxRayDist);
             json.addProperty("memoryCellsWriteIntervalTicks", memoryCellsWriteIntervalTicks);
             json.addProperty("memoryCellsFile", memoryCellsFile);
+            json.addProperty("containerFile", containerFile);
+            json.addProperty("containerReconcileOnPoll", containerReconcileOnPoll);
             Files.createDirectories(configFile.getParent());
             Files.writeString(configFile, json.toString());
             LOGGER.info("[MemoryWorld] Wrote default config to {}", configFile);
@@ -210,6 +222,33 @@ public class MemoryConfig {
                 gameDir.resolve("..").resolve("..").resolve("stevex-template-1.21.11").resolve("run/stevex/vision/entities.nbt"),
                 gameDir.resolve("..").resolve("stevex-template-1.21.11").resolve("run/stevex/vision/entities.nbt"),
                 gameDir.resolve("config").resolve("stevex-test").resolve("entities.nbt")
+        );
+        for (Path c : candidates) {
+            if (Files.exists(c)) return c.normalize();
+        }
+        return null;
+    }
+
+    /**
+     * 解析容器内容源 NBT 文件（containers.nbt）；找不到时返回 null（运行后会定期重试）。
+     *
+     * <p>v2.28（§5.2.2）：交互内容通道的独立文件。探测顺序与 {@link #resolveSourceFile()} 相同，
+     * 只是把文件名换成 containers.nbt（与 block_entities.nbt 同目录 —— 采集侧写进同一 stevex/vision/）。
+     */
+    public Path resolveContainerFile() {
+        if (Minecraft.getInstance() == null) return null;
+
+        if (containerFile != null && !containerFile.isBlank()) {
+            Path p = Path.of(containerFile);
+            return Files.exists(p) ? p : null;
+        }
+
+        Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
+        List<Path> candidates = List.of(
+                gameDir.resolve("stevex/vision/containers.nbt"),
+                gameDir.resolve("..").resolve("..").resolve("stevex-template-1.21.11").resolve("run/stevex/vision/containers.nbt"),
+                gameDir.resolve("..").resolve("stevex-template-1.21.11").resolve("run/stevex/vision/containers.nbt"),
+                gameDir.resolve("config").resolve("stevex-test").resolve("containers.nbt")
         );
         for (Path c : candidates) {
             if (Files.exists(c)) return c.normalize();

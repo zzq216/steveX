@@ -51,6 +51,8 @@ public final class MemoryWorldManager {
     // 前者持有方块实体通道（删块清 BE）；后者持有地形 + 实体通道（上报实心不透明块 + 实体占用格）
     private static final DeletionApplier DELETION = new DeletionApplier(RESTORER, ENTITY);
     private static final MemoryCellReporter CELLS = new MemoryCellReporter(TERRAIN, ENTITY);
+    // v2.28（§5.2.2）：容器内容记忆通道（读独立 containers.nbt；每轮 reconcile 覆写容器 + 末影箱玩家态）
+    private static final ContainerMemoryApplier CONTAINER = new ContainerMemoryApplier();
     private static MinecraftServer lastServer;
     private static boolean clientStarted;
 
@@ -197,6 +199,7 @@ public final class MemoryWorldManager {
             ENTITY.onServerStart();
             DELETION.onServerStart();
             CELLS.onServerStart();
+            CONTAINER.onServerStart();
             LOGGER.info("[MemoryWorld] Active server level name: '{}' (expected '{}')",
                     server.getWorldData().getLevelName(), MemoryConfig.get().worldName);
         }
@@ -225,6 +228,9 @@ public final class MemoryWorldManager {
         TerrainRestorer.TerrainData terrain = TERRAIN.tick(level);
         ENTITY.tick(level);
         MemoryRestorer.AgentPose pose = RESTORER.tick(level);
+        // v2.28（§5.2.2）：容器内容记忆紧跟在方块实体通道后（§5.2.2 tick 序 RESTORER→CONTAINER→DELETION→CELLS）。
+        // 视觉先把容器方块/BE 放好，容器通道再覆写内容；在 DELETION 之前执行（容器非实心非减量候选）。
+        CONTAINER.tick(level);
         DELETION.apply(level, terrain, ENTITY.currentUuids());
         CELLS.tick(level);
 
@@ -333,5 +339,6 @@ public final class MemoryWorldManager {
         RESTORER.forceRefresh();
         TERRAIN.forceRefresh();
         ENTITY.forceRefresh();
+        CONTAINER.forceRefresh();
     }
 }

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import name.modid.AgentWebSocketServer;
 import name.modid.AgentWebSocketServer.WsHandler;
+import name.modid.vision.ContainerMemoryTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.world.inventory.*;
@@ -195,6 +196,9 @@ public class ContainerApi {
         Minecraft.getInstance().execute(() -> {
             var mc = Minecraft.getInstance();
             if (mc.screen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen) {
+                // v2.30（§5.2.3）：关箱前先同步读最终内容提交（主提交路径），再关容器菜单。
+                // 若绑定会话为方块容器 → 写 containers.nbt；否则（背包/工作台等非容器族）为空操作。
+                ContainerMemoryTracker.commitFromClose();
                 mc.player.closeContainer();
             }
         });

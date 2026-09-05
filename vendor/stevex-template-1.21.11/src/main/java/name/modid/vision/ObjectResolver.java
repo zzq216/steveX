@@ -45,7 +45,8 @@ import org.slf4j.Logger;
  * <p>四路查询：
  * <ol>
  *   <li><b>方块</b>（§5.1）：去重点直查 blockstate + air 近侧回退（带 v2.10 实体相交验证）；</li>
- *   <li><b>方块实体</b>（§5.2）：搭方块便车 {@code saveWithFullMetadata}，壁挂朝向过滤（v2.10）；</li>
+ *   <li><b>方块实体</b>（§5.2）：搭方块便车 {@code saveWithFullMetadata}，壁挂朝向过滤（v2.10）；
+ *       NBT 再按 typeId 白名单剥 L2 交互内部（§5.2.1，v2.27 {@link BlockEntityFieldPolicy}）；</li>
  *   <li><b>实体</b>（§5.3）：SectionPos 桶 + 闭区间 contains + 深度排序 + 肢体判别（v2.11）；</li>
  *   <li><b>半透明 / 绊线方块</b>（§5.4，仅 Fabulous，v2.12；两深度锚点 v2.24/v2.26）：工序 B
  *       （首层透明面深度 pass）用 translucent 目标深度逐像素精确落位首层半透明；工序 C（v2.26
@@ -245,8 +246,10 @@ public final class ObjectResolver {
             if (isWallFacingAway(state, pos, cam)) return;
             final BlockEntity be = level.getBlockEntity(pos);
             if (be == null) return;
-            final CompoundTag nbt = be.saveWithFullMetadata(level.registryAccess());
             final String typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()).toString();
+            // v2.27（§5.2.1）：saveWithFullMetadata 是"客户端副本同步面上界"，仍须按 typeId 白名单剥离
+            // L2 交互内部（容器物品/装饰罐内藏物/可疑方块未揭示物等）——不可直接把整包塞进快照。
+            final CompoundTag nbt = BlockEntityFieldPolicy.filter(typeId, be.saveWithFullMetadata(level.registryAccess()));
             blockEntities.put(pos, new VisionCollector.BlockEntitySnapshot(
                     pos, typeId, VisionCollector.blockId(state), VisionCollector.stateProps(state), nbt, timestamp));
         }

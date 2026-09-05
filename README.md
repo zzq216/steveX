@@ -96,6 +96,7 @@ npm run mc:memory    # 4) 记忆世界读取上述快照
 - 批量 JSON 调用：每行一条 `{"method":"...","params":{...}}`，支持 `delay:毫秒` 前缀做时序序列
 - 内置 48 方法 API 参考，示例一键复制
 - 前提：采集端 mod 已加载（主菜单已有 25550 监听）；`player`、`f3`、`vision/*` 等游戏状态方法需要先进入世界
+- 注：该页是直连 mod 的**遗留调试器**，保留 `delay:` 旧语法，不受下方统一 API 约束。
 
 steveX 透传层（8090）可另用 curl 验证：
 
@@ -104,6 +105,35 @@ curl -s http://localhost:8090/api/mod/status                          # mod 连�
 curl -s -X POST http://localhost:8090/api/mod/player -H 'Content-Type: application/json' -d '{}'
 curl -s -X POST http://localhost:8090/api/mod -H 'Content-Type: application/json' -d '{"method":"f3","params":{}}'
 ```
+
+### 批量时序 API（8090 Web 面板 Mod Batch）
+
+Web 面板（`localhost:8090` → Agents → Mod Batch）的时序序列走**服务端批处理 API**，
+替代浏览器端 `delay:` 前缀 hack：统一由 8090 后台串行执行，curl/脚本/LLM 与面板同一套规范。
+详见 `docs/批量时序API设计方案.md`。每行一个 step JSON——调用步 `{method, params?, waitMs?}`
+（`waitMs` = 执行本步前先等，毫秒）；纯等待步 `{waitMs}`（无 method）。
+
+```bash
+# 启动：等待 3s → 按住前进键 2s → 松开（后台执行，立即返回 batchId）
+curl -s -X POST http://localhost:8090/api/mod/batch -H 'Content-Type: application/json' -d '{
+  "steps": [
+    {"waitMs":3000},
+    {"method":"key/up","params":{"pressed":true}},
+    {"waitMs":2000},
+    {"method":"key/up","params":{"pressed":false}}
+  ]
+}'
+curl -s http://localhost:8090/api/mod/batch/<batchId>                  # 轮询进度（每步 state/result）
+curl -s -X POST http://localhost:8090/api/mod/batch/<batchId>/stop     # 中止（自动松开仍按住的键）
+```
+
+要点：全局单槽（同时只跑一个 batch，第二个返回 409 + `runningId`）；单步 mod 错误默认继续
+（`stopOnError:true` 可失败即停）；结束/中止时对仍按住的连续键自动补发 `pressed:false`。
+
+每个 agent 卡另带 **Mod API 查询器**（原 "Call Mod Method" 单次 Send 已停用）：搜索 + 按分组下拉选方法，
+下方显示该方法的 step JSON 序列写法与可编辑填参模板（48 方法含中文说明与参数 schema，
+数据源 `src/mod/methods.js` 的 `paramDefs`）——可「复制」或「追加到 Mod Batch」，**只读参考/助写、不执行**；
+面板内执行统一走 Mod Batch。单次 HTTP 直调仍用上面的 curl（`POST /api/mod/:method`）。
 
 ## 配置
 
