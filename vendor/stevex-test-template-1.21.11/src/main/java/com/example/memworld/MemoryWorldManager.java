@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.HolderSet;
 import net.minecraft.core.registries.Registries;
@@ -65,7 +66,20 @@ public final class MemoryWorldManager {
     // v2.31（§5）：生物群系复原通道（读独立 biomes.nbt；/fillbiome 范式写入已加载区块）
     private static final BiomeRestorer BIOME = new BiomeRestorer();
     private static MinecraftServer lastServer;
-    private static boolean clientStarted;
+    // ==================== 客户端自动开档状态机 ====================
+    // 背景：旧实现烧在"标题刚出现那一帧"就 openWorld，客户端此时常仍在启动资源重载中；
+    // 单进程内"开档预读 storage access"与"集成服务器挂载同一世界时的锁检查"并发，DirectoryLock
+    // .isLocked 只兜跨进程（OverlappingFileLockException 属同 JVM 自撞）→ 自动进入可能被取消卡回
+    // 标题。修复：要求主菜单连续稳定 N tick 后才发起开档（错开启动并发窗口），失败退回主菜单则
+    // 自动重试（有上限）；成功进入一次后进程内不再自动开档。
+    private static boolean enteredOnce;          // 已成功进入过世界（进程级，此后不再自动开档）
+    private static boolean autoEngaged;          // 已判定配置 autoOpenOnLaunch
+    private static int stableMenuTicks;          // 连续处于可交互主菜单（TitleScreen）的 tick 数
+    private static int autoOpenAttempts;         // 本次启动已发起的开档尝试次数
+    /** 主菜单需保持稳定多少 tick 才发起自动开档（60 tick = 3 秒，给启动收尾留出窗口）。 */
+    private static final int STABLE_MENU_TICKS = 60;
+    /** 自动开档失败后最多重试次数。 */
+    private static final int MAX_AUTO_OPEN_ATTEMPTS = 3;
 
     /** 当前服务器是否已对玩家做过"创造 + 飞行 + 传送"的一次性初始化。 */
     private static boolean playerReady;
@@ -91,14 +105,39 @@ public final class MemoryWorldManager {
 
     // ==================== 客户端：启动进入记忆世界 ====================
 
-    /** 由 ClientTickEvents 每 tick 调用；等到标题界面出现后一次性创建/打开记忆世界。 */
+    /**
+     * 由 ClientTickEvents 每 tick 调用。启动后自动进入记忆世界，带"主菜单稳定门控 + 失败重试"
+     * （见字段区注释）：只在可交互主菜单上连续稳定 {@value #STABLE_MENU_TICKS} tick 才发起开档，
+     * 失败退回主菜单会再次累计稳定时长自动重试（上限 {@value #MAX_AUTO_OPEN_ATTEMPTS}），
+     * 成功进入过世界一次后本进程不再自动开档（退出到标题也不强制拉回）。
+     */
     public static void onClientTick(final Minecraft mc) {
-        if (clientStarted) return;
-        if (mc.level != null) return;                       // 已在世界中
-        if (mc.getSingleplayerServer() != null) return;     // 正在进入服务器
-        if (mc.screen == null) return;                      // 等标题界面出现
+        if (enteredOnce) return;                            // 已进入过：交给玩家 / 其它流程
+        if (mc.level != null) {                             // 本次已成功进入（无论哪条路）
+            enteredOnce = true;
+            return;
+        }
+        if (mc.getSingleplayerServer() != null) return;     // 正在创建/进入服务器中
 
-        clientStarted = true;
+        if (!autoEngaged) {
+            autoEngaged = true;
+            if (!MemoryConfig.get().autoOpenOnLaunch) {
+                enteredOnce = true;                         // 配置关闭：本进程不自动开档
+                return;
+            }
+        }
+
+        if (autoOpenAttempts >= MAX_AUTO_OPEN_ATTEMPTS) return;   // 尝试次数已耗尽
+        if (!(mc.screen instanceof TitleScreen)) {          // 不在主菜单（其它界面 / 转场）：重置稳定计数
+            stableMenuTicks = 0;
+            return;
+        }
+
+        if (++stableMenuTicks < STABLE_MENU_TICKS) return;
+        stableMenuTicks = 0;
+        autoOpenAttempts++;
+        LOGGER.info("[MemoryWorld] Auto-open attempt {}/{} (main menu stable for {} ticks)",
+                autoOpenAttempts, MAX_AUTO_OPEN_ATTEMPTS, STABLE_MENU_TICKS);
         mc.execute(() -> bootstrap(mc));
     }
 
@@ -133,7 +172,10 @@ public final class MemoryWorldManager {
                     worldId,
                     GameType.CREATIVE,   // 创造模式
                     false,               // 非硬核
-                    Difficulty.PEACEFUL,
+                    // 非和平：和平模式会在实体 tick 之外强制移除 MONSTER 类生物（僵尸等），
+                    // 使冻结复现失效（村民/展示实体属 MISC 不受影响）。刷怪已由上方
+                    // SPAWN_MOBS=false 关闭，生物攻击/伤害因实体 NoAI+Invulnerable 冻结不存在。
+                    Difficulty.NORMAL,
                     true,                // 允许作弊
                     gameRules,
                     WorldDataConfiguration.DEFAULT
