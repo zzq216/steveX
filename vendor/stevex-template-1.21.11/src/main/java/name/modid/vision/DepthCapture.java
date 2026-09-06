@@ -557,6 +557,10 @@ public class DepthCapture {
      * @param health 仅 LivingEntity 有值；其余为 0
      * @param item   v2.34（掉落物记忆，见 docs/掉落物记忆设计方案.md）：当 typeId 为 {@code minecraft:item}
      *               时携带本帧被渲染的物品栈（{@code ItemStack.CODEC} + {@code NbtOps} 编码 tag）；其余类型为 null
+     * @param payload v2.35（展示实体内容记忆，见 docs/展示实体内容记忆设计方案.md §6.3）：当 typeId ∈ 采集白名单
+     *                时为本帧编码的整份 NBT payload（{@code VisionCollector#serializeEntityFull}）；其余类型 / 失败为 null
+     * @param content v2.35（决策点 2 渠道 B）：与 payload 同帧构建的薄内容摘要（{@code DecorativeSummary}），
+     *                仅采集端 snapshot JSON 消费；其余类型 / 失败为 null
      */
     public record EntitySnapshotData(
             int id,
@@ -573,6 +577,8 @@ public class DepthCapture {
             double vz,
             boolean onGround,
             float health,
-            CompoundTag item
+            CompoundTag item,
+            CompoundTag payload,
+            CompoundTag content
     ) {}
 }

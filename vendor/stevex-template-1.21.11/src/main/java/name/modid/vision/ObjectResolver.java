@@ -23,7 +23,6 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.WallBannerBlock;
 import net.minecraft.world.level.block.WallHangingSignBlock;
@@ -379,12 +378,14 @@ public final class ObjectResolver {
     ) {
         if (!seen.add(e.uuid())) return; // 多像素命中同一实体 → 去重
         // v2.34：item（掉落物物品栈 tag，快照帧已编码）随轻量快照一并上报，null 为非 item 实体。
+        // v2.35：payload/content（展示实体整份 NBT + 薄摘要）同样在采集帧已编码、随快照透传，
+        //         ObjectResolver 只做纯数据搬运（不触游戏，§8）。
         out.add(new VisionCollector.EntityLightSnapshot(
                 e.id(), e.uuid(), e.typeId(),
                 e.x(), e.y(), e.z(),
                 e.yaw(), e.pitch(),
                 e.vx(), e.vy(), e.vz(),
-                e.onGround(), e.health(), e.item()));
+                e.onGround(), e.health(), e.item(), e.payload(), e.content()));
     }
 
     // ==================== §5.3.1 半透明掉落物（工序 D，v2.25） ====================
@@ -412,9 +413,10 @@ public final class ObjectResolver {
             final Set<UUID> reported,
             final List<VisionCollector.EntityLightSnapshot> out
     ) {
-        final String itemTypeId = BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.ITEM).toString();
         for (DepthCapture.EntitySnapshotData e : snap.entities()) {
-            if (!itemTypeId.equals(e.typeId())) continue;
+            // 掉落物大类判定用共享谓词（VisionCollector#isItemEntity，注册表派生的单一事实来源），
+            // 与采集端 item 载荷产端（LevelRendererMixin）保持一致。
+            if (!VisionCollector.isItemEntity(e.typeId())) continue;
             if (reported.contains(e.uuid())) continue;
             if (isDropVisible(snap, unproj, cam, e)) {
                 addEntity(e, reported, out);

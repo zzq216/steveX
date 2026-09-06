@@ -23,6 +23,9 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
+import net.minecraft.util.ProblemReporter;
+import net.minecraft.world.level.storage.TagValueInput;
+import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
@@ -80,9 +83,21 @@ public class EntityRestorer {
     private static final String KEY_HEALTH = "health";
     /** v2.34：掉落物（type=minecraft:item）的物品栈（ItemStack.CODEC 编码 tag；仅非空时有）。 */
     private static final String KEY_ITEM = "item";
+    /** v2.35（展示实体内容记忆，见 docs/展示实体内容记忆设计方案.md §5/§7）：展示实体条目的整份可装载
+     *  NBT payload（{id, ...saveWithoutId}，采集端 serializeEntityFull 写出）；非白名单类型 / 旧文件无该键。 */
+    private static final String KEY_NBT = "nbt";
 
     /** v2.32：已放置的实体按维隔离：维度 → uuid → 实体引用。累积，永不因"本次没看到"而移除。 */
     private final Map<String, Map<UUID, Entity>> appliedByDim = new LinkedHashMap<>();
+
+    /**
+     * v2.35（§7.3）：已放置实体<b>当时构建它的 payload</b> 按维隔离：维度 → uuid → payload。
+     *
+     * <p>只记录从整份 payload 装载的实体；无 payload 的默认路径（普通生物 / 旧文件条目）不记录。
+     * 用途：内容变化检测——新快照 payload 与该记录不等（或该实体此前无 payload、如今首次携带）⇒
+     * 内容变了 ⇒ 整份重建，保证记忆世界内容始终与源一致。位置单独由轻量 pos 走传送。
+     */
+    private final Map<String, Map<UUID, CompoundTag>> appliedPayloadByDim = new LinkedHashMap<>();
 
     /**
      * v2.21 冻结标记（§7.9 陷阱 ②）：本类放置并冻结的实体集合（跨全部维）。
@@ -138,6 +153,8 @@ public class EntityRestorer {
         Entity e = applied.remove(uuid);
         if (e != null) {
             FROZEN.remove(e);
+            // v2.35：连同 payload 记录一起移除，防 uuid 复用后误判内容未变
+            removeAppliedPayload(dimension, uuid);
             e.discard();
             LOGGER.info("[MemoryWorld] Removed stale entity {} ({}) in [{}]", uuid,
                     e.position().x + "," + e.position().y + "," + e.position().z, dimension);
@@ -191,6 +208,7 @@ public class EntityRestorer {
     /** 服务器（世界）启动 / 切换时调用，清空已放置状态。 */
     public void onServerStart() {
         appliedByDim.clear();
+        appliedPayloadByDim.clear();
         FROZEN.clear();
         lastSnapshotUuidsByDim.clear();
         appliedFingerprintByDim.clear();
@@ -270,24 +288,50 @@ public class EntityRestorer {
         if (current.entities.isEmpty()) return;
         Map<UUID, Entity> applied = appliedByDim.computeIfAbsent(dimension, k -> new LinkedHashMap<>());
 
-        // 累积已放置表：本次文件里的实体直接登记（无论是否变化）
+        // 累积已放置表：本次文件里的实体直接登记（无论是否变化），保留不在本次文件里的旧实体
         Map<UUID, Entity> nextApplied = new LinkedHashMap<>(applied);
 
-        // 放置 / 移动：文件里有、但应用表里没有（或已失效）→ 新建；位置变化 → 传送
+        // 放置 / 重建 / 移动：文件里有、但应用表里没有（或已失效）→ 新建；payload 内容变化 → 整份重建；
+        // 其余位置变化 → 传送（v2.35 内容复原，见 docs/展示实体内容记忆设计方案.md §7.3）。
         int spawned = 0;
+        int rebuilt = 0;
         int moved = 0;
         for (Map.Entry<UUID, EntitySnapshot> e : current.entities.entrySet()) {
             UUID uuid = e.getKey();
             EntitySnapshot es = e.getValue();
 
-            Entity existing = nextApplied.get(uuid);
+            Entity existing = applied.get(uuid);
             if (existing == null || existing.isRemoved()) {
                 // v2.21：旧引用已失效（实体被外力移除）→ 从冻结集合清理，防 IdentityHashMap 泄漏
                 if (existing != null) FROZEN.remove(existing);
+                removeAppliedPayload(dimension, uuid);
                 Entity created = spawn(level, uuid, es);
                 if (created != null) {
                     nextApplied.put(uuid, created);
+                    if (es.nbt() != null) setAppliedPayload(dimension, uuid, es.nbt());
                     spawned++;
+                }
+            } else if (payloadChanged(es, appliedPayload(dimension, uuid))) {
+                // v2.35（§7.3）：payload 内容变化（物品 / 文本 / 装备 / 变换… 任一字段变）→ 整份重建，
+                // 保证记忆世界内容与源逐字节一致。位置若也变了，重建本身按快照 pos 落点即可。
+                final Entity created = construct(level, uuid, es); // 先构造、不碰世界：失败可保留旧实体
+                if (created == null) {
+                    // 新 payload 无法装载 → 保留现状（内容保持旧值），下个快照变化再试；不丢弃已放置实体
+                    if (move(level, existing, es)) moved++;
+                    LOGGER.warn("[MemoryWorld] Content rebuild failed for {} ({}) — keeping existing",
+                            uuid, es.type());
+                } else {
+                    FROZEN.remove(existing);
+                    existing.discard();
+                    removeAppliedPayload(dimension, uuid);
+                    freeze(created);
+                    if (level.addFreshEntity(created)) {
+                        nextApplied.put(uuid, created);
+                        if (es.nbt() != null) setAppliedPayload(dimension, uuid, es.nbt());
+                        rebuilt++;
+                    } else {
+                        LOGGER.warn("[MemoryWorld] Failed to add rebuilt entity {} ({})", uuid, es.type());
+                    }
                 }
             } else {
                 if (move(level, existing, es)) moved++;
@@ -297,12 +341,53 @@ public class EntityRestorer {
         applied.clear();
         applied.putAll(nextApplied);
 
-        LOGGER.info("[MemoryWorld] Entity sync [{}]: +{} spawned, {} moved, total {} entities",
-                dimension, spawned, moved, applied.size());
+        LOGGER.info("[MemoryWorld] Entity sync [{}]: +{} spawned, {} rebuilt, {} moved, total {} entities",
+                dimension, spawned, rebuilt, moved, applied.size());
     }
 
-    /** 创建并放置一个冻结实体。成功返回实体引用，失败返回 null。 */
+    /**
+     * 创建并放置一个冻结实体。成功返回实体引用，失败返回 null。
+     * 优先整份 payload 装载（v2.35），无 payload / 装载失败回退默认构造（见 {@link #construct}）。
+     */
     private Entity spawn(final ServerLevel level, final UUID uuid, final EntitySnapshot es) {
+        Entity created = construct(level, uuid, es);
+        if (created == null) return null;
+        freeze(created);
+
+        if (!level.addFreshEntity(created)) {
+            LOGGER.warn("[MemoryWorld] Failed to add entity {} ({})", uuid, es.type());
+            FROZEN.remove(created);
+            return null;
+        }
+        return created;
+    }
+
+    /**
+     * 构造一个实体（<b>不入世界</b>，纯创建）。
+     *
+     * <p>优先整份 payload 装载（v2.35，§7.2）：用与采集端保存对称的 {@code TagValueInput} +
+     * {@code EntityType.create(ValueInput…)} 装载采集端写出的 {@code {id, ...saveWithoutId}}，
+     * 帧画 / 盔甲架 / display 的内容（物品、文本、变换、姿态…）随之完整复原。装载失败 / 无 payload
+     * → 回退默认路径（{@code type.create} + snapTo，旧行为）。坐标 / 朝向 / 血量始终以快照轻量字段
+     * 显式覆盖（与默认路径一致）；内容字段以 payload 为准。
+     */
+    private static Entity construct(final ServerLevel level, final UUID uuid, final EntitySnapshot es) {
+        if (es.nbt() != null) {
+            final Entity loaded = loadFromPayload(level, es.nbt());
+            if (loaded != null) {
+                // payload 自带 UUID / Pos / Rotation（saveWithoutId 写出），仍以快照字段显式覆盖，
+                // 防帧内 payload 与轻量快照之间的坐标偏差。
+                loaded.setUUID(uuid);
+                loaded.snapTo(es.pos()[0], es.pos()[1], es.pos()[2], es.rot()[0], es.rot()[1]);
+                if (es.health() >= 0 && loaded instanceof LivingEntity living) {
+                    living.setHealth(es.health());
+                }
+                return loaded;
+            }
+            LOGGER.warn("[MemoryWorld] Payload load failed for {} ({}) — falling back to default construct",
+                    uuid, es.type());
+        }
+
         EntityType<?> type = EntityType.byString(es.type()).orElse(null);
         if (type == null) {
             LOGGER.warn("[MemoryWorld] Unknown entity type '{}' for {}", es.type(), uuid);
@@ -319,6 +404,7 @@ public class EntityRestorer {
         }
         // v2.34（掉落物记忆）：掉落物必须能恢复出非空物品栈才放置——旧文件无 item / 解码失败 /
         // 空栈一律跳过。空栈的 ItemEntity 渲染端早退不可见，放出来只是占位幽灵，故直接丢弃。
+        // 掉落物永不携带 payload（不在展示白名单），只走默认路径。
         if (entity instanceof ItemEntity item) {
             ItemStack stack = parseItemStack(es.item(), level.registryAccess());
             if (stack.isEmpty()) {
@@ -328,13 +414,45 @@ public class EntityRestorer {
             }
             item.setItem(stack);
         }
-        freeze(entity);
+        return entity;
+    }
 
-        if (!level.addFreshEntity(entity)) {
-            LOGGER.warn("[MemoryWorld] Failed to add entity {} ({})", uuid, es.type());
+    /**
+     * v2.35（§7.2）：从整份可装载 payload 装载实体（与采集端 {@code saveWithoutId} 对称）。
+     *
+     * <p>装载失败 → null（调用方回退默认构造）；vanilla 内部对 payload 的数据问题经
+     * {@code ProblemReporter} 记录。注意本方法<b>不把实体加入世界</b>——由调用方 addFreshEntity。
+     */
+    private static Entity loadFromPayload(final ServerLevel level, final CompoundTag payload) {
+        try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(LOGGER)) {
+            final ValueInput input = TagValueInput.create(reporter, level.registryAccess(), payload);
+            return EntityType.create(input, level, EntitySpawnReason.LOAD).orElse(null);
+        } catch (RuntimeException e) {
+            LOGGER.warn("[MemoryWorld] Failed to load entity from payload: {}", e.getMessage());
             return null;
         }
-        return entity;
+    }
+
+    /** v2.35：payload 是否变化——快照携带 payload 且与该实体当时构建所用的 payload 不等。 */
+    private static boolean payloadChanged(final EntitySnapshot es, final CompoundTag applied) {
+        return es.nbt() != null && !es.nbt().equals(applied);
+    }
+
+    /** v2.35：记录该实体是以哪个 payload 构建的（默认路径构造的实体不记录）。 */
+    private void setAppliedPayload(final String dimension, final UUID uuid, final CompoundTag payload) {
+        appliedPayloadByDim.computeIfAbsent(dimension, k -> new LinkedHashMap<>()).put(uuid, payload);
+    }
+
+    /** v2.35：读该实体当前生效的构建 payload；从未以 payload 构建 → null。 */
+    private CompoundTag appliedPayload(final String dimension, final UUID uuid) {
+        Map<UUID, CompoundTag> payloads = appliedPayloadByDim.get(dimension);
+        return payloads == null ? null : payloads.get(uuid);
+    }
+
+    /** v2.35：删除该实体的 payload 记录（discard / 重建 / 失效清理时调用）。 */
+    private void removeAppliedPayload(final String dimension, final UUID uuid) {
+        Map<UUID, CompoundTag> payloads = appliedPayloadByDim.get(dimension);
+        if (payloads != null) payloads.remove(uuid);
     }
 
     /** 位置变化时传送到新坐标；并重新断言冻结状态。返回是否移动了（含 v2.34 物品栈内容变化）。 */
@@ -358,6 +476,7 @@ public class EntityRestorer {
                 itemChanged = true;
             }
         }
+        // v2.35：payload 实体（展示类）若位置未变无需内容处理——内容变化由 payloadChanged 分支整份重建。
         freeze(entity); // 重新断言，防止被外力解锁
         return positionChanged || itemChanged;
     }
@@ -432,8 +551,11 @@ public class EntityRestorer {
             // v2.34：掉落物可选携带物品栈 tag；旧文件/空栈无该键 → null（parseBucket 不解码，
             // 解码延后到 spawn/move（需 level.registryAccess()），编码失败的条目在此保留下次重试语义。
             CompoundTag item = entry.contains(KEY_ITEM) ? entry.getCompoundOrEmpty(KEY_ITEM) : null;
+            // v2.35：展示实体可选携带整份可装载 payload（{id, ...saveWithoutId}）；非白名单/旧文件
+            // 无该键 → null。同样不在 parseBucket 解码（装载需 level 上下文，延后到 construct）。
+            CompoundTag nbt = entry.contains(KEY_NBT) ? entry.getCompoundOrEmpty(KEY_NBT) : null;
 
-            entities.put(uuid, new EntitySnapshot(type, pos, motion, rot, onGround, health, item));
+            entities.put(uuid, new EntitySnapshot(type, pos, motion, rot, onGround, health, item, nbt));
         }
         return new EntityData(entities);
     }
@@ -483,14 +605,17 @@ public class EntityRestorer {
     /**
      * v2.34：实体条目。{@code item} 仅对 type=minecraft:item 且非空栈有值（ItemStack.CODEC 编码 tag）；
      * 旧文件 / 空栈 → null。解码延后到 spawn/move（需 level.registryAccess()）。
+     *
+     * <p>v2.35：{@code nbt} = 展示实体的整份可装载 payload（{@code {id, ...saveWithoutId}}）；
+     * 非白名单类型 / 旧文件无该键 → null。装载延后到 construct（需 level 上下文）。
      */
     private record EntitySnapshot(
             String type, double[] pos, double[] motion, float[] rot,
-            boolean onGround, float health, CompoundTag item
+            boolean onGround, float health, CompoundTag item, CompoundTag nbt
     ) {
         String fingerprint() {
             return type + "|" + Arrays.toString(pos) + "|" + Arrays.toString(motion)
-                    + "|" + Arrays.toString(rot) + "|" + onGround + "|" + health + "|" + item;
+                    + "|" + Arrays.toString(rot) + "|" + onGround + "|" + health + "|" + item + "|" + nbt;
         }
     }
 

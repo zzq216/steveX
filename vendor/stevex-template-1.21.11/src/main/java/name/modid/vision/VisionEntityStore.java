@@ -43,7 +43,9 @@ import org.slf4j.Logger;
  *       "entities": {
  *         "<uuid>": { "id": 42, "type": "minecraft:zombie", "pos": [x, y, z],
  *                     "motion": [vx, vy, vz], "rotation": [yaw, pitch],
- *                     "onGround": 1b, "health": 20.0f }, ...
+ *                     "onGround": 1b, "health": 20.0f },
+ *         // v2.35（展示实体）：额外携带 "nbt": { id, ...saveWithoutId } 整份可装载 payload
+ *         // （type ∈ 采集白名单时有；帧画/展示实体/盔甲架等）
  *       }
  *     },
  *     "minecraft:the_nether": { ... }
@@ -76,6 +78,8 @@ public class VisionEntityStore {
     private static final String KEY_HEALTH = "health";
     /** v2.34：掉落物（type=minecraft:item）的物品栈（ItemStack.CODEC 编码 tag；仅非空时有）。 */
     private static final String KEY_ITEM = "item";
+    /** v2.35（展示实体内容记忆）：展示实体条目整份可装载 NBT payload（{id, ...saveWithoutId}）；仅白名单类型且有。 */
+    private static final String KEY_NBT = "nbt";
 
     private final Path filePath;
 
@@ -138,6 +142,11 @@ public class VisionEntityStore {
             // v2.34：掉落物条目携带物品栈 tag（非 item 实体 / 空栈 → 无该键）。
             if (e.item() != null) {
                 entry.put(KEY_ITEM, e.item());
+            }
+            // v2.35：展示实体条目携带整份可装载 NBT payload（非白名单类型 / 无 → 无该键）。
+            // 内容复原（§7.2）由记忆侧按 uuid 整份装载；此 tag 也天然承担"内容变更"指纹（§7.3）。
+            if (e.payload() != null) {
+                entry.put(KEY_NBT, e.payload());
             }
             entitiesTag.put(e.uuid().toString(), entry);
         }

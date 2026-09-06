@@ -39,7 +39,8 @@ public class VisionApi {
      *           "cameraPos", "timestamp",
      *           "visibleBlockCount", "blockEntityCount", "entityCount",
      *           "blockEntities":[ {pos, typeId, block, state, nbt} ],
-     *           "entities":[ {id, uuid, type, pos, rotation, motion, onGround, health} ],
+     *           "entities":[ {id, uuid, type, pos, rotation, motion, onGround, health,
+     *                        item?(v2.34 掉落物), content?(v2.35 展示实体薄摘要)} ],
      *           "storeStats":{ "terrain":{blocks}, "blockEntities":{new,updated,skipped},
      *                          "entities":{entities}, "biomes":{cells,added}(v2.31) } }
      */
@@ -164,6 +165,12 @@ public class VisionApi {
                 item.put("id", e.item().getStringOr("id", ""));
                 item.put("count", e.item().getIntOr("count", 1));
                 m.put("item", item);
+            }
+            // v2.35（决策点 2 渠道 B）：展示实体薄内容摘要（item/equipment/text/blockId 等，
+            // DecorativeSummary 在采集帧与 payload 同帧构建）。仅白名单展示实体且摘要成功时有。
+            // 记忆侧复原用的是持久化的整份 payload（entities.nbt "nbt" 键），本字段纯给 agent 看。
+            if (e.content() != null) {
+                m.put("content", nbtToJson(e.content()));
             }
             entities.add(m);
         }
