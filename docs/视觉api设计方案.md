@@ -33,6 +33,23 @@
 > - **v2.28（交互内容记忆：L2 独立通道 → 容器内容记录与复现，§5.2.2）**：vision 复现的容器是**空壳**（§5.2.1 剥 Items），agent 在真实世界开过的容器其内部也应成为可读记忆——把"每次交互会话结束（open 绑定 + commit 提交）时的**最终内容**"按坐标写入**独立文件 `containers.nbt`**（定案：独立。不并入 L1 `block_entities.nbt`：高频视觉写者与低频交互写者同文件必竞态丢记录，且 L1 含 Items 违 §5.2.1 纯度），记忆侧新增**容器内容通道**（mtime 门控 + 指纹 + 放置钩子/文件变化/重启重放 + 每轮询对账回填）把记录灌进记忆世界服务端容器 BE——**打开记忆容器 = vanilla 读回 agent 对该容器最近一次所见**。范围含**大箱子整 54 格**（末影箱排除：内容=玩家 EnderInventory、非世界态）：经 1.21.11 源码核实，double 菜单 = `CompoundContainer(RIGHT 半, LEFT 半)`、与点击哪半无关（`ChestBlock.getBlockType`：RIGHT→FIRST / LEFT→SECOND，`DoubleBlockCombiner` 点击 SECOND 半时自动把邻居归为 first）→ 54 格 = [RIGHT 0-26][LEFT 27-53]，采集侧按各半自身方块状态 `TYPE` 拆成**两条 per-pos 记录**，记忆侧填法不变、无合成容器/几何复刻负担。定案：每次提交**覆写该容器所覆盖的全部键**（single↔double 迁移删旧键），记忆侧对账保证"记忆 = 最近一次提交" → 已录容器在记忆世界为**只读参照**（探索者搬动会被下轮对账回卷，v1 不放宽取物）。未交互容器保持空壳——与"无交互不采内部"一致。同步 §5.2/§5.2.1。
 > - **v2.29（末影箱纳入：玩家态末影箱记忆，玩家态记忆首例，§5.2.2）**：v2.28 因"末影箱内容＝玩家 `EnderInventory`（玩家态非世界态）"而排除——本版以**并入**方案纳入。机制事实（服务端源码核实）：`EnderChestBlock.openScreen` 对**任意**末影箱都开 `player.getEnderChestInventory()` + `ChestMenu.threeRows`，`EnderChestBlockEntity` 仅 `implements LidBlockEntity`（无容器/无槽）→ **方块零内容，复现只能写记忆世界本地玩家的末影箱**，故打开任意一块存在的末影箱都读到该记忆内容；采集端以 **open 绑定格 block id=`minecraft:ender_chest`** 判定会话（27 格菜单与单箱/木桶/潜影盒同型，菜单本身不可分辨）。记录并入 `containers.nbt` **顶层 `enderInventory` 键**（与 per-pos 条目同一 commit 写者、同一 CONTAINER 通道 poll，无第二写者）；记忆侧在记录存在时把 27 格写入本地 server player 末影箱并随容器对账回填 → **全局 + 只读**（探索者搬动即回填、不能用记忆末影箱存自己的东西，已接受）。玩家态记忆族 v1 种子：待该族（主物品栏/护甲/经验等）扩到第二个成员时拆为独立 `player_state.nbt`/通道（并入为临时落位）。同步 §5.2/§5.2.1/§5.2.2。
 > - **v2.30（采集侧会话化落地：容器/末影箱内容提交机制，stevex-template，§5.2.2 末）**：v2.28/29 定下文件契约与拆分规则，本版把**采集侧会话化机制**落定并实现（§5.2.2 末「采集侧会话化机制（v2.30）」块）。机制 = 客户端 tick **open 绑定**（END_CLIENT_TICK 屏幕迁移检测；首个容器屏幕 tick 用当时准星命中块绑定并校验∈持物容器家族/末影箱）+ **commit 触发**（`container/close` WS 点在关箱前**同步读最终内容**提交；tick 兜底在探测到未走 WS 的关屏时以缓存的最近内容提交）+ **内容来源＝打开的菜单容器区**（客户端 `containerMenu.slots` 前导、`slot.container ≠ 玩家物品栏` 的槽 = 方块容器区；区序/槽号与服务端 `CompoundContainer` 同构）+ **double 拆分**（区 54 格按各半实际 `state.type`：RIGHT 半←[0,27)、LEFT 半←[27,54)，邻居半经四邻扫描同 block+同 facing+互补 type 定位；区 27 格 = 本半 + 删伙伴旧键）+ **末影分流**（绑定格 block id=`minecraft:ender_chest` → 覆写顶层 `enderInventory` 27 格 + 该格 `items=[]` per-pos 出现记录）+ **物品序列化** `ItemStack.CODEC`（= `{id,count?,components?}`，与记忆侧解析对称；1.21.11 无 `save(registryAccess)` 便捷法）。残留边界更新：commit 只发生在受控关箱点（WS `container/close`，主路径；agent 自动流恒走此），Esc 等非受控关屏依赖 tick 兜底缓存（内容可能落后 ≤1 帧，极小窗口）。同步 §5.2/§5.2.1/§5.2.2。
+> - **v2.31（生物群系全链路记录与复原：独立 biomes.nbt 逐 cell 通道，见 `生物群系复原设计方案.md`）**：视觉链路此前**无任何群系采集**（唯一 biome 取样是 `f3` 的玩家脚下单点，与视觉链路无关），而复原端 `createVoidWorldDimensions` 给每维度**钉死单一群系**（主世界 plains / 下界 nether_wastes / 末地 the_end）→ 在雪原/沼泽/丛林拍的场景复原后一律按平原渲染草/树叶色偏、天空/雾、降水——"方块都在，肤色错了"，是唯一一类"看到了却还原不了"的环境信息。修正（全链路，用户定案）：**采集侧新增群系通道**——群系存在区块里、以 **4×4×4 quart cell** 单值存储（`LevelChunkSection.biomes`，私有只读），故新增 `VisionBiomeStore`（union 单调累积，独立 `stevex/vision/biomes.nbt`，格式 `{timestamp, cells:{"qx,qy,qz": biomeId}}`，cell key=quart 坐标）**逐 cell 写、绝不逐方块写**（同 cell 所有方块 `getBiome` 必然相同＝存储保证，非比较判断）；采样源 = `ObjectResolver.resolve` 末尾的本帧可见方块集 + **相机 cell 锚点**（零额外扫描，terrain 已含 §5.4 透明补采）；只对不在 union 的 cell 解析（O(新增)），新增>0 才整体覆盖写。`snapshot` 的 `storeStats` 增 `"biomes":{cells,added}`。**记忆端新增 `BiomeRestorer`**：mtime 门控 + `prevIds` 快照 diff 出新 cell → 归组 chunk（`qx>>2,qz>>2`）入 `pendingChunks` → 每 tick `drainPending` 对**已加载**块 apply（限量 64/tick，未加载留待补填）。写入完全复用 vanilla `/fillbiome` 公开范式：`chunk.fillBiomesFromNoise(resolver, randomState().sampler())`（resolver 对记录 cell 返回记录 holder、未记录返回 `chunk.getNoiseBiome` 现状 → 只覆盖不污染）+ `markUnsaved()`（落盘持久）+ `chunkMap.resendBiomesForChunks`（→ `ClientboundChunksBiomesPacket` 客户端即时重着色），**零 Mixin / 零新包**。`MemoryWorldManager` 静态 `BIOME` + `onServerStart` 链 + tick 插在 `CONTAINER` 后 `DELETION` 前（BIOME 不改变方块，与减量无耦合）+ `forceRefresh`；`MemoryConfig` 增 `biomeFile`/`resolveBiomeFile`；**`StevexTest.java` 零改动**（补填偏差：tick-scan 取代 CHUNK_LOAD 事件，块随传送加载、≤1 tick 补填）。仅主世界、只覆盖可见 cell、注册表须与采集端共享（解析失败 WARN 跳过）。同步 §4.3/§5.4/§一/`生物群系复原设计方案.md`。
+> - **v2.32（世界类型区分：视觉链路携带维度 + 记忆世界按维分桶镜像复原，见 `世界类型区分与镜像复原设计方案.md`）**：此前视觉链路全部数据**不含维度信息**——agent 在下界/末地（或任一 mod 维）采集的内容以主世界坐标放进记忆主世界（下界岩浆池悬主世界天上；累积 union 文件 `block_entities.nbt`/`biomes.nbt` 的裸 `"x,y,z"`/`"qx,qy,qz"` 键与主世界同坐标必然互相覆盖）。修正（全链路，用户定案：**通用维度 id 全记录 + 单文件分维度桶 + 镜像跟随复原**）：**采集端**各视觉 store 写盘统一为顶层 `{ "currentDimension": <dimId>, "worlds": { <dimId>: <本维正文> } }`（两端各一份 `WorldsFile.wrap/read` 助手）——快照型（terrain/entities）只覆写当前维桶、其余维桶原样保留（换维不再清掉上一维"最后可见快照"），累积型（block_entities/biomes）外层按维、union 在各自维桶内做，`containers` 的 per-pos 记录分桶而**末影箱 `enderInventory`（玩家态）保持顶层全局**（真实 MC 末影箱跨维同一）；`ObjectResolver` 把 `level.dimension()` 透传到各 store；`snapshot` 响应顶层补 `"dimension"`；反向通道 `memory_cells.bin` 格式升 **version=2**（头部在 version 之后带 UTF-8 维 id 段，`MemoryCellsReader.CellsData` 增 `dimension`），`DeletionJudge`/调用方只对 `cells.dimension() == 本快照维` 判删（镜像落后时宁缺勿滥、绝不跨维误删；version=1 旧文件无维标签 → 删除证据置空）。**记忆端**：`MemoryWorldManager` 每 tick 以 terrain.nbt 顶层 `currentDimension`（`TerrainRestorer.activeDimensionId()`）为活动维权威源，白名单直取 vanilla 三维 ServerLevel 驱动、未知自定义维 300-tick 节流告警 + 降级（数据保留不崩）；各复原器（terrain/entity/BE/biome/container）**状态按维隔离**、只 apply `level.dimension()` 自己的维桶（坐标永不跨维碰撞；读取代际 × 每维一次交付，换维过渡 tick 也不错写）；减量/反向通道同限活动维；**镜像跟随**把记忆玩家按该维桶 agent 姿态在管线底部 `teleportToPose(player, 活动维 level, pose)` 跨维传送（`TeleportTransition` changeDimension 公开路径，无新 Mixin），门控 = **跨维 ‖ 姿态变化**（同姿态数值跨维也须换）。兼容：读侧无 `worlds` 键 → 旧文件整份视为 overworld 桶，旧存档无迁移。同步 §5.2.2/§6.1/§7.1/§7.11/§一/`已实现内容.md`。
+> - **v2.33（记忆世界传送门冻结：传送门=纯装饰，见 `传送门冻结设计方案.md`）**：记忆世界复现了 agent
+>   看到的下界/末地传送门方块，但探索者站入后 vanilla 会真传送——目标虚空维（v2.30 `voidNetherEnd`）没有现成
+>   出口门 → `NetherPortalBlock.getExitPortal` 走 `PortalForcer.createPortal` 就地**新建 obsidian 门**污染镜像；
+>   末地门 `EndPortalBlock.getPortalDestination` 会 `EndPlatformFeature.createEndPlatform` 铺平台、在末地侧还会弹
+>   End credits。修正（记忆端，用户定案：**完全冻结**）：1.21.11 传送门旅行是纯实体驱动——方块 `entityInside`
+>   先查 `Entity.canUsePortal(false)` 才 `setAsInsidePortal` 登记 `PortalProcessor` 累积，满时限后
+>   `Entity.handlePortal`（baseTick:503）以 `canUsePortal(false)` 放行旅行 → `getPortalDestination`（门创建/平台在
+>   此）→ `teleport`。该布尔是下界门/末地门/末地折跃门/跨维珍珠 owner 判定的**统一闸门**，故新增单个 Mixin
+>   `com.example.mixin.PortalTravelMixin` 在**基类** `Entity.canUsePortal(boolean)` HEAD 强制返回 false（记忆世界
+>   `ServerLevel` 判定；LivingEntity/Creaking 覆写均 `&& super` → 必生效）→ 整条链第一步短路：不登记、不累积、
+>   不旅行、永不创建目的地门/平台/credits；客户端 `animateTick` 粒子声音照常 → 门变装饰、可自由穿过。
+>   为什么 v2.21 全局冻结（§7.9 排程 tick/冻结实体 tick 分发）没覆盖：传送门使用走玩家自身移动碰撞
+>   `entityInside` + `baseTick→handlePortal`，非排程 tick、玩家 tick 又未被停。镜像跟随（v2.32）跨维摆放经
+>   `teleportTo`→`Entity.teleport(TeleportTransition)`，不经 `canUsePortal` → 不受影响。采集端零改动。
+>   同步 §7.9/§7.1/§一/`已实现内容.md`。
 
 ---
 
@@ -909,7 +926,7 @@ for p in 全部像素:
 | ⑤ | 随机方块 tick（作物/冰/雪/藤蔓/岩浆点火…） | `ServerChunkCache.tick` → `ServerLevel.tickChunk`（`tickSpeed=random_tick_speed`） | **gamerule `random_tick_speed=0`** |
 | ⑥ | 方块实体 tick（熔炉/漏斗/刷怪笼/活塞动画…） | `Level.tickBlockEntities` → `TickingBlockEntity.tick` | **`tickBlockEntities` @HEAD cancellable** |
 | ⑦ | 昼夜 / 天气推进 | `ServerLevel.tickTime`（`ADVANCE_TIME`）/ `advanceWeatherState`（`ADVANCE_WEATHER`） | **gamerule `advance_time=false`、`advance_weather=false`** |
-| ⑧ | 自然刷怪 / 自定义刷怪 | `ServerChunkCache.tick` 自然刷怪 + `tickCustomSpawners` | 虚空和平世界实际无怪；可选 `spawn_mobs=false` 兜底（暂不设） |
+| ⑧ | 自然刷怪 / 自定义刷怪 | `ServerChunkCache.tick` 自然刷怪 + `tickCustomSpawners` | **gamerule `spawn_mobs=false`**（v2.30，建档随 LevelSettings 写入 + 首次进入再设兜底） |
 
 **全局冻结实现（两个 Mixin，四个注入点）**：
 
@@ -925,7 +942,8 @@ for p in 全部像素:
 
 - `random_tick_speed=0`（`GameRules.RANDOM_TICK_SPEED`，默认 3）：`ServerChunkCache.tick` 读它作 `tickSpeed`（`ServerChunkCache.java:379`）并传 `ServerLevel.tickChunk(chunk, tickSpeed)`；`tickChunk` 里 `tickSpeed>0` 分支整体跳过（`ServerLevel.java:505`）→ 作物生长、冰/雪融化、藤蔓蔓延、岩浆 `randomTick` 点火（§7.8 已知遗留）**全部停止**。
 - `advance_time=false`（`GameRules.ADVANCE_TIME`）+ `advance_weather=false`（`GameRules.ADVANCE_WEATHER`）：`tickTime` 里 `ADVANCE_TIME` 门控 `setDayTime`（`ServerLevel.java:466`）、天气推进受 `ADVANCE_WEATHER` 门控 → 昼夜/天气不再推进（时间对齐由 §7.10 `setDayTime` 单独设值，不冲突）。
-- 设置时机：`MemoryWorldManager.onServerTick` 的 `playerReady` 一次性块（进入记忆世界后设一次）。gamerule 是世界级状态、随记忆世界存档持久化，只影响记忆世界。
+- `spawn_mobs=false`（`GameRules.SPAWN_MOBS`，v2.30）：`ServerChunkCache.tick` 读它作 `doMobSpawning`（`ServerChunkCache.java:378`）——false 时 `spawningCategories` 置空（:381-385）且跳过 `tickCustomSpawners`（:406-409）→ **自然刷怪 + 自定义刷怪（⑧）全停**。双落点：新建世界建档时随 LevelSettings 的 GameRules 写入（`PrimaryLevelData.getGameRules() = settings.gameRules()`，从 tick 0 起生效并持久化）；首次进入记忆世界 `applyFreezeGameRules` 再设一次，兜底改版前创建的旧记忆世界。注：`EntityRestorer` 放置的实体走 `addFreshEntity`、不经自然刷怪路径，不受此开关影响。
+- 设置时机：`MemoryWorldManager.onServerTick` 的 `playerReady` 一次性块（进入记忆世界后设一次）。`spawn_mobs=false` 另在建档时随 LevelSettings 一并写入（v2.30，见上）。gamerule 是世界级状态、随记忆世界存档持久化，只影响记忆世界。
 - 本版本 gamerule 已 snake_case 改名，实现一律以 `GameRules` 常量字段为准（`RANDOM_TICK_SPEED` / `ADVANCE_TIME` / `ADVANCE_WEATHER` / `SPAWN_MOBS`…），勿用 vanilla 的 `randomTickSpeed`/`doDaylightCycle` 字符串。
 
 **三个"非 tick"陷阱（v2.21 已解决，分发层冻结覆盖不到）**：
@@ -945,7 +963,7 @@ for p in 全部像素:
 - **采集侧**：`DepthSnapshot` 新增 `dayTime`（`level.getDayTime()`，long，游戏时间单位），`ObjectResolver` 把 `dayTime` 一并写入三个源文件顶层（`dayTime` 字段）。`VisionBlockEntityStore` 增量脏标记：`dayTime` 变化时标记 dirty 才刷新文件；
 - **记忆侧**：`MemoryRestorer` 读 `dayTime`（旧文件无该字段 → 哨兵 `-1`），在 mtime 门控放行后、与 pose/fingerprint 解耦独立判断——`dayTime >= 0 && dayTime != lastDayTime` 时 `level.setDayTime(dayTime)` 并推进 `lastDayTime`（agent 站桩不动时，时间照常随每次采集对齐）。`onServerStart()` 重置 `lastDayTime`；
 - **与冻结不冲突**：`advance_time=false` 只阻止 `tickTime` 自增，`setDayTime` 直接设值仍然生效 → 世界时间冻结在采集值，太阳/月亮/天光与采集一致；
-- **已知限制（未同步）**：天气（晴/雨/雷）未落盘——记忆世界沿用本地天气；`advance_weather=false` 后本地天气保持进入时状态，可能与采集时刻不一致（如需严格一致须另行落盘 `raining`/`thundering` 并在进入时 `resetWeatherCycle`+设置，待定）。刷怪（⑧）依赖 `dayTime`/光照，记忆世界虚空和平实际无怪，不处理。
+- **已知限制（未同步）**：天气（晴/雨/雷）未落盘——记忆世界沿用本地天气；`advance_weather=false` 后本地天气保持进入时状态，可能与采集时刻不一致（如需严格一致须另行落盘 `raining`/`thundering` 并在进入时 `resetWeatherCycle`+设置，待定）。刷怪（⑧）经 `spawn_mobs=false`（建档 + 首次进入，v2.30）全停，不依赖 `dayTime`/光照。
 
 ### 7.11 减量：反向通道 + 采集侧逐块深度判定（v2.23，✅ 已实现 2026-08-25）
 

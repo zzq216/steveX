@@ -3,6 +3,7 @@ package com.example.memworld;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -37,14 +38,21 @@ import org.slf4j.LoggerFactory;
  *   <li><b>原子写</b>：临时文件 + rename（半截写防护，同 §7.4），mtime 只在成功后推进。</li>
  * </ul>
  *
- * <p>文件格式（小端，与采集侧 {@code MemoryCellsReader} 对应）：
+ * <p>v2.32（世界类型区分，见 docs/世界类型区分与镜像复原设计方案.md §4.6/§5.4）：cells 按<b>活动维</b>
+ * 求取并带<b>维标签</b>上报——只算 {@code level.dimension()} 对应维的方块/实体（调用方 manager 只传
+ * 活动维的 ServerLevel），采集侧只对 {@code dimension == 本快照维} 的 cells 做删除判定；镜像落后时
+ * cells 仍标上一维 → 采集侧宁缺勿滥、绝不跨维误删。
+ *
+ * <p>文件格式（小端，与采集侧 {@code MemoryCellsReader} 对应；version = 2 起带 UTF-8 维 id）：
  * <pre>{@code
  *   [0..3]   magic "SCEL"
- *   [4]      version = 1
- *   [5..8]   int removalPixelThreshold   （采集侧删除判定阈值，随通道下发，单一来源）
- *   [9..16]  double removalMaxRayDist    （信息性：距离球过滤半径）
- *   [17..20] int count
- *   [21..]   count × long（BlockPos.asLong）
+ *   [4]      version = 2
+ *   [5..8]   int 维 id 字节长度 L（UTF-8）
+ *   [9..9+L) UTF-8 dimensionId（活动维）
+ *   [..]     int removalPixelThreshold   （采集侧删除判定阈值，随通道下发，单一来源）
+ *   [..]     double removalMaxRayDist    （信息性：距离球过滤半径）
+ *   [..]     int count
+ *   [..]     count × long（BlockPos.asLong）
  * }</pre>
  *
  * <p>文件路径 = 源 terrain.nbt 所在目录的 {@code memory_cells.bin}（采集侧读同一路径）。
@@ -54,7 +62,8 @@ public final class MemoryCellReporter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("stevex-test/memory");
     private static final byte[] MAGIC = {'S', 'C', 'E', 'L'};
-    private static final int VERSION = 1;
+    /** v2.32：格式版本升到 2（头部在 version 之后追加 UTF-8 维 id 段；version=1 旧文件无维标签）。 */
+    private static final int VERSION = 2;
 
     private final TerrainRestorer terrain;
     private final EntityRestorer entities;
@@ -77,10 +86,13 @@ public final class MemoryCellReporter {
         LOGGER.info("[MemoryWorld] Cell reporter ready");
     }
 
-    /** 每服务器 tick 调用：按需重算 + 原子写 cells 文件。 */
+    /** 每服务器 tick 调用：按需重算 + 原子写 cells 文件（只对传入的活动维 level）。 */
     public void tick(final ServerLevel level) {
         if (!config.removalEnabled) return; // 减量关闭 → 不写 cells → 纯累积
+        if (level.players().isEmpty()) return; // v2.32：活动维尚无玩家（跨维传送过渡 tick）→ 无法定位
+        // agent（球心），本轮跳过且不推进指纹——绝不把“无 cells”误上报成“记忆为空”（采集侧会宁缺勿滥）。
 
+        final String dimension = level.dimension().identifier().toString();
         final int version = terrain.mutationVersion() + entities.mutationVersion();
         ticks++;
         // 触发：世界变化（mutationVersion 变化）|| 姿态变化（球内格集变化，随每次重算内容指纹体现）
@@ -90,15 +102,15 @@ public final class MemoryCellReporter {
         }
         lastMutationVersion = version;
 
-        final Set<Long> cells = computeCells(level);
+        final Set<Long> cells = computeCells(level, dimension);
         if (cells.equals(lastCells)) return; // 内容指纹门控：内容未变不重写
 
         final Path file = config.resolveMemoryCellsFile();
         if (file == null) return;
-        if (writeAtomic(file, cells, config.removalPixelThreshold, config.removalMaxRayDist)) {
+        if (writeAtomic(file, dimension, cells, config.removalPixelThreshold, config.removalMaxRayDist)) {
             lastCells = cells;
-            LOGGER.info("[MemoryWorld] Wrote {} memory cells to {} (threshold={}, maxDist={})",
-                    cells.size(), file, config.removalPixelThreshold, config.removalMaxRayDist);
+            LOGGER.info("[MemoryWorld] Wrote {} memory cells [{}] to {} (threshold={}, maxDist={})",
+                    cells.size(), dimension, file, config.removalPixelThreshold, config.removalMaxRayDist);
         }
     }
 
@@ -113,17 +125,17 @@ public final class MemoryCellReporter {
     }
 
     /**
-     * 重算待上报格集（§7.11）：实心不透明块（距离过滤 + 世界状态判定）+ 冻结实体占用格
-     * （距离过滤）。Over-inclusive：只缩距离，不做视锥。
+     * 重算待上报格集（§7.11 / v2.32）：指定维的实心不透明块（距离过滤 + 世界状态判定）+ 冻结实体
+     * 占用格（距离过滤）。Over-inclusive：只缩距离，不做视锥。
      */
-    private Set<Long> computeCells(final ServerLevel level) {
+    private Set<Long> computeCells(final ServerLevel level, final String dimension) {
         final Vec3 agent = agentPos(level);
         if (agent == null) return Set.of();
         final double r2 = config.removalMaxRayDist * config.removalMaxRayDist;
         final Set<Long> cells = new HashSet<>();
 
-        // ① 实心不透明块：先距离过滤（便宜），再读世界判定（只对球内格读）
-        for (BlockPos pos : terrain.appliedBlocks()) {
+        // ① 实心不透明块：先距离过滤（便宜），再读世界判定（只对球内格读）。只取该维已应用方块。
+        for (BlockPos pos : terrain.appliedBlocks(dimension)) {
             final double dx = pos.getX() + 0.5 - agent.x;
             final double dy = pos.getY() + 0.5 - agent.y;
             final double dz = pos.getZ() + 0.5 - agent.z;
@@ -133,8 +145,8 @@ public final class MemoryCellReporter {
             }
         }
 
-        // ② 冻结实体占用格（AABB 覆盖的所有格，距离过滤）
-        for (Entity e : entities.entities()) {
+        // ② 冻结实体占用格（AABB 覆盖的所有格，距离过滤）。只取该维已放置实体。
+        for (Entity e : entities.entities(dimension)) {
             if (e.isRemoved()) continue;
             final AABB box = e.getBoundingBox();
             final int minX = Mth.floor(box.minX), maxX = Mth.floor(box.maxX);
@@ -159,19 +171,23 @@ public final class MemoryCellReporter {
 
     /** 原子写（临时文件 + rename，半截写防护同 §7.4）。失败返回 false（调用方不推进指纹）。
      *  字节序与采集侧 {@code MemoryCellsReader} 一致：{@link ByteOrder#LITTLE_ENDIAN}。 */
-    private static boolean writeAtomic(final Path target, final Set<Long> cells,
+    private static boolean writeAtomic(final Path target, final String dimension, final Set<Long> cells,
                                        final int threshold, final double maxRayDist) {
         try {
             Files.createDirectories(target.getParent());
             final Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
-            final ByteBuffer buf = ByteBuffer.allocate(21 + cells.size() * 8)
+            final byte[] dimBytes = dimension == null ? new byte[0] : dimension.getBytes(StandardCharsets.UTF_8);
+            // 布局：[0..3] magic + [4] ver + [5..8] L + [9..9+L) dim + 16（threshold/maxRayDist/count）+ count×8
+            final ByteBuffer buf = ByteBuffer.allocate(25 + dimBytes.length + cells.size() * 8)
                     .order(ByteOrder.LITTLE_ENDIAN);
             buf.put(MAGIC);                    // [0..3]
             buf.put((byte) VERSION);           // [4]
-            buf.putInt(threshold);             // [5..8]
-            buf.putDouble(maxRayDist);         // [9..16]
-            buf.putInt(cells.size());          // [17..20]
-            for (long c : cells) {             // [21..] count × long
+            buf.putInt(dimBytes.length);       // [5..8]
+            buf.put(dimBytes);                 // [9..9+L)
+            buf.putInt(threshold);             // threshold
+            buf.putDouble(maxRayDist);         // maxRayDist
+            buf.putInt(cells.size());          // count
+            for (long c : cells) {             // count × long
                 buf.putLong(c);
             }
             Files.write(tmp, buf.array());

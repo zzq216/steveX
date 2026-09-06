@@ -54,6 +54,8 @@ import org.slf4j.Logger;
  *       27 槽（单半）则写当前半 + 删陈旧伙伴键（迁移）。</li>
  *   <li><b>末影分流</b>：{@code minecraft:ender_chest} → 顶层 {@code enderInventory} 玩家态
  *       （27 槽），不写 per-pos 记录。</li>
+ *   <li><b>维度归属</b>（v2.32）：会话绑定（bind）瞬间取 {@code mc.level.dimension()} 记入会话；
+ *       提交时把 per-pos 记录归到该维的桶（open→commit 同维，跨维传送不可能发生在容器菜单打开时）。</li>
  *   <li><b>物品序列化</b>：{@link ItemStack#CODEC} + {@code NbtOps}（与记忆侧解析对称，
  *       1.21.11 无 parse/save 便捷方法）。</li>
  * </ol>
@@ -140,8 +142,10 @@ public final class ContainerMemoryTracker {
         BlockState state = mc.level.getBlockState(pos);
         String blockId = VisionCollector.blockId(state);
         if (!CONTAINER_FAMILY.contains(blockId)) return;
-        session = new BoundSession(pos, blockId, blockId.equals("minecraft:ender_chest"), screen);
-        LOGGER.info("[Vision] Container session bound: {} at {}", blockId, pos);
+        // v2.32：会话维度在绑定瞬间取定（菜单打开期间不可能跨维；commit 时以它分桶）。
+        String dimension = mc.level.dimension().identifier().toString();
+        session = new BoundSession(pos, blockId, blockId.equals("minecraft:ender_chest"), dimension, screen);
+        LOGGER.info("[Vision] Container session bound: {} at {} (dim={})", blockId, pos, dimension);
     }
 
     // ==================== 区域读取 ====================
@@ -198,7 +202,7 @@ public final class ContainerMemoryTracker {
                 }
             } else {
                 // 单块非 double 容器：本地槽 = region 序号
-                writeRecord(mc, s.pos, s.blockId, items);
+                writeRecord(mc, s.dimension, s.pos, s.blockId, items);
             }
             STORE.save();
         } catch (RuntimeException e) {
@@ -222,8 +226,9 @@ public final class ContainerMemoryTracker {
             }
         }
         STORE.setEnder(tags);
-        writeRecord(mc, s.pos, s.blockId, List.of());
-        LOGGER.info("[Vision] Committed ender inventory ({} stacks) + occurrence at {}", tags.size(), s.pos);
+        writeRecord(mc, s.dimension, s.pos, s.blockId, List.of());
+        LOGGER.info("[Vision] Committed ender inventory ({} stacks) + occurrence at {} (dim={})",
+                tags.size(), s.pos, s.dimension);
     }
 
     /**
@@ -240,7 +245,7 @@ public final class ContainerMemoryTracker {
             List<RegionItem> own = boundType(boundState) == ChestType.RIGHT
                     ? takeSide(items, 0)
                     : takeSide(items, HALF_SIZE);
-            writeRecord(mc, s.pos, s.blockId, own);
+            writeRecord(mc, s.dimension, s.pos, s.blockId, own);
             LOGGER.warn("[Vision] Double menu at {} but no partner chest found; wrote bound half only", s.pos);
             return;
         }
@@ -257,9 +262,10 @@ public final class ContainerMemoryTracker {
             leftState = boundState;         leftPos = s.pos;
         }
 
-        writeRecord(mc, rightPos, VisionCollector.blockId(rightState), takeSide(items, 0));
-        writeRecord(mc, leftPos, VisionCollector.blockId(leftState), takeSide(items, HALF_SIZE));
-        LOGGER.info("[Vision] Committed double {} halves {} / {}", s.blockId, rightPos, leftPos);
+        writeRecord(mc, s.dimension, rightPos, VisionCollector.blockId(rightState), takeSide(items, 0));
+        writeRecord(mc, s.dimension, leftPos, VisionCollector.blockId(leftState), takeSide(items, HALF_SIZE));
+        LOGGER.info("[Vision] Committed double {} halves {} / {} (dim={})",
+                s.blockId, rightPos, leftPos, s.dimension);
     }
 
     /**
@@ -271,14 +277,14 @@ public final class ContainerMemoryTracker {
         if (!state.isAir() && VisionCollector.blockId(state).equals(s.blockId)
                 && chestType(state) != null && chestType(state) != ChestType.SINGLE) {
             Direction conn = ChestBlock.getConnectedDirection(state);
-            STORE.remove(posKey(s.pos.relative(conn)));
+            STORE.remove(s.dimension, posKey(s.pos.relative(conn)));
         }
-        writeRecord(mc, s.pos, s.blockId, items);
+        writeRecord(mc, s.dimension, s.pos, s.blockId, items);
     }
 
     /** 写一条 per-pos 记录：本地槽 = region 序号，blockId/state/typeId 取世界当前方块。 */
-    private static void writeRecord(final Minecraft mc, final BlockPos pos, final String blockId,
-                                    final List<RegionItem> items) {
+    private static void writeRecord(final Minecraft mc, final String dimension, final BlockPos pos,
+                                    final String blockId, final List<RegionItem> items) {
         BlockState state = mc.level.getBlockState(pos);
         Map<String, String> props = state.isAir() ? Map.of() : VisionCollector.stateProps(state);
         List<ContainerMemoryStore.SlotTag> tags = new ArrayList<>();
@@ -286,7 +292,7 @@ public final class ContainerMemoryTracker {
             CompoundTag tag = encodeItem(it.stack());
             if (tag != null) tags.add(new ContainerMemoryStore.SlotTag(it.slot(), tag));
         }
-        STORE.upsert(posKey(pos), typeIdFor(state, blockId), blockId, props, tags);
+        STORE.upsert(dimension, posKey(pos), typeIdFor(state, blockId), blockId, props, tags);
     }
 
     // ==================== 辅助 ====================
@@ -374,14 +380,18 @@ public final class ContainerMemoryTracker {
         final BlockPos pos;
         final String blockId;
         final boolean ender;
+        /** v2.32：会话所属维 id（bind 瞬间取定；per-pos 记录按它分桶）。 */
+        final String dimension;
         final Screen screen;
         List<RegionItem> cache = List.of();
         int cacheSize;
 
-        BoundSession(final BlockPos pos, final String blockId, final boolean ender, final Screen screen) {
+        BoundSession(final BlockPos pos, final String blockId, final boolean ender,
+                     final String dimension, final Screen screen) {
             this.pos = pos;
             this.blockId = blockId;
             this.ender = ender;
+            this.dimension = dimension;
             this.screen = screen;
         }
     }

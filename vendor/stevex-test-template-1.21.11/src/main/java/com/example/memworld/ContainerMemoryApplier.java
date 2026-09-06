@@ -32,7 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 容器内容记忆通道（设计 §5.2.2，v2.28 → v2.29）。
+ * 容器内容记忆通道（设计 §5.2.2，v2.28 → v2.29 → v2.32 按维分桶）。
  *
  * <p>与视觉通道（{@link MemoryRestorer} / {@link TerrainRestorer} / {@link EntityRestorer}）
  * 独立的交互内容通道：只读单个 {@code containers.nbt}（采集侧交互会话提交的"容器/末影箱内容
@@ -41,13 +41,16 @@ import org.slf4j.LoggerFactory;
  * <p>文件契约（由采集侧写入、本类读取，两段式单写入者）：
  * <pre>{@code
  * { version: 1,
- *   containers: {
- *     "x,y,z": { "typeId": "minecraft:chest",          // 方块实体 id（建 BE / loadStatic 用）
- *                "block": "minecraft:chest",           // 方块注册名
- *                "state": {"facing":"east","type":"single"},  // 状态属性
- *                "items": [ {"slot": 0, "item": <ItemStack 编码>}, … ] } // 槽位 0..getContainerSize()-1
+ *   currentDimension: "minecraft:overworld",          // v2.32 文件最近写入维
+ *   worlds: {                                         // v2.32 per-pos 容器按维分桶
+ *     "minecraft:overworld": { containers: {
+ *       "x,y,z": { "typeId": "minecraft:chest",       // 方块实体 id（建 BE / loadStatic 用）
+ *                  "block": "minecraft:chest",        // 方块注册名
+ *                  "state": {"facing":"east","type":"single"},  // 状态属性
+ *                  "items": [ {"slot": 0, "item": <ItemStack 编码>}, … ] } } }, // 槽位 0..getContainerSize()-1
+ *     "minecraft:the_nether": { containers: { … } }
  *   },
- *   enderInventory: { "items": [ {"slot": 0, "item": …}, … ] }   // v2.29：末影箱=玩家态，槽位 0..26
+ *   enderInventory: { "items": [ {"slot": 0, "item": …}, … ] }   // v2.29：末影箱=玩家态，跨维同一份 → 顶层全局
  * } }</pre>
  *
  * <p>item 序列化与 1.21.11 对齐：本版本无 {@code ItemStack.parse/save(registryAccess, tag)} 便捷方法，
@@ -61,6 +64,12 @@ import org.slf4j.LoggerFactory;
  *   <li>末影箱是玩家态（§5.2.2 v2.29）：世界任意末影箱都显示同一内容，只能写本地玩家
  *       {@code getEnderChestInventory()}（无按块填充可能）。记录 = 全局 + 只读，v1 接受。</li>
  * </ul>
+ *
+ * <p>v2.32（世界类型区分，见 docs/世界类型区分与镜像复原设计方案.md §5.2.3）：{@code containers}
+ * 按<b>维度</b>分桶读取；每轮 reconcile 只覆写 {@code level.dimension()} 对应维的容器（本通道由
+ * {@link MemoryWorldManager} 用活动维 ServerLevel 驱动）——主世界容器坐标永不写下界、反之亦然。
+ * 末影箱是<b>玩家态</b>（跨维全局同一份），故仍在<b>文件原始 root 顶层</b>读取（旧版单维文件里
+ * 它也在顶层；若从 WorldsFile 包的 overworld 桶里读，旧文件末影段会被错误埋进桶内）。
  */
 public class ContainerMemoryApplier {
 
@@ -106,6 +115,8 @@ public class ContainerMemoryApplier {
     /**
      * 驱动一次轮询：mtime 变化时重读文件；之后（默认）每轮 reconcile 覆写世界，捕获"BE 稍后才由视觉
      * 通道放置 / 玩家改动被还原"等情况。文件缺失时暂停（同 {@link MemoryRestorer}）。
+     *
+     * <p>v2.32：每轮只 reconcile {@code level.dimension()} 对应维的容器（加全局末影箱）。
      */
     public void tick(final ServerLevel level) {
         MemoryConfig config = MemoryConfig.get();
@@ -153,9 +164,17 @@ public class ContainerMemoryApplier {
 
     // ==================== 覆写 / 应用 ====================
 
+    /**
+     * v2.32：只覆写传入 level（= 活动维，见 {@link MemoryWorldManager}）对应维的容器 + 全局末影箱。
+     * 其它维的容器记录留在文件缓存，镜像切回该维时再覆写。
+     */
     private void reconcile(final ServerLevel level, final FileData data, final boolean warnConflicts) {
-        for (Map.Entry<BlockPos, PosRecord> e : data.containers().entrySet()) {
-            applyPos(level, e.getKey(), e.getValue(), warnConflicts);
+        final String dimension = level.dimension().identifier().toString();
+        Map<BlockPos, PosRecord> containers = data.containersByDim().get(dimension);
+        if (containers != null) {
+            for (Map.Entry<BlockPos, PosRecord> e : containers.entrySet()) {
+                applyPos(level, dimension, e.getKey(), e.getValue(), warnConflicts);
+            }
         }
         if (data.enderPresent()) {
             applyEnder(level, data.enderItems());
@@ -171,11 +190,11 @@ public class ContainerMemoryApplier {
      *       （静默标记，同 §7.9 陷阱 ①）并补挂 BE；世界方块与记录不同 → terrain 视觉胜，跳过。</li>
      * </ol>
      */
-    private void applyPos(final ServerLevel level, final BlockPos pos, final PosRecord rec,
+    private void applyPos(final ServerLevel level, final String dimension, final BlockPos pos, final PosRecord rec,
                           final boolean warnConflicts) {
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof Container c) {
-            fill(c, rec.items(), pos.toString());
+            fill(c, rec.items(), dimension + "@" + pos);
             return;
         }
         if (be != null) return; // 非容器 BE 占位（如末影箱）：不可按块填充，外壳已由视觉放置
@@ -184,39 +203,41 @@ public class ContainerMemoryApplier {
         if (!worldState.isAir()) {
             String worldId = BuiltInRegistries.BLOCK.getKey(worldState.getBlock()).toString();
             if (worldId.equals(rec.blockId())) {
-                attach(level, pos, worldState, rec);
+                attach(level, dimension, pos, worldState, rec);
             } else if (warnConflicts) {
-                warnOnce("conflict@" + pos,
-                        "[MemoryWorld] Pos {}: world block {} ≠ recorded {}; skip (terrain visual wins)",
-                        pos, worldId, rec.blockId());
+                warnOnce("conflict@" + dimension + "/" + pos,
+                        "[MemoryWorld] Pos {} [{}]: world block {} ≠ recorded {}; skip (terrain visual wins)",
+                        pos, dimension, worldId, rec.blockId());
             }
             return;
         }
 
         // 世界为空气：自足放置。自建块只可能是非实心容器，不是 DELETION 候选，不会与减量冲突。
         if (rec.blockId().isBlank()) {
-            warnOnce("noBlock@" + pos, "[MemoryWorld] Pos {}: air & record without block; skip", pos);
+            warnOnce("noBlock@" + dimension + "/" + pos,
+                    "[MemoryWorld] Pos {} [{}]: air & record without block; skip", pos, dimension);
             return;
         }
         BlockState state = BlockStateUtil.fromSaved(rec.blockId(), rec.state());
         if (state.isAir()) {
-            warnOnce("airState@" + pos, "[MemoryWorld] Pos {}: cannot rebuild block {} state; skip",
-                    pos, rec.blockId());
+            warnOnce("airState@" + dimension + "/" + pos,
+                    "[MemoryWorld] Pos {} [{}]: cannot rebuild block {} state; skip",
+                    pos, dimension, rec.blockId());
             return;
         }
         level.setBlock(pos, state, Block.UPDATE_CLIENTS | Block.UPDATE_SKIP_ALL_SIDEEFFECTS);
-        attach(level, pos, state, rec);
+        attach(level, dimension, pos, state, rec);
     }
 
     /** 补挂 BE（调用处保证 BE 缺失）：用记录 typeId（缺则按方块反查）loadStatic 最小 nbt，成功后填充。 */
-    private void attach(final ServerLevel level, final BlockPos pos, final BlockState state,
+    private void attach(final ServerLevel level, final String dimension, final BlockPos pos, final BlockState state,
                         final PosRecord rec) {
         String typeId = rec.typeId();
         if (typeId.isBlank()) typeId = beTypeIdFor(state);
         if (typeId == null) {
-            warnOnce("noType@" + pos,
-                    "[MemoryWorld] Pos {}: cannot attach BE for block {} (no typeId / BE type); skip",
-                    pos, rec.blockId());
+            warnOnce("noType@" + dimension + "/" + pos,
+                    "[MemoryWorld] Pos {} [{}]: cannot attach BE for block {} (no typeId / BE type); skip",
+                    pos, dimension, rec.blockId());
             return;
         }
         CompoundTag nbt = new CompoundTag();
@@ -226,14 +247,15 @@ public class ContainerMemoryApplier {
         nbt.putInt("z", pos.getZ());
         BlockEntity be = BlockEntity.loadStatic(pos, state, nbt, level.registryAccess());
         if (be == null) {
-            warnOnce("attachFail@" + pos,
-                    "[MemoryWorld] Pos {}: BlockEntity.loadStatic failed (type {}); skip", pos, typeId);
+            warnOnce("attachFail@" + dimension + "/" + pos,
+                    "[MemoryWorld] Pos {} [{}]: BlockEntity.loadStatic failed (type {}); skip",
+                    pos, dimension, typeId);
             return;
         }
         be.setLevel(level);
         level.setBlockEntity(be);
         if (be instanceof Container c) {
-            fill(c, rec.items(), pos.toString());
+            fill(c, rec.items(), dimension + "@" + pos);
         }
     }
 
@@ -291,31 +313,46 @@ public class ContainerMemoryApplier {
 
     // ==================== 读取源文件 ====================
 
+    /**
+     * 读取容器文件 → v2.32 各维 per-pos 容器表 + 顶层末影箱玩家态。
+     *
+     * <p>末影箱必须从<b>原始 root 顶层</b>读（旧版单维文件它也在顶层；若经
+     * {@link WorldsFile#read} 的 legacy 回退，整份 root 会变成 overworld 桶、把末影段埋进桶内，
+     * 与采集侧 load() 从原始 root 读末影段的约定对称）。旧版单维文件的 {@code containers} 键在
+     * root 顶层，经 legacy 回退后恰为该 overworld 桶的顶层 → 解析路径一致。
+     */
     private FileData readFile(final Path source, final HolderLookup.Provider registries) {
         try {
             CompoundTag root = NbtIo.readCompressed(source, NbtAccounter.unlimitedHeap());
             if (root == null) return FileData.EMPTY;
 
-            CompoundTag containersTag = root.getCompoundOrEmpty(KEY_CONTAINERS);
-            Map<BlockPos, PosRecord> containers = new LinkedHashMap<>();
-            for (String key : containersTag.keySet()) {
-                BlockPos pos = parsePos(key);
-                if (pos == null) continue;
-                CompoundTag entry = containersTag.getCompoundOrEmpty(key);
-                String typeId = entry.getStringOr(KEY_TYPE_ID, "");
-                String blockId = entry.getStringOr(KEY_BLOCK, "");
-                Map<String, String> state = readState(entry.getCompoundOrEmpty(KEY_STATE));
-                List<ItemEntry> items = readItems(entry.getListOrEmpty(KEY_ITEMS), registries);
-                containers.put(pos, new PosRecord(typeId, blockId, state, items));
+            // v2.32：per-pos 容器按维分桶。
+            WorldsFile.Result r = WorldsFile.read(root);
+            Map<String, Map<BlockPos, PosRecord>> containersByDim = new LinkedHashMap<>();
+            for (Map.Entry<String, CompoundTag> e : r.worlds().entrySet()) {
+                CompoundTag containersTag = e.getValue().getCompoundOrEmpty(KEY_CONTAINERS);
+                Map<BlockPos, PosRecord> containers = new LinkedHashMap<>();
+                for (String key : containersTag.keySet()) {
+                    BlockPos pos = parsePos(key);
+                    if (pos == null) continue;
+                    CompoundTag entry = containersTag.getCompoundOrEmpty(key);
+                    String typeId = entry.getStringOr(KEY_TYPE_ID, "");
+                    String blockId = entry.getStringOr(KEY_BLOCK, "");
+                    Map<String, String> state = readState(entry.getCompoundOrEmpty(KEY_STATE));
+                    List<ItemEntry> items = readItems(entry.getListOrEmpty(KEY_ITEMS), registries);
+                    containers.put(pos, new PosRecord(typeId, blockId, state, items));
+                }
+                containersByDim.put(e.getKey(), containers);
             }
 
-            boolean enderPresent = root.contains(KEY_ENDER_INVENTORY)
-                    && root.getCompoundOrEmpty(KEY_ENDER_INVENTORY).contains(KEY_ITEMS);
+            // v2.29：末影箱玩家态始终在文件顶层（跨维全局；新/旧格式同位置）。
+            CompoundTag ender = root.getCompoundOrEmpty(KEY_ENDER_INVENTORY);
+            boolean enderPresent = !ender.isEmpty() && ender.contains(KEY_ITEMS);
             List<ItemEntry> enderItems = enderPresent
-                    ? readItems(root.getCompoundOrEmpty(KEY_ENDER_INVENTORY).getListOrEmpty(KEY_ITEMS), registries)
+                    ? readItems(ender.getListOrEmpty(KEY_ITEMS), registries)
                     : List.of();
 
-            return new FileData(containers, enderPresent, enderItems);
+            return new FileData(containersByDim, enderPresent, enderItems);
         } catch (IOException e) {
             LOGGER.warn("[MemoryWorld] Failed to read container file {}: {}", source, e.getMessage());
             return null;
@@ -397,15 +434,16 @@ public class ContainerMemoryApplier {
     private record PosRecord(String typeId, String blockId, Map<String, String> state, List<ItemEntry> items) {}
 
     /**
-     * 一次文件读取结果：per-pos 容器表 + 末影箱玩家态（v2.29）。
+     * v2.32 一次文件读取结果：各维 per-pos 容器表 + 末影箱玩家态（v2.29，顶层全局）。
      * {@code enderPresent=false} 表示文件未含末影箱段 → 不动玩家末影箱（避免覆写本地已有内容）；
      * 为 true（即使空物品表）→ 记录 = 权威快照，reconcile 会清空还原。
      */
-    private record FileData(Map<BlockPos, PosRecord> containers, boolean enderPresent, List<ItemEntry> enderItems) {
+    private record FileData(Map<String, Map<BlockPos, PosRecord>> containersByDim,
+                            boolean enderPresent, List<ItemEntry> enderItems) {
         static final FileData EMPTY = new FileData(Map.of(), false, List.of());
 
         boolean isEmpty() {
-            return containers.isEmpty() && !enderPresent;
+            return containersByDim.isEmpty() && !enderPresent;
         }
     }
 }

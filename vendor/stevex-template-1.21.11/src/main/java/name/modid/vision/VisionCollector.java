@@ -45,6 +45,9 @@ public class VisionCollector {
     /** 实体轻量快照存储 —— 快照覆盖写（v2 起内容 = 本次可见实体，无 scannedSections）。 */
     private static final VisionEntityStore entityStore = new VisionEntityStore();
 
+    /** v2.31：群系 cell 存储 —— 单调 union 覆盖写（独立 biomes.nbt，见 VisionBiomeStore）。 */
+    private static final VisionBiomeStore biomeStore = new VisionBiomeStore();
+
     /**
      * 实体全量 NBT 的 TTL 缓存（uuid → 最近一次序列化结果）。
      *
@@ -185,5 +188,10 @@ public class VisionCollector {
 
     public static VisionEntityStore getEntityStore() {
         return entityStore;
+    }
+
+    /** v2.31：群系 cell 存储访问。 */
+    public static VisionBiomeStore getBiomeStore() {
+        return biomeStore;
     }
 }

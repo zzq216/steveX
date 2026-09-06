@@ -89,6 +89,10 @@ public final class ObjectResolver {
     ) {
         final Vec3 cam = snap.cameraPos();
 
+        // v2.32（世界类型区分，见 docs/世界类型区分与镜像复原设计方案.md）：当前帧所属维 id。
+        // 一次快照不可能跨维，故本帧所有 store 落盘、响应 dimension、cells 维过滤共用同一 id。
+        final String dimensionId = level.dimension().identifier().toString();
+
         // ① 方块直查 + ② 方块实体（搭方块便车）
         final Map<BlockPos, VisionCollector.TerrainBlockSnapshot> terrain = new LinkedHashMap<>();
         final Map<BlockPos, VisionCollector.BlockEntitySnapshot> blockEntities = new LinkedHashMap<>();
@@ -140,8 +144,22 @@ public final class ObjectResolver {
         // v2.23（§7.11）：减量判定——对记忆侧反向通道上报的记忆格逐块深度判定，产出被证明消失的
         // 格（deletions）。在四路查询之后执行：currentTerrain = 本次可见集，先跳过可见格（双保险 +
         // 优化），不可见格才走逐块判定。记忆侧离线（无 cells）→ 空清单 → 无删除证据 → 只增不删。
-        final List<BlockPos> deletions = DeletionJudge.test(
-                snap, unproj, cells.cells(), cells.pixelThreshold(), terrain.keySet());
+        // v2.32：cells 头部带维标签 → 只对「维度与本快照一致」的 cells 做判定；旧 version=1 文件无
+        // 维标签（dimension 为空）→ 空清单（宁可不删、不跨维误删；镜像瞬态落后时优雅降级为只增）。
+        final List<BlockPos> deletions = (cells.dimension() == null || cells.dimension().isEmpty()
+                || !cells.dimension().equals(dimensionId))
+                ? List.of()
+                : DeletionJudge.test(snap, unproj, cells.cells(), cells.pixelThreshold(), terrain.keySet());
+
+        // v2.31（生物群系，见 docs/生物群系复原设计方案.md）：在三 store 落盘前为群系通道采样。
+        // 候选 = 本帧全部可见方块（此刻 terrain 已含 §5.4 半透明/绊线补采）+ 相机 cell 锚点
+        // （脚下是空气、悬空时仍保证玩家所在 cell 有记录，使记忆世界雾/天空色正确）。
+        // VisionBiomeStore 内部按 4×4×4 quart cell 去重（同 cell 群系必然相同——游戏存储保证，
+        // 故绝不逐方块写）、只解析 union 之外的新 cell、单调整体写 biomes.nbt。
+        final List<BlockPos> biomeSamplePoints = new ArrayList<>(terrain.size() + 1);
+        biomeSamplePoints.addAll(terrain.keySet());
+        biomeSamplePoints.add(BlockPos.containing(cam)); // 相机 cell 锚点（cam 恒非空）
+        final VisionBiomeStore.Stats biomeStats = VisionCollector.getBiomeStore().sync(level, biomeSamplePoints, dimensionId);
 
         // 三 store 落盘（§6.1）；agent 视角随 agentPos 一并落盘（v2.15）
         // v2.18：agent 坐标改为相机（眼睛）双精度坐标（游戏精度），不再取整到方块，
@@ -155,11 +173,15 @@ public final class ObjectResolver {
         final long worldTime = snap.dayTime();
         // v2.23：deletions 随 terrain.nbt 顶层落盘，记忆世界 DeletionApplier 据此减量（§7.11）。
         final Map<String, Object> terrainStats = VisionCollector.getTerrainStore().sync(
-                terrain, deletions, agentPos, agentYaw, agentPitch, agentFov, worldTime);
-        final Map<String, Integer> beStats = VisionCollector.getStore().sync(blockEntities, agentPos, agentYaw, agentPitch, agentFov, worldTime);
-        final Map<String, Object> entityStats = VisionCollector.getEntityStore().sync(entities, agentPos, agentYaw, agentPitch, agentFov, worldTime);
+                terrain, deletions, agentPos, agentYaw, agentPitch, agentFov, worldTime, dimensionId);
+        final Map<String, Integer> beStats = VisionCollector.getStore().sync(
+                blockEntities, agentPos, agentYaw, agentPitch, agentFov, worldTime, dimensionId);
+        final Map<String, Object> entityStats = VisionCollector.getEntityStore().sync(
+                entities, agentPos, agentYaw, agentPitch, agentFov, worldTime, dimensionId);
 
-        return new ResolveResult(terrain, blockEntities, entities, deletions, terrainStats, beStats, entityStats);
+        return new ResolveResult(terrain, blockEntities, entities, deletions, dimensionId,
+                terrainStats, beStats, entityStats,
+                Map.of("cells", biomeStats.cells(), "added", biomeStats.added()));
     }
 
     /** 由实体快照构建 SectionPos 桶（§5.3 粗过滤；桶与命中盒统一 inflate 0.5，v2.10）。 */
@@ -1157,16 +1179,20 @@ public final class ObjectResolver {
 
     // ==================== 结果 ====================
 
-    /** 一次 resolve 的结果：可见对象 + v2.23 deletions + store 统计。 */
+    /** 一次 resolve 的结果：可见对象 + v2.23 deletions + v2.32 维 + store 统计。 */
     public record ResolveResult(
             Map<BlockPos, VisionCollector.TerrainBlockSnapshot> terrain,
             Map<BlockPos, VisionCollector.BlockEntitySnapshot> blockEntities,
             List<VisionCollector.EntityLightSnapshot> entities,
             /** v2.23：被证明消失的记忆格（随 terrain.nbt 顶层落盘，供记忆侧减量）。 */
             List<BlockPos> deletions,
+            /** v2.32：本帧所属维 id（agent 当前维；随 snapshot 响应顶层 + 各 store currentDimension 落盘）。 */
+            String dimension,
             Map<String, Object> terrainStats,
             Map<String, Integer> blockEntityStats,
-            Map<String, Object> entityStats
+            Map<String, Object> entityStats,
+            /** v2.31：生物群系采样统计 { "cells": union 总数, "added": 本帧新增 }（storeStats.biomes）。 */
+            Map<String, Integer> biomeStats
     ) {
         public int visibleBlockCount() {
             return terrain.size();

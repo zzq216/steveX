@@ -30,7 +30,7 @@ import org.slf4j.LoggerFactory;
  *       {相机格}（= 采集侧已逐块证明消失）→ {@link EntityRestorer#discard}。</li>
  * </ol>
  *
- * <p>关键正确性约束（§7.11）：
+ * <p>关键正确性约束（§7.11 / v2.32）：
  * <ul>
  *   <li><b>执行顺序</b>：先增量后减量——增量把本次可见集构建进 applied 表后，减量才拿
  *       「当前可见集」作假阳性防护；反序会把删掉的方块经指纹同步立即重新放回。</li>
@@ -38,6 +38,9 @@ import org.slf4j.LoggerFactory;
  *   <li><b>只删实心+不透明</b>：{@code isShapeFullBlock && canOcclude}（欠删无害，接受）。</li>
  *   <li><b>无跨帧累积</b>：删除阈值（≥2 像素）由采集侧 {@code DeletionJudge} 每帧独立判定，
  *       记忆侧不投票、不累计。</li>
+ *   <li><b>v2.32 限活动维</b>：{@link MemoryWorldManager} 只用活动维的 ServerLevel 驱动本类；
+ *       terrain / 实体跳过集都已是该维内容，删除、清 BE、实体清理全部在该维内执行——跨维数据
+ *       永不进入减量判定（采集侧 cells 另带维标签双保险，见 §4.6）。</li>
  * </ul>
  */
 public final class DeletionApplier {
@@ -64,6 +67,9 @@ public final class DeletionApplier {
      * 对一帧 TerrainData 的 deletions 执行删除。terrain 为 null（本轮无新数据）或减量关闭 → 直接返回
      * （空闲成本≈0）。
      *
+     * <p>v2.32：只对传入 level（= 活动维，见 {@link MemoryWorldManager}）执行——删除 / 清 BE /
+     * 实体清理全部限定在该维内。
+     *
      * @param terrain 本次读取的 TerrainData（含 deletions / blocks / cameraPos）；null → 跳过
      * @param currentEntityUuids 当前帧实体快照 uuid 集（当前可见实体，删除跳过集）
      */
@@ -72,6 +78,7 @@ public final class DeletionApplier {
         final MemoryConfig config = MemoryConfig.get();
         if (!config.removalEnabled || terrain == null) return;
 
+        final String dimension = level.dimension().identifier().toString();
         final List<BlockPos> deletions = terrain.deletions();
         final Set<BlockPos> currentTerrain = terrain.blocks().keySet();
         final Vec3 cam = terrain.cameraPos();
@@ -88,41 +95,41 @@ public final class DeletionApplier {
 
         // ① 相机格快路径：无条件尝试删除，当前可见集防护防抖振（贴墙时格内方块在当前可见集，删除会被增量重建）
         if (cameraCell != null && !currentTerrain.contains(cameraCell)) {
-            if (deleteBlock(level, cameraCell)) deleted++;
+            if (deleteBlock(level, dimension, cameraCell)) deleted++;
         }
 
         // ② 对每个 deletion 格：假阳性防护 + 实心不透明 → 静默置空 + 清 BE
         for (BlockPos pos : deletions) {
             if (currentTerrain.contains(pos)) continue;
-            if (deleteBlock(level, pos)) deleted++;
+            if (deleteBlock(level, dimension, pos)) deleted++;
         }
 
-        // ③ 冻结实体清理：不在当前可见集、且全部占用格已证空 → 移除
+        // ③ 冻结实体清理：不在当前可见集、且全部占用格已证空 → 移除（限活动维）
         int discarded = 0;
-        for (UUID uuid : entities.uuids()) {
+        for (UUID uuid : entities.uuids(dimension)) {
             if (currentEntityUuids.contains(uuid)) continue;
-            if (entities.allCellsEmpty(uuid, provenEmpty)) {
-                entities.discard(uuid);
+            if (entities.allCellsEmpty(dimension, uuid, provenEmpty)) {
+                entities.discard(dimension, uuid);
                 discarded++;
             }
         }
 
         if (deleted > 0 || discarded > 0) {
-            LOGGER.info("[MemoryWorld] Deletion apply: deleted {} blocks, discarded {} entities ({} deletions from judge)",
-                    deleted, discarded, deletions.size());
+            LOGGER.info("[MemoryWorld] Deletion apply [{}]: deleted {} blocks, discarded {} entities ({} deletions from judge)",
+                    dimension, deleted, discarded, deletions.size());
         }
     }
 
     /**
-     * 静默删除一个方块（v2.21 静默放置语义，flags = 818），并清除该位置旧方块实体记录
-     * （防 block_entities.nbt 增量重放 ghosting，见 {@link MemoryRestorer#clearStale}）。
+     * 静默删除一个方块（v2.21 静默放置语义，flags = 818），并清除该位置<b>活动维</b>的旧方块实体
+     * 记录（防 block_entities.nbt 增量重放 ghosting，见 {@link MemoryRestorer#clearStale}）。
      * 只删实心+不透明方块；已是空气 / 非满形状 / 半透明 → false（欠删无害）。
      */
-    private boolean deleteBlock(final ServerLevel level, final BlockPos pos) {
+    private boolean deleteBlock(final ServerLevel level, final String dimension, final BlockPos pos) {
         try {
             if (!BlockStateUtil.isSolidOpaque(level, pos, level.getBlockState(pos))) return false;
             level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS | Block.UPDATE_SKIP_ALL_SIDEEFFECTS);
-            beRestorer.clearStale(pos);
+            beRestorer.clearStale(dimension, pos);
             return true;
         } catch (Exception e) {
             LOGGER.warn("[MemoryWorld] Deletion failed to delete {}: {}", pos, e.getMessage());

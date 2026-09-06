@@ -41,7 +41,7 @@ public class VisionApi {
      *           "blockEntities":[ {pos, typeId, block, state, nbt} ],
      *           "entities":[ {id, uuid, type, pos, rotation, motion, onGround, health} ],
      *           "storeStats":{ "terrain":{blocks}, "blockEntities":{new,updated,skipped},
-     *                          "entities":{entities} } }
+     *                          "entities":{entities}, "biomes":{cells,added}(v2.31) } }
      */
     private static Map<String, Object> snapshot() {
         DepthCapture.requestCapture();
@@ -128,6 +128,8 @@ public class VisionApi {
         resp.put("nonSkyPixels", hits.nonSkyPixels());
         resp.put("cameraPos", snap.cameraPos().x() + "," + snap.cameraPos().y() + "," + snap.cameraPos().z());
         resp.put("timestamp", snap.timestamp());
+        // v2.32：agent 当前维 id（与 terrain.nbt 顶层 currentDimension 一致，语义同 store 落盘）。
+        resp.put("dimension", result.value.dimension());
         resp.put("visibleBlockCount", result.value.visibleBlockCount());
         resp.put("blockEntityCount", result.value.blockEntityCount());
         resp.put("entityCount", result.value.entityCount());
@@ -163,6 +165,8 @@ public class VisionApi {
         storeStats.put("terrain", result.value.terrainStats());
         storeStats.put("blockEntities", result.value.blockEntityStats());
         storeStats.put("entities", result.value.entityStats());
+        // v2.31：生物群系 cell 统计（union 总数 + 本帧新增；新增>0 意味着 biomes.nbt 有更新）
+        storeStats.put("biomes", result.value.biomeStats());
         resp.put("storeStats", storeStats);
         return resp;
     }
