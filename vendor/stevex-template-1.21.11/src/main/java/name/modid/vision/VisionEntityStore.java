@@ -74,6 +74,8 @@ public class VisionEntityStore {
     private static final String KEY_ROTATION = "rotation";
     private static final String KEY_ON_GROUND = "onGround";
     private static final String KEY_HEALTH = "health";
+    /** v2.34：掉落物（type=minecraft:item）的物品栈（ItemStack.CODEC 编码 tag；仅非空时有）。 */
+    private static final String KEY_ITEM = "item";
 
     private final Path filePath;
 
@@ -133,6 +135,10 @@ public class VisionEntityStore {
             entry.put(KEY_ROTATION, floatList(e.yaw(), e.pitch()));
             entry.putBoolean(KEY_ON_GROUND, e.onGround());
             entry.putFloat(KEY_HEALTH, e.health());
+            // v2.34：掉落物条目携带物品栈 tag（非 item 实体 / 空栈 → 无该键）。
+            if (e.item() != null) {
+                entry.put(KEY_ITEM, e.item());
+            }
             entitiesTag.put(e.uuid().toString(), entry);
         }
         bucket.put(KEY_ENTITIES, entitiesTag);

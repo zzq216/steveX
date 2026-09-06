@@ -378,12 +378,13 @@ public final class ObjectResolver {
             final List<VisionCollector.EntityLightSnapshot> out
     ) {
         if (!seen.add(e.uuid())) return; // 多像素命中同一实体 → 去重
+        // v2.34：item（掉落物物品栈 tag，快照帧已编码）随轻量快照一并上报，null 为非 item 实体。
         out.add(new VisionCollector.EntityLightSnapshot(
                 e.id(), e.uuid(), e.typeId(),
                 e.x(), e.y(), e.z(),
                 e.yaw(), e.pitch(),
                 e.vx(), e.vy(), e.vz(),
-                e.onGround(), e.health()));
+                e.onGround(), e.health(), e.item()));
     }
 
     // ==================== §5.3.1 半透明掉落物（工序 D，v2.25） ====================

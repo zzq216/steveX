@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
@@ -554,6 +555,8 @@ public class DepthCapture {
      * @param box    按渲染帧 partialTick 插值对齐的 AABB（v2.10），供 contains / 射线-AABB 匹配
      * @param x,y,z  partialTick 插值位置（= 渲染位置，Tier-1 输出用）
      * @param health 仅 LivingEntity 有值；其余为 0
+     * @param item   v2.34（掉落物记忆，见 docs/掉落物记忆设计方案.md）：当 typeId 为 {@code minecraft:item}
+     *               时携带本帧被渲染的物品栈（{@code ItemStack.CODEC} + {@code NbtOps} 编码 tag）；其余类型为 null
      */
     public record EntitySnapshotData(
             int id,
@@ -569,6 +572,7 @@ public class DepthCapture {
             double vy,
             double vz,
             boolean onGround,
-            float health
+            float health,
+            CompoundTag item
     ) {}
 }

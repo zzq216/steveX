@@ -157,6 +157,14 @@ public class VisionApi {
             m.put("motion", List.of(e.vx(), e.vy(), e.vz()));
             m.put("onGround", e.onGround());
             m.put("health", e.health());
+            // v2.34（掉落物记忆）：带 item tag 的 minecraft:item → 暴露物品 id + 堆叠数；
+            // components 等详情仍走 Tier-2 vision/entity，保持快照轻量。
+            if (e.item() != null) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", e.item().getStringOr("id", ""));
+                item.put("count", e.item().getIntOr("count", 1));
+                m.put("item", item);
+            }
             entities.add(m);
         }
         resp.put("entities", entities);

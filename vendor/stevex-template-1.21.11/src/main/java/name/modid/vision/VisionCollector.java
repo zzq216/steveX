@@ -164,6 +164,10 @@ public class VisionCollector {
     /**
      * 实体轻量物理状态（Tier 1）：纯字段读取即可获得，不含 NBT。
      * 全量 NBT 走 {@link #collectEntityNbt(UUID, boolean)} 按需查询。
+     *
+     * @param item v2.34（掉落物记忆）：当 typeId 为 {@code minecraft:item} 时携带物品栈
+     *             （{@code ItemStack.CODEC} + {@code NbtOps} 编码 tag）；其余类型 / 空栈为 null。
+     *             采集端 snapshot 帧已编码，读侧（file/JSON）只消费 tag、无需再触游戏。
      */
     public record EntityLightSnapshot(
             int id,
@@ -173,7 +177,8 @@ public class VisionCollector {
             float yaw, float pitch,
             double vx, double vy, double vz,
             boolean onGround,
-            float health
+            float health,
+            CompoundTag item
     ) {}
 
     // ==================== 查询接口 ====================

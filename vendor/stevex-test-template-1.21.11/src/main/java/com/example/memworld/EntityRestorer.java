@@ -15,10 +15,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.NbtOps;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
@@ -27,6 +29,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
@@ -75,6 +78,8 @@ public class EntityRestorer {
     private static final String KEY_ROTATION = "rotation";
     private static final String KEY_ON_GROUND = "onGround";
     private static final String KEY_HEALTH = "health";
+    /** v2.34：掉落物（type=minecraft:item）的物品栈（ItemStack.CODEC 编码 tag；仅非空时有）。 */
+    private static final String KEY_ITEM = "item";
 
     /** v2.32：已放置的实体按维隔离：维度 → uuid → 实体引用。累积，永不因"本次没看到"而移除。 */
     private final Map<String, Map<UUID, Entity>> appliedByDim = new LinkedHashMap<>();
@@ -312,6 +317,17 @@ public class EntityRestorer {
         if (es.health() >= 0 && entity instanceof LivingEntity living) {
             living.setHealth(es.health());
         }
+        // v2.34（掉落物记忆）：掉落物必须能恢复出非空物品栈才放置——旧文件无 item / 解码失败 /
+        // 空栈一律跳过。空栈的 ItemEntity 渲染端早退不可见，放出来只是占位幽灵，故直接丢弃。
+        if (entity instanceof ItemEntity item) {
+            ItemStack stack = parseItemStack(es.item(), level.registryAccess());
+            if (stack.isEmpty()) {
+                LOGGER.warn("[MemoryWorld] Drop {} ({}) has no recoverable item stack, skipping",
+                        uuid, es.type());
+                return null;
+            }
+            item.setItem(stack);
+        }
         freeze(entity);
 
         if (!level.addFreshEntity(entity)) {
@@ -321,7 +337,7 @@ public class EntityRestorer {
         return entity;
     }
 
-    /** 位置变化时传送到新坐标；并重新断言冻结状态。返回是否移动了。 */
+    /** 位置变化时传送到新坐标；并重新断言冻结状态。返回是否移动了（含 v2.34 物品栈内容变化）。 */
     private boolean move(final ServerLevel level, final Entity entity, final EntitySnapshot es) {
         double x = es.pos()[0];
         double y = es.pos()[1];
@@ -332,8 +348,18 @@ public class EntityRestorer {
             entity.setYRot(es.rot()[0]);
             entity.setXRot(es.rot()[1]);
         }
+        // v2.34（掉落物记忆）：物品栈内容变化（原地换成别的物品 / 数量 / components 变化）→ 同步栈。
+        // 旧文件条目无 item tag → 保持现状（不清空：清空即隐形）。
+        boolean itemChanged = false;
+        if (es.item() != null && entity instanceof ItemEntity item) {
+            ItemStack want = parseItemStack(es.item(), level.registryAccess());
+            if (!want.isEmpty() && !ItemStack.matches(item.getItem(), want)) {
+                item.setItem(want);
+                itemChanged = true;
+            }
+        }
         freeze(entity); // 重新断言，防止被外力解锁
-        return positionChanged;
+        return positionChanged || itemChanged;
     }
 
     /**
@@ -350,6 +376,11 @@ public class EntityRestorer {
         }
         if (entity instanceof ItemEntity item) {
             item.setUnlimitedLifetime();
+            // v2.34（决策点 B：只读参照）：恢复的掉落物不参与真实掉落物的拾取逻辑——拾取是
+            // player 驱动（Player.aiStep 扫碰撞盒 → playerTouch），即便本实体 tick 已被分发层
+            // 冻结，玩家路过仍会"顺手拾走"，必须设无限拾取延迟（INFINITE_PICKUP_DELAY=32767，
+            // vanilla 私有常量，此处字面量）把它变成看得见摸不着的参照物。
+            item.setPickUpDelay(32767);
         }
         // v2.21：登记到冻结集合，供 ServerLevelMixin.tickNonPassenger 分发层取消实体 tick
         //（§7.9 陷阱 ②）——NoAI/Invulnerable 只是"不动/不死"，tick 分发层取消才是"时间冻结"，
@@ -398,8 +429,11 @@ public class EntityRestorer {
             float[] rot = readFloatListDefault(entry.getListOrEmpty(KEY_ROTATION), 2);
             boolean onGround = entry.getBooleanOr(KEY_ON_GROUND, false);
             float health = entry.getFloatOr(KEY_HEALTH, -1f);
+            // v2.34：掉落物可选携带物品栈 tag；旧文件/空栈无该键 → null（parseBucket 不解码，
+            // 解码延后到 spawn/move（需 level.registryAccess()），编码失败的条目在此保留下次重试语义。
+            CompoundTag item = entry.contains(KEY_ITEM) ? entry.getCompoundOrEmpty(KEY_ITEM) : null;
 
-            entities.put(uuid, new EntitySnapshot(type, pos, motion, rot, onGround, health));
+            entities.put(uuid, new EntitySnapshot(type, pos, motion, rot, onGround, health, item));
         }
         return new EntityData(entities);
     }
@@ -429,12 +463,34 @@ public class EntityRestorer {
         return out;
     }
 
+    /**
+     * v2.34：把快照里 ItemStack.CODEC 编码的 tag 解码回 ItemStack（与采集端 encode 对称，镜像
+     * {@code ContainerMemoryApplier.parseItem}）。无 tag / 解码失败 → EMPTY，调用方据此跳过掉落物。
+     */
+    private static ItemStack parseItemStack(final CompoundTag tag, final HolderLookup.Provider registries) {
+        if (tag == null) return ItemStack.EMPTY;
+        try {
+            return ItemStack.CODEC.parse(registries.createSerializationContext(NbtOps.INSTANCE), tag)
+                    .resultOrPartial(err -> LOGGER.warn("[MemoryWorld] Item decode error: {}", err))
+                    .orElse(ItemStack.EMPTY);
+        } catch (RuntimeException e) {
+            return ItemStack.EMPTY;
+        }
+    }
+
     // ==================== 数据结构 ====================
 
-    private record EntitySnapshot(String type, double[] pos, double[] motion, float[] rot, boolean onGround, float health) {
+    /**
+     * v2.34：实体条目。{@code item} 仅对 type=minecraft:item 且非空栈有值（ItemStack.CODEC 编码 tag）；
+     * 旧文件 / 空栈 → null。解码延后到 spawn/move（需 level.registryAccess()）。
+     */
+    private record EntitySnapshot(
+            String type, double[] pos, double[] motion, float[] rot,
+            boolean onGround, float health, CompoundTag item
+    ) {
         String fingerprint() {
             return type + "|" + Arrays.toString(pos) + "|" + Arrays.toString(motion)
-                    + "|" + Arrays.toString(rot) + "|" + onGround + "|" + health;
+                    + "|" + Arrays.toString(rot) + "|" + onGround + "|" + health + "|" + item;
         }
     }
 

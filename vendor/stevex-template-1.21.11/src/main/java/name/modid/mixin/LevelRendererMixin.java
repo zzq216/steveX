@@ -16,10 +16,16 @@ import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.gizmos.DrawableGizmoPrimitives;
 import net.minecraft.client.renderer.state.LevelRenderState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
 import net.minecraft.world.TickRateManager;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
@@ -126,6 +132,11 @@ public abstract class LevelRendererMixin {
                     final double z = entity.getZ() + lerpZ;
                     final Vec3 motion = entity.getDeltaMovement();
                     final float health = entity instanceof LivingEntity living ? living.getHealth() : 0.0f;
+                    // v2.34（掉落物记忆）：本帧物品栈在快照瞬间编码（读到的正是"本帧被渲染的栈"，
+                    // 杜绝 ObjectResolver 延后解析时栈被合并/拾取换掉的竞态）。空栈/失败 → null。
+                    final CompoundTag itemTag = entity instanceof ItemEntity itemEntity
+                            ? encodeItemStack(itemEntity.getItem(), lvl.registryAccess())
+                            : null;
                     out.add(new DepthCapture.EntitySnapshotData(
                             entity.getId(),
                             entity.getUUID(),
@@ -133,7 +144,7 @@ public abstract class LevelRendererMixin {
                             box, x, y, z,
                             entity.getYRot(), entity.getXRot(),
                             motion.x, motion.y, motion.z,
-                            entity.onGround(), health));
+                            entity.onGround(), health, itemTag));
                 }
             }
         }
@@ -167,5 +178,20 @@ public abstract class LevelRendererMixin {
             final DrawableGizmoPrimitives alwaysOnTopPrimitives
     ) {
         DepthCapture.setLateDebugCleared(!alwaysOnTopPrimitives.isEmpty());
+    }
+
+    /**
+     * v2.34（掉落物记忆，见 docs/掉落物记忆设计方案.md）：把物品栈编码成 {@code ItemStack.CODEC} tag
+     * （{@code {id, count?, components?}}，与容器/末影箱条目同一路径，记忆侧同法解码）。空栈 / 失败 → null。
+     */
+    private static CompoundTag encodeItemStack(final ItemStack stack, final HolderLookup.Provider registries) {
+        if (stack == null || stack.isEmpty()) return null;
+        try {
+            Tag tag = ItemStack.CODEC.encodeStart(registries.createSerializationContext(NbtOps.INSTANCE), stack)
+                    .resultOrPartial(err -> { }).orElse(null);
+            return tag instanceof CompoundTag c ? c : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 }
