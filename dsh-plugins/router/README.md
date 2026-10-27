@@ -12,7 +12,8 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | A（当前） | 槽位契约、编排器、turn scope、桩 provider、五个 handler 桩、提示词占位 | 已实现 |
-| B（后续） | 真实路由提示词、LLM provider、fact/task handler 的 run 与 skill 提示词 | 未实现 |
+| agent P1（2026-10-24） | `task` handler 真实化：经 `ctx.stevexBt.planInTurn` 登记规划请求，返回的正文作为 `stevex-router` 来源的消息追加进本 step；只对含人类消息（`source.kind === 'user'`）的 step 填槽，执行器的 `stevex-bt` 请求不经路由 | 已实现 |
+| B（后续） | 真实路由提示词、LLM provider | 未实现（`task` handler 已在 P1、`fact` handler 已在 P5 真实化：分别调 steveX agent 插件的 `planInTurn` / `factInTurn`） |
 
 `provider.mode=stub` 现在即可跑通；`mode=llm` 需要一个 `fillSlots` 函数（程序化注入，用于 B 阶段或集成测试），否则插件加载时明确报错。
 

@@ -5,7 +5,7 @@
 - [docs/行为树节点设计方案.md](../../docs/行为树节点设计方案.md) —— 节点类型、返回码、执行语义、黑板、中止机制
 - [docs/目标Agent画像.md](../../docs/目标Agent画像.md) §2.2（D1–D12）、§2.5（T1–T10）—— 已定决策与待定项
 
-本目录目前只有存储布局，代码待写。
+本目录只放**树的存储**（快树版本链 `trees/fast/v<N>.json` + `v<N>.meta.json`，由快树反思自动写入、`/bt fast` 管理，见 [P3实施细则.md](../../docs/P3实施细则.md) §8；没有文件 = 版本 0 空快树）。执行器代码在 [dsh-plugins/agent/](../../dsh-plugins/agent/)（P0 已实现，见其 README）；慢树的运行时版本写在 `steveX/runtime/tasks/<taskId>/trees/`（不进 git）。
 
 ## 存储布局
 

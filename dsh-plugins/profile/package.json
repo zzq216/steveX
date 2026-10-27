@@ -1,0 +1,20 @@
+{
+  "name": "@stevex/dsh-profile",
+  "version": "0.0.1",
+  "private": true,
+  "description": "steveX DSH profile bundle: installs the router and the agent plugin together and keeps DSH's built-in coding tools out of the agent's sessions",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": "^0.2.1-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@stevex/dsh-agent": "0.0.1",
+    "@stevex/dsh-router": "0.0.1"
+  }
+}

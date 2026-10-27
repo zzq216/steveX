@@ -1,0 +1,29 @@
+{
+  "name": "@stevex/dsh-agent",
+  "version": "0.0.1",
+  "private": true,
+  "description": "steveX behavior-tree executor, capsule library, Compute sandbox and LLM tools, packaged as a DSH/Cordis plugin",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./bt": "./src/bt/index.js",
+    "./game": "./src/game/index.js",
+    "./capsules": "./src/capsules/index.js"
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": "^0.2.1-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test",
+    "extract-recipes": "node scripts/extract-recipes.js",
+    "bt-run": "node scripts/bt-run.js",
+    "capsule-save": "node scripts/capsule-save.js"
+  }
+}

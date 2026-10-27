@@ -1,0 +1,13 @@
+{
+  "goal": "reactive 复查测试：背包里有木棍就一直往前走，木棍没了就停",
+  "note": "先保存示例条件：node scripts/capsule-save.js examples/capsules/example.has-item.json。背包里放一根木棍、面朝空地开跑；走的途中按 Q 把木棍扔掉（或 /clear @s minecraft:stick），约 1 秒内应停下并松开前进键",
+  "root": {
+    "seq": "有木棍就往前走",
+    "mode": "reactive",
+    "every": 1000,
+    "do": [
+      { "cond": "code/example.has-item", "name": "还有木棍", "read": ["inventory"], "params": { "item": "stick" } },
+      { "steps": "前进 20 秒", "do": [["key/up", { "pressed": true }], ["wait", 20000], ["key/up", { "pressed": false }]] }
+    ]
+  }
+}

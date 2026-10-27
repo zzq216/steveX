@@ -1,3 +1,4 @@
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createRouter } from './domain/router.js'
 import { createTurnScope } from './domain/turn_scope.js'
 import { defaultSlots } from './domain/slots.js'
@@ -11,14 +12,17 @@ import { loadPromptBlocks } from './prompts.js'
  *
  * 这是本包**唯一**接触 DSH 的文件：
  *   - 把纯逻辑挂到 `ctx.router` 服务；
- *   - 监听 `agent/pre-step`（每个 step 触发，只在 step=1 填槽）；
+ *   - 监听 `agent/pre-step`（每个 step 触发，只在 step=1、且本 step 有人说的话时填槽）；
+ *     handler 返回的 `prompt` 作为一条 `stevex-router` 来源的消息追加进本 step；
  *   - 监听 `agent/turn-stopping`，统一清空 turn scope（§17.5.2）。
+ *
+ * 执行器发来的请求（来源 `stevex-bt`）已经知道自己是什么，不经路由（集成方案 I3 / §4.1）。
  *
  * 注册的提示词/工具/监听都由 Cordis 的作用域管理，插件卸载即回滚；
  * 回合级资源走 handler 上报的 turn scope，turn 结束无条件清空。
  *
- * 阶段 A：provider 用 stub、handler 全是桩；阶段 B 在此接入 agent.inject /
- * systemPrompt / tools 与真实内容（代码里标了 TODO）。
+ * 阶段 A：provider 用 stub；P1 起 `task` handler 是真实实现（经 steveX agent 插件的 planInTurn），
+ * 其余 handler 与 llm provider 的内容在阶段 B。
  */
 
 export const name = 'stevex-router'
@@ -28,7 +32,12 @@ export function apply(ctx, rawConfig = {}) {
   const config = normalizeConfig(rawConfig)
   const router = createRouter({ clarifyThreshold: config.confidenceThreshold })
   const provider = createRouterProvider(config.provider)
-  const handlers = createHandlers({ enabled: config.enabledHandlers })
+  // agent 插件是可选依赖：没装时 task handler 报错（onFailure: continue），其余照常
+  const handlers = createHandlers({
+    enabled: config.enabledHandlers,
+    // Cordis 的 ctx.get 读可选服务（不进 inject）；测试夹具没有 get，直接读属性
+    planner: () => (typeof ctx.get === 'function' ? ctx.get('stevexBt') : ctx.stevexBt) ?? null
+  })
 
   for (const handler of handlers) router.registerHandler(handler)
 
@@ -110,8 +119,6 @@ export function apply(ctx, rawConfig = {}) {
       + `parts=${result.parts.length} errors=${result.errors.length} clarify=${clarifyCount}`
     )
 
-    // TODO(stage B): 通过 agent.inject() / ctx.systemPrompt / ctx.tools 注入
-    // 选中的提示词、工具与事实结果。阶段 A 只完成决策与回合级清理。
     return result
   }
 
@@ -134,20 +141,35 @@ export function apply(ctx, rawConfig = {}) {
     if (payload.signal?.aborted) return decision
     // agent/pre-step 每个 step 都会触发；只在本 turn 的第一个 step 填槽。
     if (payload.step !== 1) return decision
+    // 只对人说的话填槽：本 step 只有执行器 followup / 其他插件的消息时不路由
+    const messages = decision.messages ?? []
+    if (messages.length > 0 && !messages.some((message) => message?.source?.kind === 'user')) return decision
 
+    let result = null
     try {
-      await route(payload)
+      result = await route(payload)
     } catch (error) {
       try {
-        await clarifyFallback(payload, error)
+        result = await clarifyFallback(payload, error)
       } catch (fallbackError) {
         config.logger?.warn?.(
           `[stevex-router] clarify fallback failed: ${fallbackError?.message ?? String(fallbackError)}`
         )
       }
     }
-    return decision
+    return withHandlerPrompts(decision, result)
   }, { prepend: true })
+
+  /** handler 给出的模型可见正文 → 本 step 末尾的一条消息（随会话日志落盘，可回放）。 */
+  function withHandlerPrompts(decision, result) {
+    const parts = (result?.parts ?? []).filter((part) => typeof part.result?.prompt === 'string' && part.result.prompt)
+    if (parts.length === 0) return decision
+    const message = createUserMessage({
+      content: [{ type: 'text', text: parts.map((part) => part.result.prompt).join('\n\n') }],
+      source: { kind: 'stevex-router', handlers: parts.map((part) => part.id) }
+    })
+    return { ...decision, messages: [...(decision.messages ?? []), message] }
+  }
 
   ctx.on('agent/turn-stopping', async ({ turn }) => {
     const scope = scopes.get(turn)

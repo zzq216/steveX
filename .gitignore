@@ -30,6 +30,12 @@ vendor/**/run/
 # Decompiled Minecraft sources (local reference only — no build reads this; 6.6k files / 39 MB)
 1.21.11_src/
 
+# Agent runtime artifacts: task event logs and slow-tree versions grow without bound
+/runtime/
+
+# Crafting recipes extracted from the Minecraft jar (regenerate: npm run extract-recipes in dsh-plugins/agent)
+dsh-plugins/agent/data/recipes.json
+
 # Python tooling artifacts
 __pycache__/
 *.pyc

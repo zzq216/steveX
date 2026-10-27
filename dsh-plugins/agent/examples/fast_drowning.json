@@ -1,0 +1,15 @@
+{
+  "match": "反射",
+  "note": "先保存示例条件：node scripts/capsule-save.js examples/capsules/example.air-below.json",
+  "arms": [
+    {
+      "when": { "cond": "code/example.air-below", "read": ["player"], "params": { "value": 150 } },
+      "then": {
+        "seq": "溺水上浮",
+        "do": [
+          { "steps": "按住跳跃上浮", "do": [["key/jump", { "pressed": true }], ["wait", 1500], ["key/jump", { "pressed": false }]] }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+# steveX agent — 执行器、胶囊库与 Compute 沙箱、查询 API，以及 P1 的大模型侧（工具、followup 叫醒、提交提醒）。
+# expand 请求交给大模型；recover / escalate / failed 在 P2 之前仍由本地应答器回答
+# （recover / escalate → 原树继续，failed → 放弃任务）。
+# 与路由一起装、并关掉 DSH 内置工具：用 dsh-plugins/profile 这个 bundle。
+- insert:
+    - id: stevex-agent
+      name: '@stevex/dsh-agent'
+      config:
+        modUrl: ws://127.0.0.1:25550
+        tickMs: 50
+        statePollMs: 200
+        maxExpansionNodes: 15
+        maxInvalidAttempts: 3
+        capsulesDir: src/capsules
+        jsonSources:
+          recipes: dsh-plugins/agent/data/recipes.json
+        localResponder: true
+        planner:
+          enabled: true
+          exclusiveTools: false

@@ -1,0 +1,16 @@
+{
+  "goal": "JSON 查询示例：从白名单里的配方表查出木镐的配方，写进黑板（不操作游戏）",
+  "note": "需要先 npm run extract-recipes 生成 data/recipes.json。跑完看 bt-run 打印的最终黑板。",
+  "root": {
+    "compute": "code/core.json.query",
+    "name": "查木镐配方",
+    "params": {
+      "path": "recipes",
+      "records": "recipes",
+      "filters": { "result": "minecraft:wooden_pickaxe" },
+      "fields": ["type", "pattern", "key", "count"],
+      "limit": 4
+    },
+    "writes": { "recipe.list": "result", "recipe.matched": "matchedCount" }
+  }
+}

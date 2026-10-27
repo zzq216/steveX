@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/main.js",
     "dsh": "dsh",
-    "test": "node --test test/nbt/nbt_reader.test.js test/nbt/query.test.js test/nbt/loader.test.js test/nbt/api.test.js dsh-plugins/router/test/domain_slots.test.js dsh-plugins/router/test/domain_router.test.js dsh-plugins/router/test/domain_turn_scope.test.js dsh-plugins/router/test/plugin.test.js",
+    "test": "node --test test/nbt/nbt_reader.test.js test/nbt/query.test.js test/nbt/loader.test.js test/nbt/api.test.js test/json/api.test.js dsh-plugins/router/test/domain_slots.test.js dsh-plugins/router/test/domain_router.test.js dsh-plugins/router/test/domain_turn_scope.test.js dsh-plugins/router/test/plugin.test.js dsh-plugins/agent/test/compiler.test.js dsh-plugins/agent/test/executor.test.js dsh-plugins/agent/test/capsules.test.js dsh-plugins/agent/test/features.test.js dsh-plugins/agent/test/plugin.test.js dsh-plugins/agent/test/examples.test.js dsh-plugins/agent/test/bridge.test.js dsh-plugins/agent/test/tools.test.js",
     "bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
     "mc:capture": "powershell -ExecutionPolicy Bypass -File scripts/run-capture.ps1",
     "mc:memory": "powershell -ExecutionPolicy Bypass -File scripts/run-memory.ps1",
@@ -17,6 +17,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@vscode/ripgrep": "1.18.0",
     "express": "^5.2.1",
     "ws": "^8.21.3"
   },

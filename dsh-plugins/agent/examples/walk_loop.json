@@ -1,0 +1,9 @@
+{
+  "goal": "抢占测试：一直往前走，配合 fast_drowning.json 走进水里",
+  "note": "面朝一片水开跑。氧气低于 150 时快树抢占：前进键被松开、按跳跃上浮；情节结束后被中断的那段前进从头重跑。",
+  "root": {
+    "repeat": "走 20 段",
+    "n": 20,
+    "do": { "steps": "前进 1 秒", "do": [["key/up", { "pressed": true }], ["wait", 1000], ["key/up", { "pressed": false }], ["wait", 100]] }
+  }
+}

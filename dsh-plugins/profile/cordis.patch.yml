@@ -1,0 +1,88 @@
+# steveX profile (集成方案 §2.2 / §5.4)：路由 + agent 一起装进一个 DSH profile，并换掉 DSH 的编程助手预设。
+#
+# 三层把 DSH 内置工具挡在 steveX 会话外：
+#   1. 预设 steveX（下面的 preset-stevex，设为默认）：只装人设、提问、待办、上下文压缩——
+#      不装 shell / 文件读写 / web / subagent / workflow / skill / plan-mode；人设换成 steveX
+#   2. agent 插件 planner.exclusiveTools：每个会话 restrict 到 steveX 工具 + extraTools（管"看得见"）
+#   3. agent 插件的工具守卫：不在名单里的调用一律拒绝（管"调得动"，兜住 restrict 漏掉的）
+# 预设只对新建的会话生效：已有会话保存的是它创建时的预设（如 standard），请新建会话。
+
+# 新会话默认用 steveX 预设
+- id: agent-preset-registry
+  name: '@deepseek-ai/dsh-agent-preset-registry'
+  config:
+    default: stevex
+
+- insert:
+    - id: preset-stevex
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: stevex
+        name: steveX
+        description: Minecraft agent：只能读状态、查接口、写行为树，没有编程工具
+        order: 0
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                你是 steveX，一个在真实 Minecraft 客户端里行动的 agent，由 {{model}} 模型驱动。
+                你不是编程助手：不读写本机文件、不运行命令、不委派子 agent；
+                对游戏世界的一切作用都写成行为树交给执行器。
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+
+    - id: stevex-router
+      name: '@stevex/dsh-router'
+      config:
+        confidenceThreshold: 0.7
+        clarifyMaxTurns: 2
+        enabledHandlers:
+          - fact
+          - task
+          - default
+          - unsupported
+          - clarify
+        provider:
+          mode: stub
+
+    - id: stevex-agent
+      name: '@stevex/dsh-agent'
+      config:
+        modUrl: ws://127.0.0.1:25550
+        tickMs: 50
+        statePollMs: 200
+        maxExpansionNodes: 15
+        maxInvalidAttempts: 3
+        capsulesDir: src/capsules
+        jsonSources:
+          recipes: dsh-plugins/agent/data/recipes.json
+        localResponder: true
+        planner:
+          enabled: true
+          maxOutputChars: 20000
+          exclusiveTools: true
+          extraTools:
+            - ask_user_question
+            - todo_write
