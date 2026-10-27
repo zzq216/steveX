@@ -1,0 +1,18 @@
+{
+  "name": "fast.low-health-under-fire",
+  "description": "血量低于 maxHealth*ratio（默认 70%）且最近 ticks（默认 40 tick，约 2 秒）内被敌对生物打过（箭/三叉戟/火球等弹射物，或僵尸/骷髅等敌对怪）时成立：低血且在挨打，用于横向疾跑脱离弹道",
+  "signature": {
+    "inputs": {
+      "healthRatio": {
+        "type": "number",
+        "required": false
+      },
+      "ticks": {
+        "type": "number",
+        "required": false
+      }
+    },
+    "returns": "bool"
+  },
+  "body": "function main(params, state) { const p = params || {}; const ratio = (p.healthRatio === undefined) ? 0.7 : Number(p.healthRatio); const window = (p.ticks === undefined) ? 40 : Number(p.ticks); const pl = state && state.player; if (!pl || !pl.vitals) return false; if (pl.dead) return false; const hp = parseFloat(pl.vitals.health); const maxHp = parseFloat(pl.vitals.maxHealth) || 20; if (!isFinite(hp) || hp <= 0) return false; if (hp > maxHp * ratio) return false; const ld = pl.lastDamage; if (!ld || typeof ld.ticksAgo !== 'number') return false; if (ld.ticksAgo > window) return false; const type = String(ld.type || '').toLowerCase(); const attacker = String(ld.attacker || '').toLowerCase(); const ranged = ['minecraft:arrow','minecraft:trident','minecraft:fireball','minecraft:small_fireball','minecraft:wither_skull','minecraft:snowball','minecraft:mob_projectile','minecraft:shulker_bullet','minecraft:llama_spit','minecraft:magic','minecraft:thrown']; if (ranged.indexOf(type) !== -1) return true; const hostiles = ['skeleton','stray','bogged','pillager','vindicator','evoker','ravager','zombie','husk','drowned','spider','creeper','blaze','witch','wither','enderman','phantom','slime','magma_cube','warden','piglin','zoglin','guardian','shulker','ghast']; for (let i = 0; i < hostiles.length; i++) { if (attacker.indexOf(hostiles[i]) !== -1) return true; } return false; }"
+}

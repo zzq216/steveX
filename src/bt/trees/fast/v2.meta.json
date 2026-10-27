@@ -1,0 +1,89 @@
+{
+  "version": 2,
+  "base": 1,
+  "by": "reflection",
+  "batchId": "b2",
+  "events": [
+    "e2"
+  ],
+  "ops": [
+    {
+      "op": "add",
+      "arm": {
+        "when": {
+          "cond": "code/fast.low-health-under-fire",
+          "read": [
+            "player"
+          ],
+          "params": {}
+        },
+        "then": {
+          "seq": "低血被射击横向疾跑规避",
+          "do": [
+            {
+              "steps": "左前疾跑跳1.3秒",
+              "do": [
+                [
+                  "key/sprint"
+                ],
+                [
+                  "key/up"
+                ],
+                [
+                  "key/left"
+                ],
+                [
+                  "key/jump"
+                ],
+                [
+                  "wait",
+                  1300
+                ]
+              ]
+            },
+            {
+              "steps": "切右前疾跑1.3秒",
+              "do": [
+                [
+                  "key/left"
+                ],
+                [
+                  "key/right"
+                ],
+                [
+                  "wait",
+                  1300
+                ]
+              ]
+            },
+            {
+              "steps": "松开按键",
+              "do": [
+                [
+                  "key/sprint"
+                ],
+                [
+                  "key/up"
+                ],
+                [
+                  "key/jump"
+                ],
+                [
+                  "key/right"
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "reason": "e2：站在沙滩上、0 护甲、空背包，被同一只骷髅用 4 箭（7.5/4.2/5.8/5.3）从 20 打到 0，6.4 秒内死亡，快树全程走 otherwise，位置前后一致（完全没动）。这是\"低血 + 正在挨远程火力\"的局面，快树之前没有任何感知（只认水下缺氧）。live#2（同一事故现场仍在进行）证实 state.player.lastDamage 里有 type=minecraft:arrow / ticksAgo=22 / attacker=minecraft:skeleton，血量 5.3，条件在此成立；before@e2（满血、lastDamage=null）不成立，说明平常不会误触发。新增 arm：血量 <= maxHealth*0.7 且最近 40tick 内被敌对生物（尤其箭/弹射物）命中时，横向 sprint-jump 两段（左前 1.3s 换右前 1.3s）改变弹道预判线并拉开距离，最后松键。不知道骷髅方位，所以只做横向规避、不朝特定方向冲；放在水下缺氧 arm 之后（淹死优先）。",
+  "code": [
+    "fast.low-health-under-fire"
+  ],
+  "createdAt": "2026-10-26T11:41:06.696Z",
+  "codeRefs": [
+    "code/fast.low-health-under-fire@85accd8f"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "name": "lava.creative-player-does-not-stay-on-fire",
+  "statement": "Player 覆写了 setRemainingFireTicks：当 abilities.invulnerable（创造/旁观等无敌状态）为 true 时把传入值钳到 max 1 tick，因此创造模式玩家在岩浆里不会被持续点燃（剩余燃烧 tick 最多 1，火光基本不出现），同时 lavaHurt 的 4 点伤害也会被 isInvulnerableTo 挡掉。生存模式玩家没有这个限制，正常被点燃 300 tick。",
+  "refs": [
+    {
+      "file": "net/minecraft/world/entity/player/Player.java",
+      "lines": [
+        1761,
+        1764
+      ],
+      "sha": "358c7b86"
+    },
+    {
+      "file": "net/minecraft/world/entity/Entity.java",
+      "lines": [
+        631,
+        637
+      ],
+      "sha": "0bd9991d"
+    }
+  ],
+  "tags": [
+    "lava",
+    "fire",
+    "player",
+    "creative"
+  ],
+  "rev": 1,
+  "createdAt": "2026-10-26T13:45:06.729Z",
+  "source": {
+    "kind": "fact-check",
+    "sessionId": "session-ba9ac01b-830f-477c-add2-4a684ad2dd37"
+  }
+}

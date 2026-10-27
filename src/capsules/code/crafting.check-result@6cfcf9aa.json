@@ -1,0 +1,33 @@
+{
+  "name": "crafting.check-result",
+  "description": "确认合成结果：数玩家是否已有 params.item 至少 params.count 个（容器开着数菜单里 >=10 的玩家格，否则数背包），并报告合成格是否还留料、产物格是否卡着东西",
+  "signature": {
+    "inputs": {
+      "item": {
+        "type": "string",
+        "required": true
+      },
+      "count": {
+        "type": "int"
+      }
+    },
+    "outputs": {
+      "done": {
+        "type": "bool"
+      },
+      "have": {
+        "type": "int"
+      },
+      "gridDirty": {
+        "type": "bool"
+      },
+      "resultItem": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      }
+    }
+  },
+  "body": "function main(p, state) {\n  const target = p.item;\n  const want = (typeof p.count === 'number' && p.count > 0) ? p.count : 1;\n  const c = state.container || {};\n  const cslots = c.slots || [];\n  const RESULT = 0;\n  const GRID_FIRST = 1;\n  const GRID_LAST = 9;\n  const PLAYER_FROM = 10;\n  const isOpen = !!(c.type && typeof c.type === 'string' && !/^none$/.test(c.type));\n\n  let have = 0;\n  let gridDirty = false;\n  let resultItem = '';\n\n  if (isOpen) {\n    for (let i = 0; i < cslots.length; i++) {\n      const s = cslots[i];\n      if (!s || !s.id || typeof s.slot !== 'number') continue;\n      if (s.slot === RESULT) resultItem = s.id;\n      else if (s.slot >= GRID_FIRST && s.slot <= GRID_LAST) gridDirty = true;\n      else if (s.slot >= PLAYER_FROM && s.id === target) have += (s.count || 0);\n    }\n  } else {\n    const islots = (state.inventory && state.inventory.slots) || [];\n    for (let i = 0; i < islots.length; i++) {\n      const s = islots[i];\n      if (s && s.id === target) have += (s.count || 0);\n    }\n  }\n\n  const done = have >= want;\n  let reason = '';\n  if (!done) {\n    if (resultItem) reason = 'result slot still holds ' + resultItem;\n    else if (gridDirty) reason = 'crafting grid still has items, recipe not completed';\n    else reason = 'no ' + target + ' in player slots';\n  }\n  return { done: done, have: have, gridDirty: gridDirty, resultItem: resultItem, reason: reason };\n}"
+}

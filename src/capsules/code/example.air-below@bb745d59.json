@@ -1,0 +1,14 @@
+{
+  "name": "example.air-below",
+  "description": "示例条件代码：玩家氧气低于 value（验证快树抢占用，正式条件由 agent 训练时自己写）",
+  "signature": {
+    "inputs": {
+      "value": {
+        "type": "int",
+        "required": true
+      }
+    },
+    "returns": "bool"
+  },
+  "body": "function main(params: { value: number }, state: { player: { vitals: { air: number } } }): boolean {\n  return state.player.vitals.air < params.value\n}\n"
+}

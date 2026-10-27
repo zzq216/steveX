@@ -1,0 +1,17 @@
+{
+  "name": "example.has-item",
+  "description": "示例条件代码：背包里 item 至少 count 个（验证 reactive 复查用，正式条件由 agent 训练时自己写）",
+  "signature": {
+    "inputs": {
+      "item": {
+        "type": "string",
+        "required": true
+      },
+      "count": {
+        "type": "int"
+      }
+    },
+    "returns": "bool"
+  },
+  "body": "function main(p: { item: string, count?: number }, state: any): boolean {\n  const id = p.item.includes(':') ? p.item : 'minecraft:' + p.item\n  const n = state.inventory.slots.filter((s: any) => s.id === id).reduce((sum: number, s: any) => sum + s.count, 0)\n  return n >= (p.count ?? 1)\n}\n"
+}

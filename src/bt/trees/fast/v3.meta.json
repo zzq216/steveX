@@ -1,0 +1,220 @@
+{
+  "version": 3,
+  "base": 2,
+  "by": "reflection",
+  "batchId": "b5",
+  "events": [
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+  ],
+  "ops": [
+    {
+      "op": "replace",
+      "name": "低血被射击横向疾跑规避",
+      "arm": {
+        "when": {
+          "cond": "code/fast.low-health-under-fire",
+          "read": [
+            "player"
+          ],
+          "params": {}
+        },
+        "then": {
+          "seq": "低血被射击横向疾跑规避",
+          "do": [
+            {
+              "steps": "左前疾跑跳1.3秒",
+              "do": [
+                [
+                  "key/sprint",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "key/up",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "key/left",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "key/jump",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "wait",
+                  1300
+                ]
+              ]
+            },
+            {
+              "steps": "切右前疾跑1.3秒",
+              "do": [
+                [
+                  "key/left",
+                  {
+                    "pressed": false
+                  }
+                ],
+                [
+                  "key/right",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "wait",
+                  1300
+                ]
+              ]
+            },
+            {
+              "steps": "再切左前疾跑1.3秒",
+              "do": [
+                [
+                  "key/right",
+                  {
+                    "pressed": false
+                  }
+                ],
+                [
+                  "key/left",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "wait",
+                  1300
+                ]
+              ]
+            },
+            {
+              "steps": "松开按键",
+              "do": [
+                [
+                  "key/sprint",
+                  {
+                    "pressed": false
+                  }
+                ],
+                [
+                  "key/up",
+                  {
+                    "pressed": false
+                  }
+                ],
+                [
+                  "key/jump",
+                  {
+                    "pressed": false
+                  }
+                ],
+                [
+                  "key/left",
+                  {
+                    "pressed": false
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "replace",
+      "name": "水下缺氧上浮",
+      "arm": {
+        "when": {
+          "cond": "code/fast.low-air-underwater",
+          "read": [
+            "player"
+          ],
+          "params": {}
+        },
+        "then": {
+          "seq": "水下缺氧上浮",
+          "do": [
+            {
+              "steps": "视线抬正上方",
+              "do": [
+                [
+                  "camera/turn",
+                  {
+                    "dy": -90
+                  }
+                ],
+                [
+                  "wait",
+                  60
+                ],
+                [
+                  "camera/turn",
+                  {
+                    "dy": -90
+                  }
+                ],
+                [
+                  "wait",
+                  60
+                ]
+              ]
+            },
+            {
+              "steps": "按住跳+前进上浮2.5秒",
+              "do": [
+                [
+                  "key/jump",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "key/up",
+                  {
+                    "pressed": true
+                  }
+                ],
+                [
+                  "wait",
+                  2500
+                ],
+                [
+                  "key/jump",
+                  {
+                    "pressed": false
+                  }
+                ],
+                [
+                  "key/up",
+                  {
+                    "pressed": false
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "reason": "本批 e4–e13 全是 v1 下的同一局面（没有臂 2 时）：沙滩 y=64、0 护甲、空背包、站着不动，被骷髅约 6 秒内 4–5 箭（每箭 5–7.5）从满血打死——与 b2 为 e2 加的「低血被射击横向疾跑规避」完全是同一种场面，v2 的 when 在该局面会成立（e14 的 before 快照 health=14、lastDamage=arrow/skeleton 时条件 eval=true；full-health 的 before@e4 eval=false），所以本批不需要新臂。但 e14（v2）暴露该臂的 then 根本没跑完：arm-failed「episode ran longer than 30000 ms」。原因：then 的根是 reactive seq，而它前面的孩子是 steps（规范要求 reactive seq 最后一个孩子之前只能是 cond/compute），reactive 每隔 ~1s 重新求值前面已完成的 steps 会使其从头重跑，导致整棵序列永远到不了最后一步、30 秒超时后被放弃——玩家在最危险的几秒里只被\"接管\"却没有有效规避。修法：把 then 根改成普通 seq（memory），叶子全是明确的原始命令 + wait，任何节点都不会无限循环；同时把规避从 2.6 秒延长到 ~3.9 秒（左前 1.3s → 右前 1.3s → 再左前 1.3s → 松键），覆盖两次箭矢间隔（事故里约 2 秒一箭）并继续破坏瞄准预判，结束时若还在挨打/低血会按 when 再次接管。臂 1「水下缺氧上浮」的根也是同样的 reactive seq + steps 反模式（一旦溺水会同样挂 30s，e1 就是淹死），一并将根改成普通 seq，when 与动作不变。顺序保持：水下缺氧在前，低血被射击在后。",
+  "createdAt": "2026-10-26T11:45:20.892Z"
+}

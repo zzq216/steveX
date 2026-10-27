@@ -1,0 +1,58 @@
+{
+  "name": "drowning.player-drowns-in-water",
+  "statement": "玩家在水里会淹死：生存模式下眼睛没入水中（且不在气泡柱里、无水下呼吸类效果）时，每 tick 扣 1 点氧气，氧气上限 300（15 秒）；降到 ≤ -20 时受到 2.0 点（1 颗心）淹死伤害并把氧气重置为 0，之后每 20 tick（1 秒）再扣一次，直到上浮出水。只有含水呼吸 / 潮涌能量 / 鹦鹉螺之息效果，或创造、旁观模式（abilities.invulnerable=true）时才不会扣氧气；水下呼吸附魔只是按概率减慢消耗（oxygen_bonus 每级 +1，每 tick 扣氧气的概率为 1/(等级+1)）。",
+  "refs": [
+    {
+      "file": "net/minecraft/world/entity/LivingEntity.java",
+      "lines": [
+        423,
+        435
+      ],
+      "sha": "40f31f53"
+    },
+    {
+      "file": "net/minecraft/world/entity/LivingEntity.java",
+      "lines": [
+        490,
+        492
+      ],
+      "sha": "438853bb"
+    },
+    {
+      "file": "net/minecraft/world/entity/Entity.java",
+      "lines": [
+        2694,
+        2696
+      ],
+      "sha": "2cfbcedb"
+    },
+    {
+      "file": "net/minecraft/world/effect/MobEffectUtil.java",
+      "lines": [
+        43,
+        47
+      ],
+      "sha": "108c3b8e"
+    },
+    {
+      "file": "net/minecraft/world/level/GameType.java",
+      "lines": [
+        63,
+        75
+      ],
+      "sha": "d9563336"
+    }
+  ],
+  "tags": [
+    "drowning",
+    "water",
+    "player",
+    "air"
+  ],
+  "rev": 1,
+  "createdAt": "2026-10-27T04:42:51.146Z",
+  "source": {
+    "kind": "fact-check",
+    "sessionId": "session-730b69cb-6535-49a7-8dc6-d7b821fc0be1"
+  }
+}

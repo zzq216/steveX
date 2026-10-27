@@ -1,0 +1,14 @@
+{
+  "name": "container.is-type",
+  "description": "条件：当前打开的容器界面类型是否等于 params.type（crafting / inventory / furnace / merchant…，按 mod 菜单注册名）",
+  "signature": {
+    "inputs": {
+      "type": {
+        "type": "string",
+        "required": true
+      }
+    },
+    "returns": "bool"
+  },
+  "body": "function main(p, state) {\n  const c = state.container;\n  if (!c || typeof c.type !== 'string') return false;\n  return c.type === p.type;\n}"
+}

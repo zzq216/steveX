@@ -1,0 +1,58 @@
+{
+  "name": "lava.ignites-and-damages-entities-inside",
+  "statement": "实体（含玩家）与岩浆流体相交时，每个 tick 由 LavaFluid.entityInside 施加 CLEAR_FREEZE 与 LAVA_IGNITE，然后回调 Entity::lavaHurt：LAVA_IGNITE → lavaIgnite() 调用 igniteForSeconds(15)（=300 tick 着火），lavaHurt() 再用伤害源 lava 造成 4.0 点伤害。因此\"在岩浆里会着火\"成立：火光靠 remainingFireTicks > 0 判定，进入岩浆即被设为 300 tick（并且在岩浆里时每 tick 反复续到 300，离开后仍会继续燃烧一段时间）。调用链是 LivingEntity.aiStep → Entity.applyEffectsFromBlocks → checkInsideBlocks，在那里对相交方块的流体状态调用 fluidState.entityInside；火焰免疫（fireImmune()）的实体跳过这两步。",
+  "refs": [
+    {
+      "file": "net/minecraft/world/level/material/LavaFluid.java",
+      "lines": [
+        117,
+        122
+      ],
+      "sha": "66da1338"
+    },
+    {
+      "file": "net/minecraft/world/entity/Entity.java",
+      "lines": [
+        596,
+        613
+      ],
+      "sha": "72c1fbd1"
+    },
+    {
+      "file": "net/minecraft/world/entity/Entity.java",
+      "lines": [
+        619,
+        629
+      ],
+      "sha": "dc120beb"
+    },
+    {
+      "file": "net/minecraft/world/entity/LivingEntity.java",
+      "lines": [
+        2966,
+        2972
+      ],
+      "sha": "899143bf"
+    },
+    {
+      "file": "net/minecraft/world/entity/Entity.java",
+      "lines": [
+        1245,
+        1248
+      ],
+      "sha": "38c0c95a"
+    }
+  ],
+  "tags": [
+    "lava",
+    "fire",
+    "damage",
+    "entity"
+  ],
+  "rev": 1,
+  "createdAt": "2026-10-26T13:45:06.720Z",
+  "source": {
+    "kind": "fact-check",
+    "sessionId": "session-ba9ac01b-830f-477c-add2-4a684ad2dd37"
+  }
+}

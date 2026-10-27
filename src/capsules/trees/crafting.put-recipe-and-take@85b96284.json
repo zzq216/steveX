@@ -1,0 +1,118 @@
+{
+  "name": "crafting.put-recipe-and-take",
+  "description": "前置：合成界面（工作台 crafting / 玩家合成 inventory）已打开、玩家格里有材料。按 cells=[{slot, match}] 在合成格里摆出配方并 shift 取走产物，最后校验 params.item 至少 params.count 个已在背包",
+  "signature": {
+    "inputs": {
+      "item": {
+        "type": "string",
+        "required": true
+      },
+      "cells": {
+        "type": "list",
+        "required": true
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "preconditions": [
+    "合成界面已打开（container.type = crafting 或 inventory）",
+    "材料在玩家格（菜单槽 >= 10）里，合成格为空"
+  ],
+  "body": {
+    "id": "c",
+    "type": "Sequence",
+    "name": "在工作台按格子清单摆料并取产物",
+    "mode": "memory",
+    "children": [
+      {
+        "id": "c.1",
+        "type": "Compute",
+        "name": "算摆料点击计划",
+        "ref": "code/crafting.plan-grid-fill@ad2110c8",
+        "params": {
+          "cells": "$cells"
+        },
+        "writes": {
+          "fillplan.clicks": "clicks",
+          "fillplan.ok": "ok",
+          "fillplan.reason": "reason",
+          "fillplan.missing": "missing"
+        }
+      },
+      {
+        "id": "c.2",
+        "type": "Condition",
+        "name": "计划可用（材料齐、合成格合规）",
+        "cmd": "blackboard/compare",
+        "params": {
+          "key": "fillplan.ok",
+          "op": "==",
+          "value": true
+        }
+      },
+      {
+        "id": "c.3",
+        "type": "ForEach",
+        "name": "按计划摆料并取产物",
+        "list": "$fillplan.clicks",
+        "as": "fillclick",
+        "indexAs": "fillIdx",
+        "maxIterations": 40,
+        "child": {
+          "id": "c.3.1",
+          "type": "Sequence",
+          "name": "点一次",
+          "mode": "memory",
+          "children": [
+            {
+              "id": "c.3.1.1",
+              "type": "Action",
+              "name": "点格子",
+              "cmd": "container/slot",
+              "params": "$fillclick"
+            },
+            {
+              "id": "c.3.1.2",
+              "type": "Steps",
+              "name": "等待",
+              "do": [
+                [
+                  "wait",
+                  120
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "c.4",
+        "type": "Compute",
+        "name": "确认产物已进背包",
+        "ref": "code/crafting.check-result@6cfcf9aa",
+        "params": {
+          "count": "$count",
+          "item": "$item"
+        },
+        "writes": {
+          "fillresult.done": "done",
+          "fillresult.have": "have",
+          "fillresult.reason": "reason"
+        }
+      },
+      {
+        "id": "c.5",
+        "type": "Condition",
+        "name": "产物已在背包",
+        "cmd": "blackboard/compare",
+        "params": {
+          "key": "fillresult.done",
+          "op": "==",
+          "value": true
+        }
+      }
+    ]
+  }
+}

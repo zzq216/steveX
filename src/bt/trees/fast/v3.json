@@ -1,0 +1,226 @@
+{
+  "type": "Match",
+  "id": "f",
+  "name": "快树",
+  "arms": [
+    {
+      "when": {
+        "id": "f.w1",
+        "type": "Condition",
+        "ref": "code/fast.low-air-underwater@f2e94601",
+        "read": [
+          "player"
+        ],
+        "params": {}
+      },
+      "then": {
+        "id": "f.1",
+        "type": "Sequence",
+        "name": "水下缺氧上浮",
+        "mode": "memory",
+        "children": [
+          {
+            "id": "f.1.1",
+            "type": "Steps",
+            "name": "视线抬正上方",
+            "do": [
+              [
+                "camera/turn",
+                {
+                  "dy": -90
+                }
+              ],
+              [
+                "wait",
+                60
+              ],
+              [
+                "camera/turn",
+                {
+                  "dy": -90
+                }
+              ],
+              [
+                "wait",
+                60
+              ]
+            ]
+          },
+          {
+            "id": "f.1.2",
+            "type": "Steps",
+            "name": "按住跳+前进上浮2.5秒",
+            "do": [
+              [
+                "key/jump",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "key/up",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "wait",
+                2500
+              ],
+              [
+                "key/jump",
+                {
+                  "pressed": false
+                }
+              ],
+              [
+                "key/up",
+                {
+                  "pressed": false
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "when": {
+        "id": "f.w2",
+        "type": "Condition",
+        "ref": "code/fast.low-health-under-fire@85accd8f",
+        "read": [
+          "player"
+        ],
+        "params": {}
+      },
+      "then": {
+        "id": "f.2",
+        "type": "Sequence",
+        "name": "低血被射击横向疾跑规避",
+        "mode": "memory",
+        "children": [
+          {
+            "id": "f.2.1",
+            "type": "Steps",
+            "name": "左前疾跑跳1.3秒",
+            "do": [
+              [
+                "key/sprint",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "key/up",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "key/left",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "key/jump",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "wait",
+                1300
+              ]
+            ]
+          },
+          {
+            "id": "f.2.2",
+            "type": "Steps",
+            "name": "切右前疾跑1.3秒",
+            "do": [
+              [
+                "key/left",
+                {
+                  "pressed": false
+                }
+              ],
+              [
+                "key/right",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "wait",
+                1300
+              ]
+            ]
+          },
+          {
+            "id": "f.2.3",
+            "type": "Steps",
+            "name": "再切左前疾跑1.3秒",
+            "do": [
+              [
+                "key/right",
+                {
+                  "pressed": false
+                }
+              ],
+              [
+                "key/left",
+                {
+                  "pressed": true
+                }
+              ],
+              [
+                "wait",
+                1300
+              ]
+            ]
+          },
+          {
+            "id": "f.2.4",
+            "type": "Steps",
+            "name": "松开按键",
+            "do": [
+              [
+                "key/sprint",
+                {
+                  "pressed": false
+                }
+              ],
+              [
+                "key/up",
+                {
+                  "pressed": false
+                }
+              ],
+              [
+                "key/jump",
+                {
+                  "pressed": false
+                }
+              ],
+              [
+                "key/left",
+                {
+                  "pressed": false
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "otherwise": {
+    "type": "Sequence",
+    "name": "otherwise",
+    "mode": "reactive",
+    "children": [],
+    "id": "f.o"
+  }
+}
