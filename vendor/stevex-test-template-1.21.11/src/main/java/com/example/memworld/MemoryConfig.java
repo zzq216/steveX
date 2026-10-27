@@ -1,10 +1,13 @@
 package com.example.memworld;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import org.slf4j.Logger;
@@ -172,6 +175,86 @@ public class MemoryConfig {
         }
     }
 
+    // ==================== v2.55：采集端 current.json（多世界记忆隔离） ====================
+
+    /**
+     * 采集端当前（或最近）世界（docs/多世界记忆隔离设计方案.md §3.1）。
+     *
+     * @param dir     该世界的记忆目录（{@code <vision 根>/worlds/<worldKey>}，已校验落在 {@code worlds/} 下）
+     * @param inWorld 采集端是否还在该世界里（false = 已退出，记忆保持不动，D5）
+     */
+    public record CurrentWorld(String worldKey, Path dir, boolean inWorld) {}
+
+    private Path currentFile;
+    private FileTime currentMtime;
+    private CurrentWorld currentCached;
+
+    /** 是否显式配置了任何源路径（显式路径优先、不随采集端换世界）。 */
+    public boolean hasExplicitSources() {
+        for (String s : List.of(sourceFile, terrainFile, entityFile, containerFile, biomeFile)) {
+            if (s != null && !s.isBlank()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 读采集端的 {@code current.json}（mtime 门控，未变直接返回上次结果）；不存在 / 非法 → null
+     * （回退 v2.55 之前的根目录探测）。候选根目录与旧版自动探测同一组位置。
+     */
+    public synchronized CurrentWorld currentWorld() {
+        if (Minecraft.getInstance() == null) return null;
+        final Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
+        for (Path root : List.of(
+                gameDir.resolve("stevex/vision"),
+                gameDir.resolve("..").resolve("..").resolve("stevex-template-1.21.11").resolve("run/stevex/vision"),
+                gameDir.resolve("..").resolve("stevex-template-1.21.11").resolve("run/stevex/vision"))) {
+            final Path file = root.resolve("current.json").normalize();
+            if (!Files.isRegularFile(file)) continue;
+            try {
+                final FileTime mtime = Files.getLastModifiedTime(file);
+                if (file.equals(currentFile) && mtime.equals(currentMtime)) return currentCached;
+                currentFile = file;
+                currentMtime = mtime;
+                currentCached = parseCurrent(file);
+                return currentCached;
+            } catch (IOException e) {
+                return currentCached;
+            }
+        }
+        currentFile = null;
+        currentMtime = null;
+        currentCached = null;
+        return null;
+    }
+
+    private static CurrentWorld parseCurrent(final Path file) {
+        try {
+            final JsonElement root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
+            if (root == null || !root.isJsonObject()) return null;
+            final JsonObject obj = root.getAsJsonObject();
+            if (!obj.has("worldKey") || !obj.has("dir")) return null;
+            final String key = obj.get("worldKey").getAsString();
+            final Path worlds = file.getParent().resolve("worlds").normalize();
+            final Path dir = file.getParent().resolve(obj.get("dir").getAsString()).normalize();
+            // 只认 worlds/ 下的子目录（不跟随 .. / 绝对路径）
+            if (!dir.startsWith(worlds) || dir.equals(worlds)) {
+                LOGGER.warn("[MemoryWorld] Ignoring {}: dir '{}' is outside {}", file, dir, worlds);
+                return null;
+            }
+            final boolean inWorld = !obj.has("inWorld") || obj.get("inWorld").getAsBoolean();
+            return new CurrentWorld(key, dir, inWorld);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.warn("[MemoryWorld] Failed to parse {}: {}", file, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 当前世界目录；无 current.json → null。 */
+    private Path currentWorldDir() {
+        final CurrentWorld cw = currentWorld();
+        return cw == null ? null : cw.dir();
+    }
+
     /** 客户端游戏目录；非客户端环境返回 null。 */
     public Path gameDirectory() {
         return Minecraft.getInstance() == null ? null : Minecraft.getInstance().gameDirectory.toPath();
@@ -207,6 +290,13 @@ public class MemoryConfig {
             return null;
         }
 
+        // v2.55：采集端写了 current.json → 只在当前世界目录里找
+        final Path world = currentWorldDir();
+        if (world != null) {
+            final Path c = world.resolve(dirName);
+            return Files.isDirectory(c) ? c : null;
+        }
+
         final Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
         final List<Path> candidates = List.of(
                 gameDir.resolve("stevex/vision").resolve(dirName),
@@ -238,6 +328,13 @@ public class MemoryConfig {
             return Files.exists(p) ? p : null;
         }
 
+        // v2.55：采集端写了 current.json → 只在当前世界目录里找（找不到 = 该世界还没采到，稍后重试）
+        final Path world = currentWorldDir();
+        if (world != null) {
+            final Path p = world.resolve("terrain.nbt");
+            return Files.exists(p) ? p : null;
+        }
+
         Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
         List<Path> candidates = List.of(
                 gameDir.resolve("stevex/vision/terrain.nbt"),
@@ -261,6 +358,13 @@ public class MemoryConfig {
 
         if (entityFile != null && !entityFile.isBlank()) {
             Path p = Path.of(entityFile);
+            return Files.exists(p) ? p : null;
+        }
+
+        // v2.55：采集端写了 current.json → 只在当前世界目录里找（找不到 = 该世界还没采到，稍后重试）
+        final Path world = currentWorldDir();
+        if (world != null) {
+            final Path p = world.resolve("entities.nbt");
             return Files.exists(p) ? p : null;
         }
 
@@ -315,6 +419,10 @@ public class MemoryConfig {
         Path terrain = resolveTerrainFile();
         if (terrain != null) {
             return terrain.getParent().resolve("memory_cells.bin");
+        }
+        final Path world = currentWorldDir();
+        if (world != null) {
+            return world.resolve("memory_cells.bin");
         }
         return Minecraft.getInstance().gameDirectory.toPath()
                 .resolve("stevex/vision/memory_cells.bin");

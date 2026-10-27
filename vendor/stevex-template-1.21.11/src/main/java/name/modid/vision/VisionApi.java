@@ -73,7 +73,13 @@ public class VisionApi {
         final Unprojector.UnprojectResult hits = unproj.visibleBlockHits(bucket.keySet(), Unprojector.LANDING_EPSILON);
         // v2.23（§7.11）反向通道：读记忆侧 memory_cells.bin（mtime 门控）→ 待判定记忆格清单。
         // 记忆侧离线 / 文件缺失 → 空清单 → 无删除证据 → 只增不删（优雅降级）。
-        final MemoryCellsReader.CellsData cells = new MemoryCellsReader().read();
+        // v2.55：cells 与 store 都属于当前世界；派发到渲染线程后再核对没换过世界，否则这一帧（旧世界的
+        // 深度图）会被写进新世界的 store。
+        final VisionWorldContext ctx = VisionWorldContext.current();
+        if (ctx == null) {
+            return Map.of("ok", false, "error", "not in a world");
+        }
+        final MemoryCellsReader.CellsData cells = new MemoryCellsReader(ctx.dir()).read();
 
         // ---- 渲染线程：四路查询 + 减量判定 + store 落盘（§8）----
         final var result = new Object() {
@@ -86,6 +92,8 @@ public class VisionApi {
                 net.minecraft.client.multiplayer.ClientLevel level = Minecraft.getInstance().level;
                 if (level == null) {
                     result.error = "not in a world";
+                } else if (VisionWorldContext.current() != ctx) {
+                    result.error = "world changed during snapshot";
                 } else {
                     result.value = ObjectResolver.resolve(level, snap, unproj, hits, bucket, cells, ts);
                 }
@@ -141,6 +149,8 @@ public class VisionApi {
         resp.put("timestamp", snap.timestamp());
         // v2.32：agent 当前维 id（与 terrain.nbt 顶层 currentDimension 一致，语义同 store 落盘）。
         resp.put("dimension", result.value.dimension());
+        // v2.55：记忆目录键（stevex/vision/worlds/<worldKey>/，与 current.json 一致）。
+        resp.put("worldKey", ctx.worldKey());
         resp.put("visibleBlockCount", result.value.visibleBlockCount());
         resp.put("blockEntityCount", result.value.blockEntityCount());
         resp.put("entityCount", result.value.entityCount());

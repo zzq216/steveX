@@ -67,7 +67,11 @@ export function createBuiltins({ jsonSources = {}, visionRoot = null } = {}) {
             path: { type: 'string', required: true, hint: NBT_SOURCES.join(' / ') },
             ...QUERY_INPUTS
           },
-          outputs: QUERY_OUTPUTS
+          outputs: {
+            ...QUERY_OUTPUTS,
+            // v2.55（多世界记忆隔离）：数据来自哪个世界；采集端还没写 current.json 时为 null
+            world: { type: 'any', hint: '数据来自哪个世界 { key, label, inWorld }；未知时为 null' }
+          }
         },
         body: { host: 'nbt.query', literalParams: true }
       },

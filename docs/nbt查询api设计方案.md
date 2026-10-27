@@ -27,7 +27,7 @@
 
 ## 1. 问题与用途
 
-- **场景**（"事实确认 / 搜索记忆世界"）：记忆世界里某个箱子装了什么、某类实体在哪、某个方块实体的内容。数据已经在 **落盘 NBT 文件**里（采集端 `run/stevex/vision/`：`entities_union.nbt`、`containers/`、`block_entities/`、`biomes/`、`terrain*`），量级从"万条记录"到"百万格"。
+- **场景**（"事实确认 / 搜索记忆世界"）：记忆世界里某个箱子装了什么、某类实体在哪、某个方块实体的内容。数据已经在 **落盘 NBT 文件**里（采集端 `run/stevex/vision/`，v2.55 起经 `current.json` 定位到 `worlds/<worldKey>/`，见 [多世界记忆隔离设计方案.md](多世界记忆隔离设计方案.md)：`entities_union.nbt`、`containers/`、`block_entities/`、`biomes/`、`terrain*`），量级从"万条记录"到"百万格"。
 - **目标形状**：与 §8.9 `vision.find-blocks` 同款——**大输入在库内部坍缩，只出短列表**（§3.2）。
 - **非目标**：写 NBT；任意文件读取；通用 JSONPath/查询语言；把全量数据塞进黑板或模型上下文；跨数据源的联合查询（一次调用 = 一个数据源）。
 

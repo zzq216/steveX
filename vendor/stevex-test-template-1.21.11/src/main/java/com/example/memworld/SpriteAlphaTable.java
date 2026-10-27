@@ -87,6 +87,8 @@ public final class SpriteAlphaTable {
 
     private volatile long epoch;
     private boolean dirty;
+    /** v2.55：上次成功写入的路径（世界切换后 cells 目录变了，表要在新目录里重写一份）。 */
+    private Path lastTarget;
 
     public SpriteAlphaTable() {
         this.epoch = newEpoch();
@@ -206,7 +208,8 @@ public final class SpriteAlphaTable {
      * @return true = 本次确实重写了（供诊断/验收 §10 第 15 条：暖机后本文件 mtime 应不变）
      */
     public synchronized boolean flushIfDirty(final Path target) {
-        if (!dirty) return false;
+        // v2.55：目标换了（采集端换世界 → cells 目录随之换）也要写——新目录里还没有这张表
+        if (!dirty && target.equals(lastTarget)) return false;
         try {
             Files.createDirectories(target.getParent());
             final Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
@@ -261,6 +264,7 @@ public final class SpriteAlphaTable {
                 Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
             }
             dirty = false;
+            lastTarget = target;
             LOGGER.info("[MemoryWorld] Wrote sprite alpha table: {} sprites, epoch={}, {} bytes -> {}",
                     order.size(), epoch, bytes.length, target);
             return true;

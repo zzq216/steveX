@@ -68,7 +68,6 @@ import org.slf4j.Logger;
 public class EntityUnionStore {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     private static final String FILE_NAME = "entities_union.nbt";
     private static final String KEY_UPDATED_AT = "updatedAt";
     private static final String KEY_ENTITIES = "entities";
@@ -91,10 +90,10 @@ public class EntityUnionStore {
     private String currentDimension = WorldsFile.LEGACY_DIMENSION;
     private volatile Snapshot pending;
 
-    public EntityUnionStore(final UnionSaveScheduler scheduler) {
+    /** v2.55：{@code dir} = 当前世界目录（{@code stevex/vision/worlds/<worldKey>}，见 {@link VisionWorldContext}）。 */
+    public EntityUnionStore(final UnionSaveScheduler scheduler, final Path dir) {
         this.scheduler = scheduler;
         scheduler.registerWriter(this::flush);
-        final Path dir = Minecraft.getInstance().gameDirectory.toPath().resolve(DIR_NAME);
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {

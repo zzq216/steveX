@@ -20,12 +20,19 @@ const { getSourceDef } = require('./sources')
  *     （containers 另并 `ender.nbt`）；无索引时退化为 `noidx:<max updatedAt>:<区文件数>`；
  *   - 读一致性：读前读后各取一次版本，不一致重读一次，仍不一致 = SOURCE_UNSTABLE；
  *     分片源另核对"区文件自报 updatedAt == 索引条目"，防 commit 的中间态
- *     （区文件先写、索引后写完，见 VisionRegions.commit）。
+ *     （区文件先写、索引后写完，见 VisionRegions.commit）；
+ *   - 世界定位（v2.55，docs/多世界记忆隔离设计方案.md §7）：`visionRoot` 是 `stevex/vision` 根目录，
+ *     每次装载先读根下的 `current.json`（按 mtime + 尺寸缓存）找到当前世界目录
+ *     `worlds/<worldKey>/`；没有 current.json → 根目录本身（v2.55 之前的布局）。
+ *     `dir` 必须落在 `worlds/` 下（含 realpath 核对），否则 SOURCE_CORRUPT。
+ *     版本戳带上 worldKey，换世界后"记忆来源已换代"的判断自然成立。
  */
 
 const DEFAULT_TASK_ID = '__default__'
 const INDEX_FILE = '_index.nbt'
 const REGION_FILE = /^r\.(-?\d+)\.(-?\d+)\.nbt$/
+const CURRENT_FILE = 'current.json'
+const WORLDS_DIR = 'worlds'
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key)
@@ -226,6 +233,57 @@ async function probeVersion(def, visionRoot) {
   return `${versionOf(indexStat)}${enderStat ? `|ender:${versionOf(enderStat)}` : ''}`
 }
 
+/** child 是否在 parent 之内（不含 parent 本身）。 */
+function isInside(parent, child) {
+  const rel = path.relative(parent, child)
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+/**
+ * 解析 `current.json`（v2.55）。没有这个文件 → null（调用方回退到根目录）。
+ * 返回 { dir, world: { key, label, inWorld } }。
+ */
+async function readCurrentWorld(visionRoot) {
+  const file = path.join(visionRoot, CURRENT_FILE)
+  let text
+  try {
+    text = await fs.readFile(file, 'utf8')
+  } catch (e) {
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null
+    throw new QueryError('SOURCE_MISSING', `world pointer not readable: ${file}`, { cause: e })
+  }
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (e) {
+    throw new QueryError('SOURCE_CORRUPT', `invalid JSON in ${file}`, { cause: e })
+  }
+  if (!isPlainObject(value) || typeof value.worldKey !== 'string' || typeof value.dir !== 'string') {
+    throw new QueryError('SOURCE_CORRUPT', `${file} must have string worldKey and dir`)
+  }
+  const worlds = path.resolve(visionRoot, WORLDS_DIR)
+  const dir = path.resolve(visionRoot, value.dir)
+  if (!isInside(worlds, dir)) {
+    throw new QueryError('SOURCE_CORRUPT', `${file}: dir "${value.dir}" is outside ${worlds}`)
+  }
+  // 目录已存在时再按真实路径核对一次（junction / 符号链接不得把读取带出 worlds/）
+  const realDir = await fs.realpath(dir).catch(() => null)
+  if (realDir) {
+    const realWorlds = await fs.realpath(worlds)
+    if (!isInside(realWorlds, realDir)) {
+      throw new QueryError('SOURCE_CORRUPT', `${file}: dir "${value.dir}" resolves outside ${worlds}`)
+    }
+  }
+  return {
+    dir,
+    world: {
+      key: value.worldKey,
+      label: typeof value.label === 'string' ? value.label : null,
+      inWorld: value.inWorld !== false
+    }
+  }
+}
+
 async function withRetry(fn, retries) {
   let lastError
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -252,8 +310,11 @@ async function withRetry(fn, retries) {
 function createSourceLoader({ visionRoot, retries = 1 } = {}) {
   if (!visionRoot) throw new Error('createSourceLoader: visionRoot is required')
 
-  /** path → 最近一次装载的 snapshot（只留最新版本：旧版本没人引用后随 GC 回收） */
+  /** path → 最近一次装载的 snapshot（只留最新版本：旧版本没人引用后随 GC 回收；换世界整体清空） */
   const cache = new Map()
+  /** current.json 的解析结果（按 mtime + 尺寸复用）与上次所在的世界目录 */
+  let pointer = { stamp: null, where: null }
+  let lastDir = null
   /** 在途装载（key = path + 探到的版本），合并并发请求 */
   const pending = new Map()
   /** clear() 之后，旧的在途装载不得回填缓存 */
@@ -263,22 +324,44 @@ function createSourceLoader({ visionRoot, retries = 1 } = {}) {
    * @param {string} sourcePath
    * @param {object} [options]  { taskId }：保留参数（调用方照旧传），不再影响缓存
    */
+  /** 当前世界 { dir, world }；没有 current.json → { dir: visionRoot, world: null }。 */
+  async function locate() {
+    const stat = await statOrNull(path.join(visionRoot, CURRENT_FILE))
+    const stamp = stat && stat.isFile() ? versionOf(stat) : null
+    if (stamp === null) {
+      pointer = { stamp: null, where: null }
+    } else if (stamp !== pointer.stamp || !pointer.where) {
+      pointer = { stamp, where: await readCurrentWorld(visionRoot) }
+    }
+    const where = pointer.where || { dir: visionRoot, world: null }
+    if (where.dir !== lastDir) {
+      // 换世界：旧世界的快照不再有用（版本戳也带 worldKey，不清也不会误用，清掉只是不留垃圾）
+      lastDir = where.dir
+      cache.clear()
+    }
+    return where
+  }
+
+  const tagVersion = (where, version) => (version === null || !where.world ? version : `${where.world.key}@${version}`)
+
   async function load(sourcePath) {
     const def = getSourceDef(sourcePath)
-    const probed = await probeVersion(def, visionRoot)
+    const where = await locate()
+    const probed = tagVersion(where, await probeVersion(def, where.dir))
     const cached = cache.get(sourcePath)
     if (cached && probed !== null && cached.version === probed) return cached
 
     const gen = generation
-    const pendingKey = `${sourcePath}\u0000${probed}\u0000${gen}`
+    const pendingKey = `${where.dir}\u0000${sourcePath}\u0000${probed}\u0000${gen}`
     let promise = pending.get(pendingKey)
     if (!promise) {
       promise = withRetry(
-        () => (def.kind === 'single' ? loadSingle(def, visionRoot) : loadSharded(def, visionRoot)),
+        () => (def.kind === 'single' ? loadSingle(def, where.dir) : loadSharded(def, where.dir)),
         retries
       )
-        .then((snapshot) => {
-          if (generation === gen) cache.set(sourcePath, snapshot)
+        .then((loaded) => {
+          const snapshot = { ...loaded, version: tagVersion(where, loaded.version), world: where.world }
+          if (generation === gen && lastDir === where.dir) cache.set(sourcePath, snapshot)
           return snapshot
         })
         .finally(() => {
@@ -291,7 +374,13 @@ function createSourceLoader({ visionRoot, retries = 1 } = {}) {
 
   /** 当前版本戳（只 stat）；取不到 → null。修复请求的目录用它判断"记忆来源已换代"（P2-D17）。 */
   async function version(sourcePath) {
-    return probeVersion(getSourceDef(sourcePath), visionRoot)
+    const where = await locate()
+    return tagVersion(where, await probeVersion(getSourceDef(sourcePath), where.dir))
+  }
+
+  /** 当前世界 { key, label, inWorld }；没有 current.json → null。 */
+  async function world() {
+    return (await locate()).world
   }
 
   /** 兼容旧接口：缓存不再按任务钉住，任务结束不用释放 */
@@ -303,7 +392,7 @@ function createSourceLoader({ visionRoot, retries = 1 } = {}) {
     pending.clear()
   }
 
-  return { load, version, releaseTask, clear, size: () => cache.size }
+  return { load, version, world, releaseTask, clear, size: () => cache.size }
 }
 
 module.exports = {
@@ -313,5 +402,6 @@ module.exports = {
   extractIndex,
   loadSingle,
   loadSharded,
-  probeVersion
+  probeVersion,
+  readCurrentWorld
 }

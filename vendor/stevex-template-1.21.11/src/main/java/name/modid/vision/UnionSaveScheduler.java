@@ -7,8 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
@@ -49,11 +48,16 @@ final class UnionSaveScheduler {
      * 单线程而非线程池——写盘是 IO 密集且频率上限由 {@link #MIN_INTERVAL_MS} 压住，多线程只会
      * 让两个文件的重命名顺序变得不可预测。
      */
-    private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
+    private final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
         final Thread t = new Thread(r, "stevex-union-save");
         t.setDaemon(true);
         return t;
     });
+
+    /** v2.55：关停兜底的 hook 线程（{@link #close} 时注销——每个世界一个调度器，不能越积越多）。 */
+    private final Thread shutdownHook = new Thread(this::fire, "stevex-union-save-flush");
+    /** v2.55：已 {@link #close}（换世界 / 退出世界）→ 之后的 {@link #requestSave} 一律忽略。 */
+    private boolean closed;
 
     /** 各 store 的落盘回调（构造时注册）。CopyOnWrite：注册发生在构造期，fire 在运行期读。 */
     private final List<Runnable> writers = new CopyOnWriteArrayList<>();
@@ -65,7 +69,9 @@ final class UnionSaveScheduler {
 
     UnionSaveScheduler() {
         // 退出前把"已 publish、未落盘"的快照补写一次（见类 javadoc 的"关停兜底"）。
-        Runtime.getRuntime().addShutdownHook(new Thread(this::fire, "stevex-union-save-flush"));
+        // v2.55：close 时排定未到点的 fire 不再执行（由 close 自己同步补写一次）。
+        executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
     }
 
     /** 注册一个落盘回调。回调内部须自行取快照并容忍"无快照可写"（= 已被更早的一次 fire 写掉）。 */
@@ -81,7 +87,7 @@ final class UnionSaveScheduler {
      * 才取快照，届时拿到的是最新的那一份。
      */
     synchronized void requestSave() {
-        if (scheduled) return;
+        if (closed || scheduled) return;
         scheduled = true;
         final long delay = Math.max(0L, MIN_INTERVAL_MS - (System.currentTimeMillis() - lastRunAt));
         executor.schedule(this::fire, delay, TimeUnit.MILLISECONDS);
@@ -104,6 +110,35 @@ final class UnionSaveScheduler {
                 // 一个写不进去（磁盘满 / 权限）不构成放弃另一个的理由。
                 LOGGER.warn("[Vision] Union save failed: {}", t.toString());
             }
+        }
+    }
+
+    /**
+     * v2.55（多世界记忆隔离，见 docs/多世界记忆隔离设计方案.md §5.2）：换世界 / 退出世界时<b>同步</b>落盘
+     * 并停掉调度线程。调用返回时，本世界已 publish 的快照全部写进本世界目录——之后才允许新世界的
+     * store 组开始写，旧世界的数据不会有落进新目录的窗口（各 store 的落盘路径在构造时就定了）。
+     *
+     * <p>顺序：先拒收新请求 → 取消未到点的排定 → 等正在跑的那次写完 → 在调用线程上补写一次（各 store
+     * 的 {@code flush} 自带互斥，与可能仍在跑的 hook 不冲突）→ 注销 shutdown hook。
+     */
+    void close() {
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+        }
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                LOGGER.warn("[Vision] Union save thread did not finish within 10s; flushing on caller thread anyway");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        fire();
+        try {
+            Runtime.getRuntime().removeShutdownHook(shutdownHook);
+        } catch (IllegalStateException alreadyShuttingDown) {
+            // JVM 正在退出：hook 会自己再跑一次，重复写同一份快照无害
         }
     }
 

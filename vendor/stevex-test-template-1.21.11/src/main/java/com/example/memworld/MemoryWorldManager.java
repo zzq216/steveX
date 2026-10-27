@@ -8,7 +8,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import java.nio.charset.StandardCharsets;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.core.HolderLookup;
@@ -81,6 +87,17 @@ public final class MemoryWorldManager {
     /** 自动开档失败后最多重试次数。 */
     private static final int MAX_AUTO_OPEN_ATTEMPTS = 3;
 
+    // ==================== v2.55：跟随采集端换世界（docs/多世界记忆隔离设计方案.md §6，D8） ====================
+    // 采集端每个世界一个记忆目录，current.json 指向当前那个。记忆世界是这些文件的派生物，换了源世界就
+    // 删档重建（复用开档状态机：退出 → 主菜单稳定 → bootstrap 删档 → 新建 → 全量复原）。
+    // 记忆世界是由哪个 worldKey 建出来的，记在 config/stevex-test/memory_source.json。
+    /** 已决定重建、正在退出 / 等待重新开档（期间不再检查）。 */
+    private static boolean rebuildPending;
+    private static int worldCheckTicks;
+    /** current.json 的检查间隔（tick）。读取本身有 mtime 门控，这里只是不必每 tick 都看。 */
+    private static final int WORLD_CHECK_INTERVAL_TICKS = 20;
+    private static final String SOURCE_MARKER = "memory_source.json";
+
     /** 当前服务器是否已对玩家做过"创造 + 飞行 + 传送"的一次性初始化。 */
     private static boolean playerReady;
 
@@ -112,6 +129,7 @@ public final class MemoryWorldManager {
      * 成功进入过世界一次后本进程不再自动开档（退出到标题也不强制拉回）。
      */
     public static void onClientTick(final Minecraft mc) {
+        watchSourceWorld(mc);
         if (enteredOnce) return;                            // 已进入过：交给玩家 / 其它流程
         if (mc.level != null) {                             // 本次已成功进入（无论哪条路）
             enteredOnce = true;
@@ -141,6 +159,64 @@ public final class MemoryWorldManager {
         mc.execute(() -> bootstrap(mc));
     }
 
+    /**
+     * v2.55：记忆世界开着时，发现采集端换到了另一个世界（current.json 的 worldKey ≠ 建档时记下的）→
+     * 退出记忆世界并标记重建；开档状态机回到主菜单后由 {@link #bootstrap} 删档重建。
+     * 采集端已退出（inWorld:false）或显式配置了源路径时不跟随。
+     */
+    private static void watchSourceWorld(final Minecraft mc) {
+        if (rebuildPending) return;
+        if (++worldCheckTicks < WORLD_CHECK_INTERVAL_TICKS) return;
+        worldCheckTicks = 0;
+        final MemoryConfig config = MemoryConfig.get();
+        if (!config.autoOpenOnLaunch || config.hasExplicitSources()) return;
+        final IntegratedServer server = mc.getSingleplayerServer();
+        if (mc.level == null || server == null
+                || !server.getWorldData().getLevelName().equals(config.worldName)) return;
+        final MemoryConfig.CurrentWorld cw = config.currentWorld();
+        if (cw == null || !cw.inWorld()) return;
+        final String built = readBuiltKey(mc);
+        if (cw.worldKey().equals(built)) return;
+        LOGGER.info("[MemoryWorld] Source world changed ({} → {}); leaving to rebuild the memory world",
+                built == null ? "<unknown>" : built, cw.worldKey());
+        rebuildPending = true;
+        enteredOnce = false;
+        autoOpenAttempts = 0;
+        stableMenuTicks = 0;
+        mc.disconnectFromWorld(ClientLevel.DEFAULT_QUIT_MESSAGE);
+    }
+
+    /** 记忆世界是由哪个源 worldKey 建出来的；没有记录（v2.55 之前建的 / 从未建过）→ null。 */
+    private static String readBuiltKey(final Minecraft mc) {
+        final Path file = mc.gameDirectory.toPath().resolve("config").resolve("stevex-test").resolve(SOURCE_MARKER);
+        try {
+            if (!Files.isRegularFile(file)) return null;
+            final JsonElement root = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
+            if (root == null || !root.isJsonObject() || !root.getAsJsonObject().has("worldKey")) return null;
+            return root.getAsJsonObject().get("worldKey").getAsString();
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 建档时记下源 worldKey；null（采集端还没有 current.json）→ 删掉记录。 */
+    private static void writeBuiltKey(final Minecraft mc, final String worldKey) {
+        final Path file = mc.gameDirectory.toPath().resolve("config").resolve("stevex-test").resolve(SOURCE_MARKER);
+        try {
+            if (worldKey == null) {
+                Files.deleteIfExists(file);
+                return;
+            }
+            final JsonObject obj = new JsonObject();
+            obj.addProperty("worldKey", worldKey);
+            obj.addProperty("builtAt", System.currentTimeMillis());
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, obj.toString(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOGGER.warn("[MemoryWorld] Failed to write {}: {}", file, e.getMessage());
+        }
+    }
+
     private static void bootstrap(final Minecraft mc) {
         MemoryConfig config = MemoryConfig.get();
         if (!config.autoOpenOnLaunch) return;
@@ -152,9 +228,18 @@ public final class MemoryWorldManager {
         LevelStorageSource storage = mc.getLevelSource();
         Screen parent = mc.screen;
 
-        if (config.resetOnLaunch && storage.levelExists(worldId)) {
-            deleteWorld(storage, worldId);
+        // v2.55：源世界与建档时记下的不同 → 删档重建（显式配置源路径时不跟随）
+        final MemoryConfig.CurrentWorld source = config.hasExplicitSources() ? null : config.currentWorld();
+        final boolean stale = source != null && !source.worldKey().equals(readBuiltKey(mc));
+        if ((config.resetOnLaunch || rebuildPending || stale) && storage.levelExists(worldId)) {
+            if (!deleteWorld(storage, worldId)) {
+                // 删不掉（集成服务器还没完全退出 / 存档被占用）就不能打开旧档，否则会把旧世界的内容
+                // 当成新世界的记忆；交给开档状态机稍后重试
+                LOGGER.warn("[MemoryWorld] Memory world not rebuilt yet; will retry");
+                return;
+            }
         }
+        rebuildPending = false;
 
         if (storage.levelExists(worldId)) {
             LOGGER.info("[MemoryWorld] Opening existing memory world '{}'", worldId);
@@ -162,6 +247,7 @@ public final class MemoryWorldManager {
                     LOGGER.warn("[MemoryWorld] Cancelled opening memory world"));
         } else {
             LOGGER.info("[MemoryWorld] Creating memory world '{}' (creative + cheats)", worldId);
+            writeBuiltKey(mc, source == null ? null : source.worldKey());
             // v2.30（§7.9 ⑧）：初始化记忆世界即关闭生物自然生成——spawn_mobs=false。GameRules 随
             // LevelSettings 写入新世界 level.dat（PrimaryLevelData.getGameRules() = settings.gameRules()），
             // 从 tick 0 起自然刷怪与自定义刷怪全停（ServerChunkCache.tick 读 doMobSpawning=false →
@@ -229,7 +315,7 @@ public final class MemoryWorldManager {
         }
     }
 
-    private static void deleteWorld(final LevelStorageSource storage, final String worldId) {
+    private static boolean deleteWorld(final LevelStorageSource storage, final String worldId) {
         try {
             LevelStorageSource.LevelStorageAccess access = storage.validateAndCreateAccess(worldId);
             try {
@@ -238,8 +324,10 @@ public final class MemoryWorldManager {
                 access.safeClose();
             }
             LOGGER.info("[MemoryWorld] Deleted old memory world '{}'", worldId);
+            return true;
         } catch (Exception e) {
             LOGGER.warn("[MemoryWorld] Failed to delete world '{}': {}", worldId, e.getMessage());
+            return false;
         }
     }
 

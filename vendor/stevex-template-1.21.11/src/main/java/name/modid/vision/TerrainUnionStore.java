@@ -62,7 +62,6 @@ import org.slf4j.Logger;
 public class TerrainUnionStore {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     /** v2.48：分片后的 store 目录名（原单文件名去掉 {@code .nbt}）。 */
     private static final String STORE_DIR_NAME = "terrain_union";
     /** v2.48：分片前的单文件（构造时若存在则拆分迁移并退役）。 */
@@ -95,10 +94,10 @@ public class TerrainUnionStore {
      */
     private final AtomicReference<Map<String, Map<String, RegionSnapshot>>> pending = new AtomicReference<>(Map.of());
 
-    public TerrainUnionStore(final UnionSaveScheduler scheduler) {
+    /** v2.55：{@code dir} = 当前世界目录（{@code stevex/vision/worlds/<worldKey>}，见 {@link VisionWorldContext}）。 */
+    public TerrainUnionStore(final UnionSaveScheduler scheduler, final Path dir) {
         this.scheduler = scheduler;
         scheduler.registerWriter(this::flush);
-        final Path dir = Minecraft.getInstance().gameDirectory.toPath().resolve(DIR_NAME);
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {

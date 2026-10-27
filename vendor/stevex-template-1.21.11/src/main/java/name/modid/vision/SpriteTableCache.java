@@ -59,7 +59,6 @@ import org.slf4j.Logger;
 public final class SpriteTableCache {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     private static final String FILE_NAME = "memory_sprites.bin";
     private static final byte[] MAGIC = {'S', 'S', 'P', 'R'};
     private static final int VERSION = 1;
@@ -70,10 +69,9 @@ public final class SpriteTableCache {
     /** 单张掩码的 texel 上限（与记忆侧 4096×4096 对称，防损坏文件撑爆内存）。 */
     private static final int MAX_TEXELS = 4096 * 4096;
 
-    private static final SpriteTableCache INSTANCE = new SpriteTableCache();
-
+    /** v2.55：表文件随世界目录走（记忆端写进 cells 同目录），故每个世界一份实例，见 {@link VisionWorldContext}。 */
     public static SpriteTableCache get() {
-        return INSTANCE;
+        return VisionWorldContext.require().sprites();
     }
 
     /**
@@ -101,9 +99,8 @@ public final class SpriteTableCache {
     private long epoch;
     private Mask[] byIndex = new Mask[0];
 
-    private SpriteTableCache() {
-        this.filePath = Minecraft.getInstance().gameDirectory.toPath()
-                .resolve(DIR_NAME).resolve(FILE_NAME);
+    SpriteTableCache(final Path dir) {
+        this.filePath = dir.resolve(FILE_NAME);
     }
 
     /** 本表当前载入的 epoch（0 = 无表 / 解析失败 / 文件缺失）；诊断用。 */

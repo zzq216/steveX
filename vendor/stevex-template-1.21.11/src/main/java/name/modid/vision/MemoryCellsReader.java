@@ -101,13 +101,12 @@ import org.slf4j.Logger;
  *       → 只增不删（恢复后自愈：记忆侧下次写 cells，采集侧重新判定）。</li>
  * </ul>
  *
- * <p>文件路径 = 本采集器 {@code <gameDir>/stevex/vision/memory_cells.bin}（与 terrain.nbt 同目录；
+ * <p>文件路径 = 当前世界目录下的 {@code memory_cells.bin}（v2.55 起 {@code stevex/vision/worlds/<worldKey>/}；与 terrain.nbt 同目录；
  * 记忆侧 {@code MemoryConfig.resolveMemoryCellsFile} 自动探测到 terrain.nbt 所在目录、写同一路径）。
  */
 public final class MemoryCellsReader {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     private static final String FILE_NAME = "memory_cells.bin";
     private static final byte[] MAGIC = {'S', 'C', 'E', 'L'};
     /** 格式版本——1 = 旧版无维标签；2 = v2.32 起带 UTF-8 维 id；3 = v2.36 起带 translucent 段；
@@ -178,8 +177,8 @@ public final class MemoryCellsReader {
     private FileTime lastMtime;
     private CellsData cached;
 
-    public MemoryCellsReader() {
-        Path dir = Minecraft.getInstance().gameDirectory.toPath().resolve(DIR_NAME);
+    /** v2.55：{@code dir} = 当前世界目录（记忆端把 cells 写进 terrain.nbt 所在的同一目录）。 */
+    public MemoryCellsReader(final Path dir) {
         this.filePath = dir.resolve(FILE_NAME);
     }
 

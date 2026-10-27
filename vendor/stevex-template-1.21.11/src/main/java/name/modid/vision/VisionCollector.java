@@ -31,7 +31,8 @@ import org.slf4j.Logger;
  *   <li><b>BlockState 序列化</b>：blockId / stateProps 助手</li>
  *   <li><b>快照记录类型</b>：BlockEntitySnapshot / TerrainBlockSnapshot / EntityLightSnapshot，
  *       供深度驱动采集管线与各 store 复用</li>
- *   <li><b>数据层</b>：持有一个 {@link VisionBlockEntityStore} 实例（增量持久化）</li>
+ *   <li><b>数据层</b>：各 store 的访问入口——v2.55 起实例归当前世界的 {@link VisionWorldContext}
+ *       （每个世界一组、目录 {@code stevex/vision/worlds/<worldKey>/}），本类只转发</li>
  * </ul>
  *
  * <p>原 v1 采集逻辑（Path A/B/C/D 遍历、visibleSections 帧缓存、collectAndSave）已删除，
@@ -40,33 +41,6 @@ import org.slf4j.Logger;
 public class VisionCollector {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-
-    /** NBT 持久化存储 —— 增量保存，自动去重。 */
-    private static final VisionBlockEntityStore store = new VisionBlockEntityStore();
-
-    /** 地形方块快照存储 —— 快照覆盖写（v2 起内容 = 本次可见方块，无 scannedSections）。 */
-    private static final VisionTerrainStore terrainStore = new VisionTerrainStore();
-
-    /** 实体轻量快照存储 —— 快照覆盖写（v2 起内容 = 本次可见实体，无 scannedSections）。 */
-    private static final VisionEntityStore entityStore = new VisionEntityStore();
-
-    /** v2.31：群系 cell 存储 —— 单调 union 覆盖写（独立 biomes.nbt，见 VisionBiomeStore）。 */
-    private static final VisionBiomeStore biomeStore = new VisionBiomeStore();
-
-    /**
-     * v2.47（累积观测文件，见 docs/累积观测文件设计方案.md §4.5 决策 D）：两个 union store 共用的
-     * 写盘调度器（限频 5 秒 + 后台 daemon 线程 + 原子写）。
-     *
-     * <p><b>声明必须在两个 union store 之前</b>——静态字段按声明顺序初始化，store 的构造会把自己
-     * 注册进来（{@code registerWriter}）。
-     */
-    private static final UnionSaveScheduler unionScheduler = new UnionSaveScheduler();
-
-    /** v2.47：累积地形并集（只给 agent 读；terrain.nbt 的语义与格式一个字不动）。 */
-    private static final TerrainUnionStore terrainUnionStore = new TerrainUnionStore(unionScheduler);
-
-    /** v2.47：累积实体并集（只给 agent 读；entities.nbt 的语义与格式一个字不动）。 */
-    private static final EntityUnionStore entityUnionStore = new EntityUnionStore(unionScheduler);
 
     // ==================== 实体整份 payload 序列化（v2.35） ====================
 
@@ -226,31 +200,35 @@ public class VisionCollector {
     ) {}
 
     // ==================== 查询接口 ====================
+    // v2.55：全部转发到当前世界的 store 组；不在世界里 → IllegalStateException（调用方都在 try 内）。
 
+    /** 方块实体存储 —— 增量保存，自动去重。 */
     public static VisionBlockEntityStore getStore() {
-        return store;
+        return VisionWorldContext.require().blockEntities();
     }
 
+    /** 地形方块快照存储 —— 快照覆盖写（v2 起内容 = 本次可见方块，无 scannedSections）。 */
     public static VisionTerrainStore getTerrainStore() {
-        return terrainStore;
+        return VisionWorldContext.require().terrain();
     }
 
+    /** 实体轻量快照存储 —— 快照覆盖写（v2 起内容 = 本次可见实体，无 scannedSections）。 */
     public static VisionEntityStore getEntityStore() {
-        return entityStore;
+        return VisionWorldContext.require().entities();
     }
 
     /** v2.31：群系 cell 存储访问。 */
     public static VisionBiomeStore getBiomeStore() {
-        return biomeStore;
+        return VisionWorldContext.require().biomes();
     }
 
     /** v2.47：累积地形并集访问（只给采集端自身用——记忆端不知道这两个文件存在）。 */
     public static TerrainUnionStore getTerrainUnionStore() {
-        return terrainUnionStore;
+        return VisionWorldContext.require().terrainUnion();
     }
 
     /** v2.47：累积实体并集访问（同上）。 */
     public static EntityUnionStore getEntityUnionStore() {
-        return entityUnionStore;
+        return VisionWorldContext.require().entityUnion();
     }
 }

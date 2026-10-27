@@ -300,3 +300,94 @@ test('SOURCE_UNSTABLE: index entry without a region file is rejected', async () 
     NBT.removeDir(root)
   }
 })
+
+// ==================== v2.55：多世界记忆隔离（current.json 定位世界目录） ====================
+
+function writeTerrain(worldDir, block, updatedAt) {
+  const store = path.join(worldDir, 'terrain_union')
+  NBT.writeRegion(store, 'minecraft:overworld', 0, 0, 'blocks', NBT.compound({
+    '1,64,2': NBT.compound({ block: NBT.string(block), state: NBT.compound({}) })
+  }), updatedAt)
+  NBT.writeIndex(store, { 'minecraft:overworld': { '0,0': updatedAt } })
+}
+
+function writeCurrent(root, worldKey, extra = {}) {
+  fs.writeFileSync(path.join(root, 'current.json'), JSON.stringify({
+    worldKey, dir: `worlds/${worldKey}`, kind: 'singleplayer', label: worldKey, inWorld: true, since: Date.now(), ...extra
+  }))
+}
+
+test('current.json：按指针读当前世界目录；换世界后读到另一份、版本戳带 worldKey', async () => {
+  const root = NBT.makeTempDir()
+  try {
+    writeTerrain(path.join(root, 'worlds', 'sp-A-11111111'), 'minecraft:stone', 1000)
+    writeTerrain(path.join(root, 'worlds', 'sp-B-22222222'), 'minecraft:dirt', 1000)
+    // 根目录残留的旧数据不得被读到
+    writeTerrain(root, 'minecraft:bedrock', 1000)
+    writeCurrent(root, 'sp-A-11111111')
+
+    const loader = createSourceLoader({ visionRoot: root })
+    const a = await loader.load('terrain')
+    assert.equal(a.records[0].block, 'minecraft:stone')
+    assert.deepEqual(a.world, { key: 'sp-A-11111111', label: 'sp-A-11111111', inWorld: true })
+    assert.ok(a.version.startsWith('sp-A-11111111@'))
+
+    await sleep(20)
+    writeCurrent(root, 'sp-B-22222222', { inWorld: false })
+    assert.ok((await loader.version('terrain')).startsWith('sp-B-22222222@'), '换世界：版本戳跟着变')
+    const b = await loader.load('terrain')
+    assert.equal(b.records[0].block, 'minecraft:dirt')
+    assert.equal(b.world.inWorld, false)
+    assert.equal(loader.size(), 1, '换世界清掉旧世界的缓存')
+    assert.deepEqual(await loader.world(), b.world)
+  } finally {
+    NBT.removeDir(root)
+  }
+})
+
+test('current.json 缺失 → 回退根目录（v2.55 之前的布局），world = null', async () => {
+  const root = NBT.makeTempDir()
+  try {
+    writeTerrain(root, 'minecraft:stone', 1000)
+    const loader = createSourceLoader({ visionRoot: root })
+    const snapshot = await loader.load('terrain')
+    assert.equal(snapshot.records[0].block, 'minecraft:stone')
+    assert.equal(snapshot.world, null)
+    assert.equal(await loader.world(), null)
+  } finally {
+    NBT.removeDir(root)
+  }
+})
+
+test('current.json：dir 不在 worlds/ 下 / 非法 JSON → SOURCE_CORRUPT', async () => {
+  const root = NBT.makeTempDir()
+  try {
+    writeTerrain(root, 'minecraft:stone', 1000)
+    const loader = createSourceLoader({ visionRoot: root })
+    for (const dir of ['..', '../outside', 'worlds', 'worlds/../..', path.resolve(root, '..'), 'terrain_union']) {
+      fs.writeFileSync(path.join(root, 'current.json'), JSON.stringify({ worldKey: 'x', dir }))
+      await sleep(5)
+      await assert.rejects(loader.load('terrain'), (e) => e.code === 'SOURCE_CORRUPT', `dir=${dir}`)
+    }
+    fs.writeFileSync(path.join(root, 'current.json'), '{ not json')
+    await assert.rejects(loader.load('terrain'), (e) => e.code === 'SOURCE_CORRUPT')
+  } finally {
+    NBT.removeDir(root)
+  }
+})
+
+test('current.json：worlds/ 下的 junction 指到外面 → SOURCE_CORRUPT', async () => {
+  const root = NBT.makeTempDir()
+  const outside = NBT.makeTempDir()
+  try {
+    writeTerrain(outside, 'minecraft:stone', 1000)
+    fs.mkdirSync(path.join(root, 'worlds'), { recursive: true })
+    fs.symlinkSync(outside, path.join(root, 'worlds', 'evil'), 'junction')
+    writeCurrent(root, 'evil')
+    const loader = createSourceLoader({ visionRoot: root })
+    await assert.rejects(loader.load('terrain'), (e) => e.code === 'SOURCE_CORRUPT')
+  } finally {
+    NBT.removeDir(root)
+    NBT.removeDir(outside)
+  }
+})

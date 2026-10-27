@@ -64,7 +64,6 @@ import org.slf4j.Logger;
 public class VisionTerrainStore {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     private static final String FILE_NAME = "terrain.nbt";
     private static final String KEY_AGENT_POS = "agentPos";
     private static final String KEY_AGENT_YAW = "agentYaw";
@@ -116,8 +115,8 @@ public class VisionTerrainStore {
     /** v2.32：最近一次写入所属维（文件顶层 currentDimension；镜像权威源，每快照必写）。 */
     private String currentDimension = WorldsFile.LEGACY_DIMENSION;
 
-    public VisionTerrainStore() {
-        Path dir = Minecraft.getInstance().gameDirectory.toPath().resolve(DIR_NAME);
+    /** v2.55：{@code dir} = 当前世界目录（{@code stevex/vision/worlds/<worldKey>}，见 {@link VisionWorldContext}）。 */
+    public VisionTerrainStore(final Path dir) {
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {

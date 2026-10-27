@@ -56,7 +56,6 @@ import org.slf4j.Logger;
 public class VisionBiomeStore {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     /** v2.48：分片后的 store 目录名（原单文件名去掉 {@code .nbt}）。 */
     private static final String STORE_DIR_NAME = "biomes";
     /** v2.48：分片前的单文件（构造时若存在则拆分迁移并退役）。 */
@@ -72,8 +71,8 @@ public class VisionBiomeStore {
     private final Path storeDir;
     private final Path legacyFilePath;
 
-    public VisionBiomeStore() {
-        final Path dir = Minecraft.getInstance().gameDirectory.toPath().resolve(DIR_NAME);
+    /** v2.55：{@code dir} = 当前世界目录（{@code stevex/vision/worlds/<worldKey>}，见 {@link VisionWorldContext}）。 */
+    public VisionBiomeStore(final Path dir) {
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {

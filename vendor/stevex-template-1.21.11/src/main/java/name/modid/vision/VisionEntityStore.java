@@ -68,7 +68,6 @@ import org.slf4j.Logger;
 public class VisionEntityStore {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final String DIR_NAME = "stevex/vision";
     private static final String FILE_NAME = "entities.nbt";
     private static final String KEY_AGENT_POS = "agentPos";
     private static final String KEY_AGENT_YAW = "agentYaw";
@@ -109,8 +108,8 @@ public class VisionEntityStore {
     /** Disk state is restoration memory, not proof of a capture in this process. */
     private boolean capturedThisSession;
 
-    public VisionEntityStore() {
-        Path dir = Minecraft.getInstance().gameDirectory.toPath().resolve(DIR_NAME);
+    /** v2.55：{@code dir} = 当前世界目录（{@code stevex/vision/worlds/<worldKey>}，见 {@link VisionWorldContext}）。 */
+    public VisionEntityStore(final Path dir) {
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {

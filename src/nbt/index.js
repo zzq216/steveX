@@ -22,7 +22,7 @@ const { createSourceLoader, DEFAULT_TASK_ID } = require('./loader')
  * 定位：胶囊 `core.nbt.query` 的实现。宿主侧装载器（loader.js）+ 沙箱 body（query.js）。
  * 用法：
  *
- *   const api = createNbtQueryApi({ visionRoot })          // visionRoot 默认 steveX/run/stevex/vision
+ *   const api = createNbtQueryApi({ visionRoot })          // visionRoot = stevex/vision 根目录（v2.55 起经 current.json 定位到 worlds/<worldKey>/）
  *   const out = await api.query({
  *     path: 'entities',
  *     filters: { type: 'minecraft:item', 'item.id': 'minecraft:diamond', 'pos.x': { min: -64, max: 64 } },
@@ -53,7 +53,8 @@ function createNbtQueryApi(options = {}) {
    *
    * @param {object} params { path, filters?, fields, limit? }——四个参数必须是字面量（§3.1）
    * @param {object} [callOptions] { taskId, clock }（clock 仅测试注入）
-   * @returns {Promise<{ result: Array, matchedCount: number, sourceVersion: string }>}
+   * @returns {Promise<{ result: Array, matchedCount: number, sourceVersion: string, world: object|null }>}
+   *   world（v2.55）：数据来自哪个世界 { key, label, inWorld }；采集端还没写 current.json → null
    */
   async function query(params, callOptions = {}) {
     const normalized = validateParams(params)
@@ -71,7 +72,7 @@ function createNbtQueryApi(options = {}) {
       clock: callOptions.clock
     })
 
-    return { result, matchedCount, sourceVersion: snapshot.version }
+    return { result, matchedCount, sourceVersion: snapshot.version, world: snapshot.world ?? null }
   }
 
   /** 某个数据源的全部记录（data_shapes 统计结构与词表用）。同一套数据源白名单与任务级快照。 */
@@ -80,7 +81,7 @@ function createNbtQueryApi(options = {}) {
       throw new QueryError('LOAD_ERROR', `path must be one of ${SOURCE_PATHS.join(' / ')} (got ${JSON.stringify(path)})`)
     }
     const snapshot = await loader.load(path, { taskId: callOptions.taskId })
-    return { records: snapshot.records, sourceVersion: snapshot.version }
+    return { records: snapshot.records, sourceVersion: snapshot.version, world: snapshot.world ?? null }
   }
 
   return {
@@ -91,6 +92,8 @@ function createNbtQueryApi(options = {}) {
       if (!SOURCE_PATHS.includes(path)) throw new QueryError('LOAD_ERROR', `path must be one of ${SOURCE_PATHS.join(' / ')}`)
       return loader.version(path)
     },
+    /** 当前世界 { key, label, inWorld }；没有 current.json → null（v2.55） */
+    world: () => loader.world(),
     releaseTask: (taskId = DEFAULT_TASK_ID) => loader.releaseTask(taskId),
     clearCache: () => loader.clear(),
     cacheSize: () => loader.size(),
