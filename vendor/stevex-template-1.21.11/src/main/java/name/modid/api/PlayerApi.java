@@ -6,11 +6,27 @@ import java.util.List;
 import java.util.Map;
 import name.modid.AgentWebSocketServer;
 import name.modid.AgentWebSocketServer.WsHandler;
+import name.modid.mixin.DeathScreenAccessor;
+import name.modid.mixin.LivingEntityAccessor;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.DeathScreen;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.entity.LivingEntity;
 
-/** player API —— 生命值/饱食度/药水效果/状态标志/属性表 */
+/**
+ * player API —— 生命值/饱食度/药水效果/状态标志/属性表；死亡状态与重生（P2 实施细则 §8.2）。
+ *
+ * <p>{@code dead} ＝{@code isDeadOrDying()}（生命值 ≤ 0，死亡动画期间就为真）；{@code deathMessage} ＝当前界面是
+ * {@code DeathScreen} 时的死亡信息文本，否则 null。{@code player/respawn} 调 {@code LocalPlayer.respawn()}，
+ * 与死亡界面的"重生"按钮完全相同（DeathScreen.java:49-52）：发 {@code PERFORM_RESPAWN}（LocalPlayer.java:323-326），
+ * 服务端回 respawn 包后客户端自己关掉死亡界面（ClientPacketListener.java:1337-1339）——有服务端回读通道，走语义通道。
+ *
+ * <p>P3（实施细则 §2.2）补的都是人在屏幕上看得到的状态：{@code flags.onFire} ＝{@code displayFireAnimation()}
+ * （火焰渲染用的同一判据，与 vision 实体摘要的 {@code onFire} 同名同义）、{@code flags.inLava}、{@code flags.inPowderSnow}、
+ * {@code vitals.frozenTicks}；{@code lastDamage} ＝最近 2 秒内的受伤：服务端把伤害事件发给受伤者自己
+ * （ServerLevel.java:1166-1167），客户端在 {@code handleDamageEvent} 里记下来源与时刻（LivingEntity.java:1938-1949），
+ * {@code getLastDamageSource()} 超过 40 tick 返回 null（LivingEntity.java:1392-1397）。受伤时红闪、抖动、伤害音效都由它驱动。
+ */
 public class PlayerApi {
 
     private record PlayerData(
@@ -21,7 +37,10 @@ public class PlayerApi {
         boolean onGround, boolean inWater,
         boolean sprinting, boolean sneaking,
         List<Map<String, Object>> effects,
-        Map<String, Object> attributes
+        Map<String, Object> attributes,
+        boolean dead, String deathMessage,
+        boolean onFire, boolean inLava, boolean inPowderSnow, int frozenTicks,
+        Map<String, Object> lastDamage
     ) {}
 
     public static void register(Map<String, WsHandler> handlers) {
@@ -39,19 +58,42 @@ public class PlayerApi {
             vitals.put("armor",     d.armor);
             vitals.put("armorToughness", AgentWebSocketServer.f1(d.armorToughness));
             vitals.put("air",       d.air);
+            vitals.put("frozenTicks", d.frozenTicks);
 
             Map<String, Boolean> flags = new LinkedHashMap<>();
             flags.put("onGround",   d.onGround);
             flags.put("inWater",    d.inWater);
             flags.put("sprinting",  d.sprinting);
             flags.put("sneaking",   d.sneaking);
+            flags.put("onFire",     d.onFire);
+            flags.put("inLava",     d.inLava);
+            flags.put("inPowderSnow", d.inPowderSnow);
 
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("vitals",     vitals);
             map.put("flags",      flags);
             map.put("effects",    d.effects);
             map.put("attributes", d.attributes);
+            map.put("dead",       d.dead);
+            map.put("deathMessage", d.deathMessage);
+            map.put("lastDamage", d.lastDamage);
             return map;
+        });
+
+        handlers.put("player/respawn", params -> {
+            String error = AgentWebSocketServer.runOnClient(2_000, "Player respawn", ref -> {
+                var mc = Minecraft.getInstance();
+                var p = mc.player;
+                if (p == null) { ref.value = "player not connected"; return; }
+                if (!p.isDeadOrDying()) { ref.value = "player is not dead"; return; }
+                // 极限模式下死亡界面的按钮是"旁观"，不是重生（DeathScreen.java:47）
+                if (mc.level != null && mc.level.getLevelData().isHardcore()) { ref.value = "hardcore world: cannot respawn"; return; }
+                p.respawn();
+                ref.value = "";
+            });
+            if (error == null) throw new RuntimeException("player/respawn timed out");
+            if (!error.isEmpty()) throw new RuntimeException(error);
+            return Map.of("status", "ok");
         });
     }
 
@@ -71,6 +113,12 @@ public class PlayerApi {
                 effects.add(ef);
             }
 
+            String deathMessage = null;
+            if (Minecraft.getInstance().screen instanceof DeathScreen screen) {
+                var cause = ((DeathScreenAccessor) screen).getCauseOfDeath();
+                deathMessage = cause != null ? cause.getString() : "";
+            }
+
             ref.value = new PlayerData(
                 p.getHealth(), p.getMaxHealth(),
                 fd.getFoodLevel(), fd.getSaturationLevel(),
@@ -82,9 +130,24 @@ public class PlayerApi {
                 p.onGround(), p.isInWater(),
                 p.isSprinting(), p.isCrouching(),
                 effects,
-                readAttributes(p)
+                readAttributes(p),
+                p.isDeadOrDying(), deathMessage,
+                p.displayFireAnimation(), p.isInLava(), p.isInPowderSnow, p.getTicksFrozen(),
+                lastDamage(p)
             );
         });
+    }
+
+    /** 最近 2 秒内的受伤：{@code {type, ticksAgo, attacker?}}；没有 → null。attacker ＝造成伤害的实体类型（被僵尸打 → minecraft:zombie）。 */
+    private static Map<String, Object> lastDamage(LivingEntity p) {
+        var source = p.getLastDamageSource();
+        if (source == null) return null;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("type", source.typeHolder().unwrapKey().map(k -> k.identifier().toString()).orElse("unknown"));
+        out.put("ticksAgo", p.level().getGameTime() - ((LivingEntityAccessor) p).getLastDamageStamp());
+        var attacker = source.getEntity();
+        if (attacker != null) out.put("attacker", BuiltInRegistries.ENTITY_TYPE.getKey(attacker.getType()).toString());
+        return out;
     }
 
     /**

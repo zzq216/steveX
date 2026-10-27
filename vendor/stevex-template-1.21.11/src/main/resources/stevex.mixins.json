@@ -13,7 +13,9 @@
 	],
 	"client": [
 		"LevelRendererMixin",
-		"ChunkSectionsToRenderMixin"
+		"ChunkSectionsToRenderMixin",
+		"DeathScreenAccessor",
+		"LivingEntityAccessor"
 	],
 	"injectors": {
 		"defaultRequire": 1
