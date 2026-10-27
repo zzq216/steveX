@@ -42,3 +42,8 @@ __pycache__/
 
 # DSH is an exact npm dependency. Keep upstream source checkouts outside this
 # repository; steveX-owned plugins remain under dsh-plugins/.
+
+# Training products: the capsule library and the fast-tree version chain are written by the agent
+# during in-game runs and stay local (both directories are created on first save)
+/src/capsules/
+/src/bt/trees/fast/
