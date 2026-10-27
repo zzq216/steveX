@@ -183,7 +183,7 @@ test('biomes：quart cell（"qx,qy,qz" → quart 数组）', async () => {
   }
 })
 
-test('任务级缓存：同一 task 钉住快照，releaseTask 后才看到新数据', async () => {
+test('缓存按版本：版本没变复用同一份；文件变了同一任务里下一次查询就读到新数据（P2 §6.3）', async () => {
   const root = NBT.makeTempDir()
   try {
     const store = path.join(root, 'terrain_union')
@@ -203,16 +203,15 @@ test('任务级缓存：同一 task 钉住快照，releaseTask 后才看到新�
     await sleep(20)
     write('minecraft:diamond_ore', 2000)
 
-    const again = await loader.load('terrain', { taskId: 'taskA' })
-    assert.strictEqual(again, first) // 同一任务 → 同一份快照
-    assert.equal(again.records[0].block, 'minecraft:stone')
-
-    loader.releaseTask('taskA')
-    assert.equal(loader.size(), 0)
-
+    assert.notEqual(await loader.version('terrain'), first.version, '文件变了，只 stat 探到的版本跟着变')
     const fresh = await loader.load('terrain', { taskId: 'taskA' })
     assert.notStrictEqual(fresh, first)
     assert.equal(fresh.records[0].block, 'minecraft:diamond_ore')
+    assert.equal(await loader.version('terrain'), fresh.version)
+
+    const again = await loader.load('terrain', { taskId: 'taskB' })
+    assert.strictEqual(again, fresh, '版本没变：不重复解析，跨任务共用')
+    assert.equal(loader.size(), 1)
   } finally {
     NBT.removeDir(root)
   }

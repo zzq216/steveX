@@ -39,8 +39,9 @@ test('端到端：查询 → 投影 → 截断（§3.3 的形状）', async () =
     assert.equal(typeof out.sourceVersion, 'string')
     assert.equal(api.cacheSize(), 1)
 
-    api.releaseTask('task-1')
-    assert.equal(api.cacheSize(), 0)
+    assert.equal(await api.version('terrain'), out.sourceVersion, '只 stat 探到的版本与装载时一致')
+    api.releaseTask('task-1') // 兼容旧接口：缓存按版本，不再按任务钉住（P2 §6.3）
+    assert.equal(api.cacheSize(), 1)
   } finally {
     NBT.removeDir(root)
   }

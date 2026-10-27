@@ -12,8 +12,10 @@ const { getSourceDef } = require('./sources')
  *
  * 职责：
  *   - 懒装载：首次查询前读盘，树装载不动 I/O；
- *   - 任务级缓存：按 `(taskId, path)` 钉住一份快照，同一任务内所有调用点共享；
- *     任务结束由 `releaseTask(taskId)` 释放；
+ *   - 缓存按 `(path, 版本戳)`（P2 实施细则 §6.3，2026-10-25 改）：每次查询先只取版本戳（stat），
+ *     没变就用已解析的结果、变了就重新装载——同一任务里先后两次查询可以看到不同版本，
+ *     这是树里"复查"能发现记忆变化的前提；一致性只在一次装载之内。
+ *     原来按 `(taskId, path)` 钉住整个任务，复查永远读到旧数据，已废弃；`releaseTask` 保留为空操作；
  *   - 版本戳：单文件源 = mtime + 尺寸；分片源 = `_index.nbt` 的 mtime + 尺寸
  *     （containers 另并 `ender.nbt`）；无索引时退化为 `noidx:<max updatedAt>:<区文件数>`；
  *   - 读一致性：读前读后各取一次版本，不一致重读一次，仍不一致 = SOURCE_UNSTABLE；
@@ -208,6 +210,22 @@ async function loadSharded(def, visionRoot) {
   return { records, version }
 }
 
+/**
+ * 只取版本戳、不读内容（与装载时算出的版本同一套规则）。
+ * 取不到（文件缺失、分片源没有索引）→ null：调用方按"未知"处理，装载时照常重读。
+ */
+async function probeVersion(def, visionRoot) {
+  if (def.kind === 'single') {
+    const stat = await statOrNull(path.join(visionRoot, def.file))
+    return stat && stat.isFile() ? versionOf(stat) : null
+  }
+  const storeDir = path.join(visionRoot, def.dir)
+  const indexStat = await statOrNull(path.join(storeDir, INDEX_FILE))
+  if (!indexStat || !indexStat.isFile()) return null
+  const enderStat = def.enderFile ? await statOrNull(path.join(storeDir, def.enderFile)) : null
+  return `${versionOf(indexStat)}${enderStat ? `|ender:${versionOf(enderStat)}` : ''}`
+}
+
 async function withRetry(fn, retries) {
   let lastError
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -234,26 +252,25 @@ async function withRetry(fn, retries) {
 function createSourceLoader({ visionRoot, retries = 1 } = {}) {
   if (!visionRoot) throw new Error('createSourceLoader: visionRoot is required')
 
-  /** `${taskId}\u0000${path}` → snapshot；同一任务内钉住（§5.1） */
+  /** path → 最近一次装载的 snapshot（只留最新版本：旧版本没人引用后随 GC 回收） */
   const cache = new Map()
-  /** 在途装载（key 含代际），合并并发请求 */
+  /** 在途装载（key = path + 探到的版本），合并并发请求 */
   const pending = new Map()
-  /** 任务代际：releaseTask / clear 之后，旧的在途装载不得回填缓存 */
+  /** clear() 之后，旧的在途装载不得回填缓存 */
   let generation = 0
-  const taskEpochs = new Map()
 
-  function epochOf(taskId) {
-    return `${generation}:${taskEpochs.get(taskId) || 0}`
-  }
-
-  async function load(sourcePath, { taskId = DEFAULT_TASK_ID } = {}) {
+  /**
+   * @param {string} sourcePath
+   * @param {object} [options]  { taskId }：保留参数（调用方照旧传），不再影响缓存
+   */
+  async function load(sourcePath) {
     const def = getSourceDef(sourcePath)
-    const cacheKey = `${taskId}\u0000${sourcePath}`
-    const cached = cache.get(cacheKey)
-    if (cached) return cached
+    const probed = await probeVersion(def, visionRoot)
+    const cached = cache.get(sourcePath)
+    if (cached && probed !== null && cached.version === probed) return cached
 
-    const epoch = epochOf(taskId)
-    const pendingKey = `${cacheKey}\u0000${epoch}`
+    const gen = generation
+    const pendingKey = `${sourcePath}\u0000${probed}\u0000${gen}`
     let promise = pending.get(pendingKey)
     if (!promise) {
       promise = withRetry(
@@ -261,8 +278,7 @@ function createSourceLoader({ visionRoot, retries = 1 } = {}) {
         retries
       )
         .then((snapshot) => {
-          // 装载途中任务已结束 / 缓存已清空 → 结果照常返回，但不回填
-          if (epochOf(taskId) === epoch) cache.set(cacheKey, snapshot)
+          if (generation === gen) cache.set(sourcePath, snapshot)
           return snapshot
         })
         .finally(() => {
@@ -273,22 +289,21 @@ function createSourceLoader({ visionRoot, retries = 1 } = {}) {
     return promise
   }
 
-  function releaseTask(taskId = DEFAULT_TASK_ID) {
-    taskEpochs.set(taskId, (taskEpochs.get(taskId) || 0) + 1)
-    const prefix = `${taskId}\u0000`
-    for (const key of cache.keys()) {
-      if (key.startsWith(prefix)) cache.delete(key)
-    }
+  /** 当前版本戳（只 stat）；取不到 → null。修复请求的目录用它判断"记忆来源已换代"（P2-D17）。 */
+  async function version(sourcePath) {
+    return probeVersion(getSourceDef(sourcePath), visionRoot)
   }
+
+  /** 兼容旧接口：缓存不再按任务钉住，任务结束不用释放 */
+  function releaseTask() {}
 
   function clear() {
     generation += 1
-    taskEpochs.clear()
     cache.clear()
     pending.clear()
   }
 
-  return { load, releaseTask, clear, size: () => cache.size }
+  return { load, version, releaseTask, clear, size: () => cache.size }
 }
 
 module.exports = {
@@ -297,5 +312,6 @@ module.exports = {
   // 供测试/诊断
   extractIndex,
   loadSingle,
-  loadSharded
+  loadSharded,
+  probeVersion
 }

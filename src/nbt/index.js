@@ -31,8 +31,8 @@ const { createSourceLoader, DEFAULT_TASK_ID } = require('./loader')
  *   }, { taskId: 'task-1' })
  *   // → { result, matchedCount, sourceVersion }
  *
- * 行为树运行时就绪后：`query()` 的返回值映射到 §3.2 的三个输出，`taskId` 由任务实例提供，
- * 任务结束时调用 `releaseTask(taskId)` 释放快照缓存（§5.1）。
+ * 行为树运行时就绪后：`query()` 的返回值映射到 §3.2 的三个输出。
+ * 快照语义（P2 实施细则 §6.3）：每次查询读当前版本（版本没变就复用已解析的结果），不按任务钉住。
  */
 
 const DEFAULT_VISION_ROOT = path.resolve(__dirname, '../../run/stevex/vision')
@@ -74,8 +74,23 @@ function createNbtQueryApi(options = {}) {
     return { result, matchedCount, sourceVersion: snapshot.version }
   }
 
+  /** 某个数据源的全部记录（data_shapes 统计结构与词表用）。同一套数据源白名单与任务级快照。 */
+  async function loadRecords(path, callOptions = {}) {
+    if (!SOURCE_PATHS.includes(path)) {
+      throw new QueryError('LOAD_ERROR', `path must be one of ${SOURCE_PATHS.join(' / ')} (got ${JSON.stringify(path)})`)
+    }
+    const snapshot = await loader.load(path, { taskId: callOptions.taskId })
+    return { records: snapshot.records, sourceVersion: snapshot.version }
+  }
+
   return {
     query,
+    loadRecords,
+    /** 当前版本戳（只 stat，不装载）；取不到 → null */
+    version: (path) => {
+      if (!SOURCE_PATHS.includes(path)) throw new QueryError('LOAD_ERROR', `path must be one of ${SOURCE_PATHS.join(' / ')}`)
+      return loader.version(path)
+    },
     releaseTask: (taskId = DEFAULT_TASK_ID) => loader.releaseTask(taskId),
     clearCache: () => loader.clear(),
     cacheSize: () => loader.size(),
