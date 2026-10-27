@@ -6,7 +6,9 @@ REM ====================================================================
 REM  dsh launcher - double-click to start the DeepSeek Harness.
 REM
 REM  Usage:
-REM    double-click                        start the web profile
+REM    double-click                        start the stevex profile
+REM                                        (= dsh --profile stevex)
+REM    start-dsh.bat web                   start DSH's stock web profile
 REM    start-dsh.bat headless "do a task"  one-shot task
 REM    start-dsh.bat --version             print version
 REM  Everything after the script name is passed through to dsh.
@@ -45,7 +47,7 @@ goto :fail
 
 REM -- launch ----------------------------------------------------------
 :launch
-if "%~1"=="" (set "DSH_ARGS=web") else (set "DSH_ARGS=%*")
+if "%~1"=="" (set "DSH_ARGS=stevex") else (set "DSH_ARGS=%*")
 echo [launch] dsh %DSH_ARGS%
 echo.
 call npm run dsh -- %DSH_ARGS%
