@@ -1,0 +1,30 @@
+{"id":"task-01","text":"帮我合成一个工作台","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"task-02","text":"去附近砍 10 个橡木原木","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"task-03","text":"把箱子里的煤全部拿出来放进背包","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"task-04","text":"用熔炉把这些生牛肉烤熟","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"task-05","text":"麻烦你造一个 3x3 的圆石平台","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"task-06","text":"不挖铁了，改成去挖煤","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"task-07","text":"在这儿放一个火把","expect":{"domain":"minecraft","knowledge":"none","action":"execute","artifact":"none"}}
+{"id":"fact-01","text":"苦力怕被闪电劈中会变成高压苦力怕","expect":{"domain":"minecraft","knowledge":"fact","action":"none","artifact":"none"}}
+{"id":"fact-02","text":"记一下：木镐挖不了铁矿","expect":{"domain":"minecraft","knowledge":"fact","action":"none","artifact":"none"}}
+{"id":"fact-03","text":"你刚才说错了，工作台要 4 块木板，不是 2 块","expect":{"domain":"minecraft","knowledge":"fact","action":"none","artifact":"none"}}
+{"id":"fact-04","text":"末影人被看着眼睛时会攻击玩家","expect":{"domain":"minecraft","knowledge":"fact","action":"none","artifact":"none"}}
+{"id":"fact-05","text":"一组物品最多 64 个，雪球只能叠 16 个","expect":{"domain":"minecraft","knowledge":"fact","action":"none","artifact":"none"}}
+{"id":"both-01","text":"金苹果要 8 个金锭加一个苹果，帮我做一个","expect":{"domain":"minecraft","knowledge":"fact","action":"execute","artifact":"none"}}
+{"id":"both-02","text":"水桶浇岩浆源会变黑曜石，去弄 4 块黑曜石回来","expect":{"domain":"minecraft","knowledge":"fact","action":"execute","artifact":"none"}}
+{"id":"chat-01","text":"你好，今天心情怎么样","expect":{"domain":"general","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-02","text":"帮我写一个 Python 冒泡排序","expect":{"domain":"general","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-03","text":"下界要怎么去？","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-04","text":"你刚才那个任务完成了吗","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-05","text":"你都会做些什么？","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-06","text":"刚才那把镐做得不错","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-07","text":"附魔台需要哪些材料","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"chat-08","text":"你现在血量多少","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"stop-01","text":"先暂停一下手上的事","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"stop-02","text":"放弃当前任务吧","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"none"}}
+{"id":"fast-01","text":"以后掉进水里就先往上游","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"fast_tree"}}
+{"id":"fast-02","text":"遇到骷髅的时候别硬拼，躲到方块后面","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"fast_tree"}}
+{"id":"fast-03","text":"删掉看到岩浆就后退的那条反应","expect":{"domain":"minecraft","knowledge":"none","action":"none","artifact":"fast_tree"}}
+{"id":"unsure-01","text":"铁好像不够用了","expect":{"domain":"minecraft","action":["none","unknown"],"artifact":"none"}}
+{"id":"unsure-02","text":"如果要做一张床需要什么","expect":{"domain":"minecraft","knowledge":"none","action":["none","unknown"],"artifact":"none"}}
+{"id":"unsure-03","text":"是不是该去睡觉了","expect":{"domain":"minecraft","knowledge":"none","action":["none","unknown"],"artifact":"none"}}

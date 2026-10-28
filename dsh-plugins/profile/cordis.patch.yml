@@ -65,7 +65,9 @@
           - unsupported
           - clarify
         provider:
-          mode: stub
+          mode: llm            # llm = 用当前会话的模型填槽；stub = 不判断（全按普通对话），离线调试用
+          timeoutMs: 15000
+          contextMessages: 6
 
     - id: stevex-agent
       name: '@stevex/dsh-agent'

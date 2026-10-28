@@ -1,5 +1,4 @@
-# steveX router — stage A (framework only).
-# Prompt content and handler bodies are placeholders until stage B.
+# steveX router — stage B: slots are filled by the session's model (docs/路由阶段B实施细则.md).
 - insert:
     - id: stevex-router
       name: '@stevex/dsh-router'
@@ -13,4 +12,6 @@
           - unsupported
           - clarify
         provider:
-          mode: stub
+          mode: llm            # llm = 用当前会话的模型填槽；stub = 不判断（全按普通对话），离线调试用
+          timeoutMs: 15000
+          contextMessages: 6

@@ -1,5 +1,12 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { RouterError } from './domain/router.js'
 import { HANDLER_IDS } from './handlers.js'
+import { DEFAULT_PROMPTS_DIR } from './prompts.js'
+
+/** 路由日志默认写到 steveX/runtime/router/（runtime/ 不进 git）。 */
+export const DEFAULT_LOG_DIR = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..'), 'runtime', 'router')
 
 const PROVIDER_MODES = new Set(['stub', 'llm'])
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -14,7 +21,8 @@ export function normalizeConfig(raw = {}) {
   const providerRaw = raw.provider ?? {}
   if (!isPlainObject(providerRaw)) throw new RouterError('BAD_CONFIG', 'config.provider must be an object')
 
-  const mode = providerRaw.mode ?? 'stub'
+  // 阶段 B（细则 D9）：默认用大模型填槽；测试与离线开发显式写 stub
+  const mode = providerRaw.mode ?? 'llm'
   if (!PROVIDER_MODES.has(mode)) {
     throw new RouterError('BAD_CONFIG', `config.provider.mode must be stub or llm (got ${JSON.stringify(mode)})`)
   }
@@ -24,10 +32,24 @@ export function normalizeConfig(raw = {}) {
   if (providerRaw.fillSlots !== undefined && providerRaw.fillSlots !== null && typeof providerRaw.fillSlots !== 'function') {
     throw new RouterError('BAD_CONFIG', 'config.provider.fillSlots must be a function (programmatic use only)')
   }
-  const promptsDir = providerRaw.promptsDir ?? raw.promptsDir ?? null
-  if (promptsDir !== null && (typeof promptsDir !== 'string' || promptsDir === '')) {
-    throw new RouterError('BAD_CONFIG', 'config.provider.promptsDir must be a non-empty string (or null)')
+  const promptsDir = providerRaw.promptsDir ?? raw.promptsDir ?? DEFAULT_PROMPTS_DIR
+  if (typeof promptsDir !== 'string' || promptsDir === '') {
+    throw new RouterError('BAD_CONFIG', 'config.provider.promptsDir must be a non-empty string (or null = bundled prompts)')
   }
+
+  // 大模型调用（细则 §5）：route null = 跟会话同一个 provider/model；reasoningEffort null = 模型支持的最低档
+  const route = providerRaw.route ?? null
+  if (route !== null && (!isPlainObject(route) || !nonEmpty(route.provider) || !nonEmpty(route.model))) {
+    throw new RouterError('BAD_CONFIG', 'config.provider.route must be { provider, model } (or null = the session model)')
+  }
+  const reasoningEffort = providerRaw.reasoningEffort ?? null
+  if (reasoningEffort !== null && !nonEmpty(reasoningEffort)) {
+    throw new RouterError('BAD_CONFIG', 'config.provider.reasoningEffort must be a non-empty string (or null = lowest)')
+  }
+  const maxTokens = positiveInt(providerRaw.maxTokens ?? 1024, 'config.provider.maxTokens')
+  const timeoutMs = positiveInt(providerRaw.timeoutMs ?? 15000, 'config.provider.timeoutMs')
+  const contextMessages = nonNegativeInt(providerRaw.contextMessages ?? 6, 'config.provider.contextMessages')
+  const contextChars = positiveInt(providerRaw.contextChars ?? 400, 'config.provider.contextChars')
 
   const confidenceThreshold = raw.confidenceThreshold ?? 0.7
   if (typeof confidenceThreshold !== 'number' || !Number.isFinite(confidenceThreshold)
@@ -53,6 +75,11 @@ export function normalizeConfig(raw = {}) {
     seen.add(id)
   }
 
+  const logDir = raw.logDir === undefined ? DEFAULT_LOG_DIR : raw.logDir
+  if (logDir !== null && !nonEmpty(logDir)) {
+    throw new RouterError('BAD_CONFIG', 'config.logDir must be a non-empty string (or null = no routing log)')
+  }
+
   const logger = raw.logger === undefined ? console : raw.logger
   if (logger !== null && (typeof logger !== 'object' || Array.isArray(logger))) {
     throw new RouterError('BAD_CONFIG', 'config.logger must be an object or null')
@@ -63,11 +90,32 @@ export function normalizeConfig(raw = {}) {
       mode,
       stubSlots: providerRaw.stubSlots ?? null,
       fillSlots: providerRaw.fillSlots ?? null,
-      promptsDir
+      promptsDir,
+      route: route === null ? null : { provider: route.provider, model: route.model },
+      reasoningEffort,
+      maxTokens,
+      timeoutMs,
+      contextMessages,
+      contextChars
     },
     confidenceThreshold,
     clarifyMaxTurns,
     enabledHandlers: [...enabledHandlers],
+    logDir,
     logger
   }
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value !== ''
+}
+
+function positiveInt(value, name) {
+  if (!Number.isInteger(value) || value < 1) throw new RouterError('BAD_CONFIG', `${name} must be an integer >= 1`)
+  return value
+}
+
+function nonNegativeInt(value, name) {
+  if (!Number.isInteger(value) || value < 0) throw new RouterError('BAD_CONFIG', `${name} must be an integer >= 0`)
+  return value
 }

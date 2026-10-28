@@ -2,7 +2,7 @@
   "name": "@stevex/dsh-router",
   "version": "0.0.1",
   "private": true,
-  "description": "Slot-based routing framework for steveX, packaged as a DSH/Cordis plugin (stage A: framework only)",
+  "description": "Slot-based routing framework for steveX, packaged as a DSH/Cordis plugin (stage B: slots filled by the session model)",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -21,6 +21,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "demo": "node scripts/router-demo.js"
+    "demo": "node scripts/router-demo.js",
+    "eval": "node scripts/router-eval.js"
   }
 }

@@ -8,6 +8,7 @@ import {
   defaultSlots,
   hasNonNoneIntent,
   needsClarification,
+  resolveUnsure,
   validateSlotJson
 } from '../src/domain/slots.js'
 import { makeSlots } from './helpers.js'
@@ -101,4 +102,14 @@ test('hasNonNoneIntent 只看非 none 的意图', () => {
   assert.equal(hasNonNoneIntent(makeSlots({ action: 'execute' }).slots), true)
   assert.equal(hasNonNoneIntent(makeSlots({ artifact: 'fast_tree' }).slots), true)
   assert.equal(hasNonNoneIntent(makeSlots({ knowledge: 'unknown' }).slots), false)
+})
+
+test('resolveUnsure：拿不准的决定性槽位按 none，确定的保留，clarification 清空', () => {
+  const input = validateSlotJson(makeSlots({ knowledge: 'fact', action: 'unknown', artifact: 'fast_tree', confidences: { artifact: 0.2 }, clarification: '?' }))
+  const out = resolveUnsure(input, 0.7)
+  assert.equal(out.slots.knowledge.value, 'fact')
+  assert.deepEqual(out.slots.action, { value: 'none', confidence: 1, payload: null })
+  assert.equal(out.slots.artifact.value, 'none')
+  assert.equal(out.clarification, null)
+  assert.equal(input.slots.action.value, 'unknown')
 })

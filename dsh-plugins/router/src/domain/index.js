@@ -6,7 +6,8 @@ export {
   defaultSlots,
   validateSlotJson,
   needsClarification,
-  hasNonNoneIntent
+  hasNonNoneIntent,
+  resolveUnsure
 } from './slots.js'
 
 export { RouterError, createRouter } from './router.js'

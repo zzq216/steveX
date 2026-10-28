@@ -11,10 +11,10 @@
 ## 架构
 
 ```
-DSH Web 界面（会话里发 /bt task 做一把木镐）
+DSH Web 界面（会话里直接说「做一把木镐」，或 /bt task 做一把木镐）
    ↓
 DSH + dsh-plugins/profile
-   ├─ @stevex/dsh-router   回合路由（task / fact / default …）
+   ├─ @stevex/dsh-router   回合路由：用会话的模型判断每条消息的意图（task / fact / 闲聊 …）
    └─ @stevex/dsh-agent    行为树执行器、胶囊库、复盘、事实库、给大模型的工具
           ↓ ws://127.0.0.1:25550   {id, method, params} → {id, ok, data | error}
 采集端 mod（真实世界客户端）
@@ -149,11 +149,13 @@ npm run dsh -- stevex
 
 ### 3. 新建会话并下达任务
 
-steveX 人设只对**新建**的会话生效，旧会话保留它创建时的预设。在新会话里：
+steveX 人设只对**新建**的会话生效，旧会话保留它创建时的预设。在新会话里直接说：
 
 ```
-/bt task 做一把木镐
+做一把木镐
 ```
+
+路由会先用当前会话的模型判断这条消息的意图（要做事 / 教它一条事实 / 普通聊天 / 想改快树），要做事就开任务；拿不准时会先问你一句。想跳过判断、明确下指令就用 `/bt task 做一把木镐`。每次判断记在 `runtime/router/<会话 id>.jsonl`。
 
 agent 先写大纲，再逐个展开，执行器在游戏里执行。任务结束后自动复盘，用得好的子树和代码存进胶囊库。
 
@@ -331,6 +333,7 @@ curl -s -X POST http://localhost:8090/api/mod/batch/<batchId>/stop     # 中止�
 ### 日志与数据
 
 - 任务事件与树版本：`runtime/tasks/<taskId>/`
+- 路由判断记录：`runtime/router/<会话 id>.jsonl`（槽位、命中的 handler、耗时；不记原话）
 - 记忆文件：`vendor/stevex-template-1.21.11/run/stevex/vision/`
 - 两个 mod 的游戏日志：各自 `run/logs/latest.log`
 
@@ -339,6 +342,7 @@ curl -s -X POST http://localhost:8090/api/mod/batch/<batchId>/stop     # 中止�
 ## 常见问题
 
 - **`/bt task …` 被当成普通消息发给了模型**：多半是进了不带插件的 `web` profile（例如用了 `npm run dsh -- web` 或 `.\start-dsh.bat web`），或者会话不是新建的。用 `npm run dsh -- --profile stevex --dump-config` 确认插件在，再新建会话。
+- **直接说"做一把木镐"没有开任务，只当成聊天**：看 `runtime/router/` 里这条的记录。`degraded` 有值 = 路由调用失败（超时 / 模型出错），模型会提示你改用 `/bt task`；没有这个目录 = 路由可能还在 `stub` 模式（不判断，全按聊天）——看 DSH 设置 → 插件 → `stevex-router` 的配置，`provider.mode` 是 `stub` 就改成 `llm` 或删掉这一项（默认就是 `llm`）。
 - **agent 说查不到配方**：没生成 `dsh-plugins/agent/data/recipes.json`（首次准备第 3 步）。
 - **`mc_source_*` 不可用**：没有 `1.21.11_src/`（首次准备第 4 步）。
 - **NBT 查询报 `SOURCE_MISSING`**：采集端还没在当前世界做过快照，或从没进入过世界。

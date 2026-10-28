@@ -1,11 +1,13 @@
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { createRouter } from './domain/router.js'
 import { createTurnScope } from './domain/turn_scope.js'
-import { defaultSlots } from './domain/slots.js'
+import { defaultSlots, resolveUnsure } from './domain/slots.js'
 import { createRouterProvider } from './provider.js'
-import { createHandlers } from './handlers.js'
+import { createHandlers, userText } from './handlers.js'
 import { normalizeConfig } from './config.js'
-import { loadPromptBlocks } from './prompts.js'
+import { loadPromptBlocks, renderTemplate } from './prompts.js'
+import { createLlmFillSlots, historyLines } from './llm_slots.js'
+import { createRouterLog, routeRecord } from './router_log.js'
 
 /**
  * steveX 路由插件（DSH / Cordis 适配层，设计文档 §17）。
@@ -13,16 +15,14 @@ import { loadPromptBlocks } from './prompts.js'
  * 这是本包**唯一**接触 DSH 的文件：
  *   - 把纯逻辑挂到 `ctx.router` 服务；
  *   - 监听 `agent/pre-step`（每个 step 触发，只在 step=1、且本 step 有人说的话时填槽）；
- *     handler 返回的 `prompt` 作为一条 `stevex-router` 来源的消息追加进本 step；
+ *     handler 返回的 `prompt`（以及降级 / 追问上限的说明）合成一条 `stevex-router` 来源的消息追加进本 step；
+ *   - llm 模式下用 `ctx.llm` 发一次独立的短调用填槽（不进会话历史，只进路由日志；阶段 B 细则 §3 / §5）；
  *   - 监听 `agent/turn-stopping`，统一清空 turn scope（§17.5.2）。
  *
  * 执行器发来的请求（来源 `stevex-bt`）已经知道自己是什么，不经路由（集成方案 I3 / §4.1）。
  *
  * 注册的提示词/工具/监听都由 Cordis 的作用域管理，插件卸载即回滚；
  * 回合级资源走 handler 上报的 turn scope，turn 结束无条件清空。
- *
- * 阶段 A：provider 用 stub；P1 起 `task` handler 是真实实现（经 steveX agent 插件的 planInTurn），
- * 其余 handler 与 llm provider 的内容在阶段 B。
  */
 
 export const name = 'stevex-router'
@@ -31,28 +31,30 @@ export const inject = []
 export function apply(ctx, rawConfig = {}) {
   const config = normalizeConfig(rawConfig)
   const router = createRouter({ clarifyThreshold: config.confidenceThreshold })
-  const provider = createRouterProvider(config.provider)
-  // agent 插件是可选依赖：没装时 task handler 报错（onFailure: continue），其余照常
-  const handlers = createHandlers({
-    enabled: config.enabledHandlers,
-    // Cordis 的 ctx.get 读可选服务（不进 inject）；测试夹具没有 get，直接读属性
-    planner: () => (typeof ctx.get === 'function' ? ctx.get('stevexBt') : ctx.stevexBt) ?? null
-  })
+  // Cordis 的 ctx.get 读可选服务（不进 inject）；测试夹具没有 get，直接读属性
+  const optional = (service) => (typeof ctx.get === 'function' ? ctx.get(service) : ctx[service]) ?? null
+  // agent 插件是可选依赖：没装时 task / fact handler 报错（onFailure: continue），其余照常
+  const handlers = createHandlers({ enabled: config.enabledHandlers, planner: () => optional('stevexBt') })
 
   for (const handler of handlers) router.registerHandler(handler)
 
-  // llm 模式下先校验提示词内容；缺失/为空/仍带占位标记 = 拒绝上线。
-  let prompts = null
-  if (config.provider.mode === 'llm' && config.provider.promptsDir) {
-    prompts = loadPromptBlocks(config.provider.promptsDir)
-  }
+  // 提示词缺失 / 为空 / 仍带占位标记 = 拒绝上线（设计方案 §6）
+  const prompts = loadPromptBlocks(config.provider.promptsDir)
+  const llmMode = config.provider.mode === 'llm'
+  const provider = createRouterProvider({
+    ...config.provider,
+    fillSlots: llmMode ? (config.provider.fillSlots ?? createLlmFillSlots({ prompts, complete })) : null
+  })
+  const routerLog = createRouterLog(config.logDir)
 
   /** turn id → TurnScope */
   const scopes = new Map()
   /** turn id → 最近一次路由结果（调试/测试） */
   const pending = new Map()
-  /** agent → 连续追问次数（追问上限在阶段 B 的话术里使用） */
+  /** 会话 → 连续追问次数 */
   const clarifyCounts = new Map()
+  /** 会话 → 上一次追问 { question, userText }：下一条消息填槽时放进 [CONTEXT]（细则 D5） */
+  const clarifyState = new Map()
 
   const service = {
     registerHandler: router.registerHandler,
@@ -90,49 +92,141 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
+  /**
+   * 一次独立的模型调用（细则 §5）：默认跟会话同一个 provider/model、该模型支持的最低推理档。
+   * 不写进会话历史；人取消回合或超时都经 signal 中止。
+   */
+  async function complete({ system, user, signal, agent }) {
+    const llm = optional('llm')
+    if (typeof llm?.prepareCall !== 'function') throw new Error('the llm service is not available')
+    const route = config.provider.route
+      ?? (agent?.options?.provider && agent?.options?.model ? { provider: agent.options.provider, model: agent.options.model } : null)
+    if (!route) throw new Error('no model route: the session has no provider/model (set provider.route)')
+    const effort = config.provider.reasoningEffort
+    const call = await llm.prepareCall({ ...route, maxTokens: config.provider.maxTokens }, signal, (controls, model) => {
+      const chosen = effort ?? model?.reasoning?.efforts?.[0]?.id
+      return chosen === undefined ? controls : { ...controls, reasoningEffort: chosen }
+    })
+    const sessionId = agent?.session?.id
+    const assembler = new BlockAssembler()
+    const stream = call.stream({
+      ...call.config,
+      system,
+      messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
+      ...(sessionId === undefined ? {} : { sessionId }),
+      signal
+    })
+    for await (const chunk of stream) assembler.push(chunk)
+    signal?.throwIfAborted?.()
+    const finish = assembler.finish
+    if (finish?.kind === 'error' || finish?.kind === 'aborted') throw new Error(finish.failure?.message ?? `model call ${finish.kind}`)
+    const text = assembler.blocks().filter((block) => block.type === 'text').map((block) => block.text).join('')
+    return { text, model: `${route.provider}/${route.model}` }
+  }
+
+  function historyOf(agent, messages) {
+    if (config.provider.contextMessages === 0) return []
+    let history = []
+    try {
+      history = agent?.session?.deriveMessages?.() ?? []
+    } catch (error) {
+      config.logger?.warn?.(`[stevex-router] could not read session history: ${error?.message ?? String(error)}`)
+    }
+    return historyLines(history, {
+      limit: config.provider.contextMessages,
+      chars: config.provider.contextChars,
+      exclude: new Set((messages ?? []).map((message) => message?.id).filter(Boolean))
+    })
+  }
+
+  /** 人取消回合 → 路由调用一起停；另加硬超时。 */
+  function routeSignal(turnSignal) {
+    const timeout = AbortSignal.timeout(config.provider.timeoutMs)
+    return turnSignal instanceof AbortSignal ? AbortSignal.any([turnSignal, timeout]) : timeout
+  }
+
   async function route(payload) {
-    const providerContext = {
+    const key = agentKey(payload.agent)
+    const text = userText(payload.messages)
+    const previous = clarifyState.get(key) ?? null
+    const trace = {}
+    const started = Date.now()
+    let slotJson = await provider.fillSlots({
       turn: payload.turn,
       step: payload.step,
       messages: payload.messages,
       agent: payload.agent,
-      prompts
-    }
-    const slotJson = await provider.fillSlots(providerContext)
+      prompts,
+      userText: text,
+      history: llmMode ? historyOf(payload.agent, payload.messages) : [],
+      pending: previous,
+      signal: llmMode ? routeSignal(payload.signal) : undefined,
+      trace
+    })
+    trace.latencyMs = Date.now() - started
 
-    const key = agentKey(payload.agent)
-    const selected = router.decide(slotJson)
+    // 追问上限（细则 D6）：已经连续追问 clarifyMaxTurns 次仍判不出 → 不再追问，拿不准的按 none 走
+    let notice = null
+    let selected = router.decide(slotJson)
     let clarifyCount = clarifyCounts.get(key) ?? 0
+    if (selected.exclusive && clarifyCount >= config.clarifyMaxTurns) {
+      slotJson = resolveUnsure(selected.slots, config.confidenceThreshold)
+      notice = { kind: 'clarify-limit' }
+      selected = router.decide(slotJson)
+    }
     if (selected.exclusive) {
       clarifyCount += 1
       clarifyCounts.set(key, clarifyCount)
     } else {
+      clarifyCount = 0
       clarifyCounts.delete(key)
+      clarifyState.delete(key)
     }
 
     const result = await router.run(slotJson, buildContext(payload, clarifyCount))
-    pending.set(payload.turn, { slotJson, ...result })
+    if (selected.exclusive) {
+      const question = result.parts.find((part) => part.id === 'clarify')?.result?.question ?? ''
+      clarifyState.set(key, { question, userText: previous ? `${previous.userText}\n${text}` : text })
+    }
+    return finish(payload, { slotJson, result, notice, trace })
+  }
 
+  /** 路由调用失败（超时 / 模型不可用 / 两次输出都不合法）→ 按全 none 走 default，注入说明（细则 D7）。 */
+  async function degrade(payload, error) {
+    const reason = describeFailure(error)
+    config.logger?.warn?.(`[stevex-router] routing failed: ${error?.message ?? String(error)}; treating as ordinary conversation`)
+    const key = agentKey(payload.agent)
+    clarifyCounts.delete(key)
+    clarifyState.delete(key)
+    const slotJson = defaultSlots()
+    slotJson.reason = `router failure: ${error?.message ?? String(error)}`
+    const result = await router.run(slotJson, buildContext(payload, 0))
+    return finish(payload, { slotJson, result, notice: { kind: 'degraded', reason }, degraded: reason })
+  }
+
+  function describeFailure(error) {
+    if (error?.name === 'TimeoutError') return `路由超时（${Math.round(config.provider.timeoutMs / 1000)} 秒）`
+    if (error?.code === 'ROUTER_OUTPUT_INVALID') return '路由模型两次输出都不合法'
+    const message = String(error?.message ?? error)
+    return `路由调用失败：${message.length > 120 ? `${message.slice(0, 119)}…` : message}`
+  }
+
+  function finish(payload, { slotJson, result, notice, trace = {}, degraded = null }) {
+    pending.set(payload.turn, { slotJson, ...result, notice })
     const handlerIds = result.decision.order.join(',') || 'none'
     config.logger?.info?.(
       `[stevex-router] turn=${payload.turn} step=${payload.step} handlers=${handlerIds} `
-      + `parts=${result.parts.length} errors=${result.errors.length} clarify=${clarifyCount}`
+      + `parts=${result.parts.length} errors=${result.errors.length} clarify=${clarifyCounts.get(agentKey(payload.agent)) ?? 0}`
+      + `${notice ? ` notice=${notice.kind}` : ''}${trace.latencyMs !== undefined ? ` ${trace.latencyMs}ms` : ''}`
     )
-
-    return result
-  }
-
-  async function clarifyFallback(payload, error) {
-    config.logger?.warn?.(
-      `[stevex-router] routing failed: ${error?.message ?? String(error)}; falling back to clarify`
-    )
-    const fallback = defaultSlots()
-    fallback.reason = `router failure: ${error?.message ?? String(error)}`
-    fallback.clarification = '路由失败，请重试或换个说法。'
-    clarifyCounts.set(agentKey(payload.agent), 1)
-    const result = await router.run(fallback, buildContext(payload, 1))
-    pending.set(payload.turn, { slotJson: fallback, ...result })
-    return result
+    try {
+      routerLog.write(agentKey(payload.agent), routeRecord({
+        sessionId: agentKey(payload.agent), turn: payload.turn, mode: config.provider.mode, trace, slotJson, result, notice: notice?.kind ?? null, degraded
+      }))
+    } catch (error) {
+      config.logger?.warn?.(`[stevex-router] could not write the routing log: ${error?.message ?? String(error)}`)
+    }
+    return { result, notice }
   }
 
   ctx.on('agent/pre-step', async (payload, next) => {
@@ -145,28 +239,36 @@ export function apply(ctx, rawConfig = {}) {
     const messages = decision.messages ?? []
     if (messages.length > 0 && !messages.some((message) => message?.source?.kind === 'user')) return decision
 
-    let result = null
+    let outcome = null
     try {
-      result = await route(payload)
+      outcome = await route(payload)
     } catch (error) {
+      // 人取消了回合：不降级、不注入
+      if (payload.signal?.aborted) return decision
       try {
-        result = await clarifyFallback(payload, error)
+        outcome = await degrade(payload, error)
       } catch (fallbackError) {
-        config.logger?.warn?.(
-          `[stevex-router] clarify fallback failed: ${fallbackError?.message ?? String(fallbackError)}`
-        )
+        config.logger?.warn?.(`[stevex-router] degraded routing failed: ${fallbackError?.message ?? String(fallbackError)}`)
       }
     }
-    return withHandlerPrompts(decision, result)
+    return withHandlerPrompts(decision, outcome)
   }, { prepend: true })
 
-  /** handler 给出的模型可见正文 → 本 step 末尾的一条消息（随会话日志落盘，可回放）。 */
-  function withHandlerPrompts(decision, result) {
-    const parts = (result?.parts ?? []).filter((part) => typeof part.result?.prompt === 'string' && part.result.prompt)
-    if (parts.length === 0) return decision
+  /** handler 给出的模型可见正文（与降级 / 追问上限的说明）→ 本 step 末尾的一条消息（随会话日志落盘，可回放）。 */
+  function withHandlerPrompts(decision, outcome) {
+    const parts = (outcome?.result?.parts ?? []).filter((part) => typeof part.result?.prompt === 'string' && part.result.prompt)
+    const notice = outcome?.notice
+      ? renderTemplate(prompts.defaultSections[outcome.notice.kind], { reason: outcome.notice.reason ?? '' })
+      : null
+    const texts = [...(notice ? [notice] : []), ...parts.map((part) => part.result.prompt)]
+    if (texts.length === 0) return decision
     const message = createUserMessage({
-      content: [{ type: 'text', text: parts.map((part) => part.result.prompt).join('\n\n') }],
-      source: { kind: 'stevex-router', handlers: parts.map((part) => part.id) }
+      content: [{ type: 'text', text: texts.join('\n\n') }],
+      source: {
+        kind: 'stevex-router',
+        handlers: parts.map((part) => part.id),
+        ...(outcome.notice ? { notice: outcome.notice.kind } : {})
+      }
     })
     return { ...decision, messages: [...(decision.messages ?? []), message] }
   }
@@ -193,6 +295,7 @@ export function apply(ctx, rawConfig = {}) {
     scopes.clear()
     pending.clear()
     clarifyCounts.clear()
+    clarifyState.clear()
     return Promise.all(tasks).then(() => undefined)
   })
 }

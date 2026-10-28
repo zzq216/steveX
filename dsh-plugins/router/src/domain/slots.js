@@ -131,3 +131,16 @@ export function hasNonNoneIntent(slots) {
     return value !== 'none' && value !== 'unknown'
   })
 }
+
+/**
+ * 追问达到上限后（阶段 B 细则 D6）：仍拿不准的决定性槽位按 none 处理——不开任务、不写事实，
+ * clarification 清空，走正常编排。
+ */
+export function resolveUnsure(slotJson, threshold = 0.7) {
+  const slots = { ...slotJson.slots }
+  for (const name of DECISIVE_SLOTS) {
+    const slot = slots[name]
+    if (slot.value === 'unknown' || slot.confidence < threshold) slots[name] = { value: 'none', confidence: 1, payload: null }
+  }
+  return { ...slotJson, slots, clarification: null }
+}
