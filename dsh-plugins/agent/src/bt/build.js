@@ -3,6 +3,10 @@ import {
   Condition, Action, Steps, Compute, SubTree, PendingExpansion
 } from './nodes.js'
 import { checkResolvedInputs, checkOutputs } from '../capsules/signature.js'
+import { STATE_SOURCES } from './validator.js'
+
+/** 节点没在 read 里声明的状态源：沙箱里读它们会抛错，而不是静默拿到 undefined。 */
+const unreadOf = (read) => STATE_SOURCES.filter((s) => !(read ?? []).includes(s))
 
 /**
  * 执行格式（行为树设计 §8.1）→ 运行时节点对象。
@@ -38,7 +42,7 @@ export function buildTree(spec, { registry, capsules = null }) {
       test(snapshot, params) {
         const problems = checkResolvedInputs(e.signature, params)
         if (problems.length) throw new Error(`${node.ref}: ${problems.join('; ')}`)
-        const value = sandbox.run(e.body, params, { state: snapshot, timeoutMs: sandbox.conditionTimeoutMs })
+        const value = sandbox.run(e.body, params, { state: snapshot, timeoutMs: sandbox.conditionTimeoutMs, unread: unreadOf(node.read) })
         if (typeof value !== 'boolean') throw new Error(`${node.ref} must return true / false, got ${JSON.stringify(value)}`)
         return value
       }
@@ -55,7 +59,7 @@ export function buildTree(spec, { registry, capsules = null }) {
         if (problems.length) throw new Error(`${node.ref}: ${problems.join('; ')}`)
         const output = host
           ? await host.run(params, { taskId: ctx.taskId })
-          : capsules.sandbox.run(e.body, params, { state })
+          : capsules.sandbox.run(e.body, params, { state: state ?? {}, unread: unreadOf(node.read) })
         // 查询节点读到的数据源版本：修复请求的目录据此列出"记忆来源已换代"（P2-D17）
         if (host?.version && typeof output?.sourceVersion === 'string') {
           ctx.onQuery?.({ nodeId: node.id, ref: node.ref, source: params.path, version: output.sourceVersion, probe: () => host.version(params) })

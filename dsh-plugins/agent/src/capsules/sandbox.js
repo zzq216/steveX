@@ -31,10 +31,24 @@ globalThis.Date = undefined;
 globalThis.WebAssembly = undefined;
 `)
 
+// __unread：节点没在 read 里声明的状态源。代码读它们时直接抛错——否则读到 undefined，
+// 条件会静默按"没有"判断（task-20261027130758-2：read: [] 的界面判断恒判"已关"，关界面被跳过）。
 const INVOKE = new vm.Script(`
 (function () {
   if (typeof globalThis.__main !== 'function') throw new Error('the code must define function main(params, state)');
-  const out = globalThis.__main(JSON.parse(globalThis.__params), globalThis.__state === undefined ? undefined : JSON.parse(globalThis.__state));
+  let state = globalThis.__state === undefined ? undefined : JSON.parse(globalThis.__state);
+  const unread = globalThis.__unread === undefined ? [] : JSON.parse(globalThis.__unread);
+  if (state !== null && typeof state === 'object' && unread.length) {
+    state = new Proxy(state, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && unread.includes(key) && !Object.prototype.hasOwnProperty.call(target, key)) {
+          throw new Error('state.' + key + ' is not read by this node: add "' + key + '" to the node\\'s read (e.g. read: ["' + key + '"])');
+        }
+        return Reflect.get(target, key, receiver);
+      }
+    });
+  }
+  const out = globalThis.__main(JSON.parse(globalThis.__params), state);
   if (out !== null && typeof out === 'object' && typeof out.then === 'function') throw new Error('main must be synchronous (no async / Promise)');
   return out === undefined ? 'null' : JSON.stringify(out);
 })()
@@ -82,9 +96,11 @@ export class Sandbox {
 
   /**
    * 运行一次。超时 / 抛错 / 返回值不可序列化都抛 SandboxError。
+   * @param {object} [options]
+   * @param {string[]} [options.unread]  节点没声明 read 的状态源：代码读 state.<源> 时抛错（不静默给 undefined）
    * @returns {any} main 的返回值（经 JSON 往返）
    */
-  run(source, params, { state, timeoutMs } = {}) {
+  run(source, params, { state, timeoutMs, unread } = {}) {
     const script = this.compile(source)
     const budget = timeoutMs ?? this.timeoutMs
     const context = vm.createContext({}, {
@@ -93,6 +109,7 @@ export class Sandbox {
     })
     context.__params = JSON.stringify(params ?? {})
     context.__state = state === undefined ? undefined : JSON.stringify(state)
+    context.__unread = unread?.length ? JSON.stringify(unread) : undefined
     const deadline = Date.now() + budget
     let text
     try {

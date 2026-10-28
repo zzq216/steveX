@@ -328,17 +328,25 @@ function setupPlanner(ctx, config, runtime) {
   })
 
   // 出错结束的回合不经过 turn-stopping（首测：模型返回坏的工具参数 JSON → MALFORMED_RESPONSE），
-  // 不接住的话请求会一直等、挡住后面的任务。重试用 followup 开新回合，新回合按消息来源重新绑定
+  // 不接住的话请求会一直等、挡住后面的任务。重试用 followup 开新回合，新回合按消息来源重新绑定。
+  // agent/error 发出时出错的回合还在 running：此时 followup 只进收件箱、叫不醒驱动器（loop 的 wakeDriver
+  // 在非 idle 阶段直接丢掉这次唤醒），回合结束后也没人再开新回合——task-20261027122523-1 就停在这里。
+  // 所以等 agent 回到 idle 再 followup；不能在监听器里 await（回合要等监听器返回才能结束）。
+  const retryWhenIdle = (agent, message) => {
+    Promise.resolve(agent.whenIdle?.())
+      .then(() => ctx.agents.withoutInitiator(() => agent.followup(toMessage(message))))
+      .catch((e) => logger?.warn?.(`[bt] retry after turn error failed: ${e?.message ?? e}`))
+  }
   ctx.on('agent/error', ({ agent, turn, error }) => {
     factTurns.endTurn(agent.id, turn)
     const fast = fastBridge.onTurnError({ sessionId: agent.id, turn, error })
     if (fast !== undefined) {
-      if (fast?.retry) ctx.agents.withoutInitiator(() => agent.followup(toMessage(fast.retry)))
+      if (fast?.retry) retryWhenIdle(agent, fast.retry)
       return
     }
     releaseTurn(agent.id, turn)
     const result = bridge.onTurnError({ sessionId: agent.id, turn, error })
-    if (result?.retry) ctx.agents.withoutInitiator(() => agent.followup(toMessage(result.retry)))
+    if (result?.retry) retryWhenIdle(agent, result.retry)
   })
 
   ctx.effect(() => () => {

@@ -755,6 +755,8 @@ export class Executor extends EventEmitter {
   finishTask(state, reason, { by = state === 'done' ? 'tree' : 'executor' } = {}) {
     const task = this.task
     if (state === 'failed') this.releaseControls(task.taskId)
+    // 任务结束 = 没有在飞请求了（/bt abort 等路径不经过回答请求，不清的话 bt_view 会把死请求当成还在等）
+    task.pending = null
     task.state = state
     task.result = reason
     task.finishedBy = by

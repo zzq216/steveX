@@ -390,7 +390,13 @@ test('agent/error：绑定了请求的回合出错 → followup 一条重试消�
   await emit('agent/pre-step', { agent, turn: 1, step: 1 }, enter([agent.followups[0]]))
   assert.match(guardReason('mod_query', agent), /I13/)
 
+  // 和 DSH 一样：出错的回合在 agent/error 发出时还在跑，这时的 followup 叫不醒驱动器——必须等 idle 再发
+  let settle
+  agent.whenIdle = () => new Promise((resolve) => { settle = resolve })
   await emit('agent/error', { agent, turn: 1, step: 3, error: new Error('tool input is invalid JSON') })
+  assert.equal(agent.followups.length, 1, '回合还没结束：不能在 agent/error 里直接 followup')
+  settle()
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(agent.followups.length, 2)
   assert.equal(agent.followups[1].source.reason, 'retry')
   assert.match(agent.followups[1].content[0].text, /tool input is invalid JSON/)

@@ -96,6 +96,49 @@ test('Compute 的 read：状态作为第二个参数进沙箱，不进黑板', a
   assert.deepEqual(executor.task.blackboard.snapshot(), { stacks: 2 })
 })
 
+test('没声明 read 的状态源：代码一读就报错，不静默当成 undefined（task-20261027130758-2）', async () => {
+  const menuOpen = {
+    folder: 'code', name: 'test.menu-open',
+    signature: { inputs: { expected: { type: 'string', required: true } }, returns: 'bool' },
+    body: "function main(p, state) { var c = state.container || {}; return (c.type || 'none') === p.expected }"
+  }
+  const onlyParams = {
+    folder: 'code', name: 'test.flag',
+    signature: { inputs: { flag: { type: 'bool', required: true } }, returns: 'bool' },
+    body: 'function main(p) { return p.flag === true }'
+  }
+
+  // read: [] 的界面判断：原来恒判"已关"（expected none → 真）；现在节点失败，错误点名缺的 read
+  const { executor } = makeRuntime({ capsules: [menuOpen, onlyParams] })
+  const failures = []
+  executor.on('request', (r) => { if (r.type === 'failed') failures.push(r.evidence.error) })
+  executor.startTask({ tree: { cond: 'code/test.menu-open', read: [], params: { expected: 'none' } } })
+  await runUntil(executor, () => failures.length > 0 || executor.task.state === 'done')
+  assert.equal(executor.task.state === 'done', false, '不能再误判成立')
+  assert.match(failures[0], /state\.container is not read by this node: add "container"/)
+
+  // 声明了 read → 照常判断；只用 params 的条件不读状态，read: [] 不受影响
+  const ok = makeRuntime({ capsules: [menuOpen, onlyParams] }).executor
+  ok.startTask({ tree: { seq: 't', do: [
+    { cond: 'code/test.menu-open', read: ['container'], params: { expected: 'none' } },
+    { cond: 'code/test.flag', read: [], params: { flag: true } }
+  ] } })
+  await runUntil(ok, () => ok.task.state === 'done')
+
+  // Compute 同理：没 read 时读 state.inventory 报错
+  const counter = {
+    folder: 'code', name: 'test.count-unread',
+    signature: { outputs: { stacks: { type: 'int' } } },
+    body: 'function main(p, state) { return { stacks: state.inventory.slots.length } }'
+  }
+  const c = makeRuntime({ capsules: [counter] }).executor
+  const cFailures = []
+  c.on('request', (r) => { if (r.type === 'failed') cFailures.push(r.evidence.error) })
+  c.startTask({ tree: { compute: 'code/test.count-unread' } })
+  await runUntil(c, () => cFailures.length > 0 || c.task.state === 'done')
+  assert.match(cFailures[0], /state\.inventory is not read by this node/)
+})
+
 // ── JSON 查询 ───────────────────────────────────────────────────────────────
 
 test('core.json.query：树里查配方；参数只许字面量；白名单在装载期就拦下', { skip: allRecipes().length === 0 && 'data/recipes.json 未生成' }, async () => {
