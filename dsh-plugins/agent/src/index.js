@@ -9,7 +9,6 @@ import { Bridge, REFLECT_ONLY_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
 import { FactTurns } from './llm/fact_turns.js'
 import { FastBridge, FAST_ONLY_TOOLS, FAST_TOOLS } from './llm/fast_bridge.js'
 import { loadPrompts } from './llm/prompts.js'
-import { renderCatalog } from './llm/catalog.js'
 import { createTools } from './tools/index.js'
 import { METHODS, READ_METHODS } from './game/index.js'
 import { NBT_SOURCES } from './capsules/index.js'
@@ -239,10 +238,11 @@ function setupPlanner(ctx, config, runtime) {
   for (const tool of tools) ctx.effect(() => ctx.tools.register(defineTool(tool)))
 
   // ── 常驻系统提示词（§6.3）：只放很少变化的东西，不写 {{变量}} ──
+  // 命令 / 胶囊清单已删除（2026-10-28）：模型规划时本来就用 command_docs / capsule_search 查，清单是重复的，
+  // 且每存一条胶囊都会改写系统提示词
   const sections = [
     ['stevex:identity', prompts.system.identity],
-    ['stevex:authoring', prompts.system.authoring],
-    ['stevex:catalog', () => renderCatalog({ registry, library })]
+    ['stevex:authoring', prompts.system.authoring]
   ]
   sections.forEach(([sectionName, text], i) => {
     ctx.effect(() => ctx.systemPrompt.section({ name: sectionName, order: SECTION_ORDER + i * 10, text, interpolate: false }))

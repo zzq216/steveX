@@ -136,13 +136,12 @@ function loadPlugin(extra = {}) {
 
 const enter = (messages) => async () => ({ kind: 'enter', messages })
 
-test('装载：注册二十二个工具（含三个 fast_*、两个复盘工具、四个事实 / 源码工具）与三段系统提示词（不插值）', () => {
+test('装载：注册二十二个工具（含三个 fast_*、两个复盘工具、四个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
   const { tools, sections, dispose } = loadPlugin()
   assert.equal(tools.size, 22)
   assert.ok(tools.get('bt_submit_tree').output.schema, '经过 defineTool')
-  assert.deepEqual(sections.map((s) => s.name), ['stevex:identity', 'stevex:authoring', 'stevex:catalog'])
+  assert.deepEqual(sections.map((s) => s.name), ['stevex:identity', 'stevex:authoring'])
   assert.ok(sections.every((s) => s.interpolate === false))
-  assert.match(sections[2].text(), /code\/core\.json\.query/)
   dispose()
   assert.equal(tools.size, 0)
 })
