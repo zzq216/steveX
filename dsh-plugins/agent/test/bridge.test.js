@@ -228,8 +228,9 @@ test('I13：产出树的回合不准入读状态 / 查数据的工具；展开�
   assert.match(text, /log\.slot: \{slot: int, item: string\}/)
   assert.match(text, /log\.cells: list\(2\) of list\(2\) of int/)
   assert.match(text, /log\.found: bool/)
-  assert.doesNotMatch(text, /36|oak_log|true/, '具体值不出现在请求里')
-  assert.doesNotMatch(bridge.view().task.blackboard, /36|oak_log/)
+  // \b：任务 id 里的时间戳（如 …123644…）会含 "36"，只查独立的值
+  assert.doesNotMatch(text, /\b36\b|oak_log|\btrue\b/, '具体值不出现在请求里')
+  assert.doesNotMatch(bridge.view().task.blackboard, /\b36\b|oak_log/)
 })
 
 test('回合出错（如模型返回坏 JSON）：计一次不合法，发重试消息开新回合；用完 → 作废 / 任务失败', async () => {
@@ -261,4 +262,97 @@ test('回合出错（如模型返回坏 JSON）：计一次不合法，发重试
   bridge.onPreStep({ sessionId: 's1', turn, step: 1, messages: [{ source: delivered.at(-1).source }] })
   assert.match(bridge.onTurnError({ sessionId: 's1', turn, error: 'boom' }).retry.text, /bt_submit_expansion/)
   assert.equal(executor.task.pending.invalidAttempts, 1)
+})
+
+// ── 提示词与校验器不漂移（2026-10-28）──────────────────────────────────────
+// task-20261027130758-2 的 step 4：编写规则写着 writes 可用 "."（整个结果），运行时也支持，
+// 校验器却只对 Compute 拒绝，白耗一次不合法额度。下面两条测试保证"提示词里说可以的写法，提交时真的能过"。
+
+/** 提示词里所有 ```json 代码块（system/ 与 skills/）。 */
+function promptJsonBlocks() {
+  const dir = fileURLToPath(new URL('../prompts', import.meta.url))
+  const blocks = []
+  for (const sub of ['system', 'skills']) {
+    for (const file of fs.readdirSync(path.join(dir, sub)).filter((f) => f.endsWith('.md'))) {
+      const text = fs.readFileSync(path.join(dir, sub, file), 'utf8')
+      for (const match of text.matchAll(/```json\r?\n([\s\S]*?)```/g)) blocks.push({ file: `${sub}/${file}`, source: match[1] })
+    }
+  }
+  return blocks
+}
+
+test('提示词里的示例提交（带 tree 的 JSON 块）走真实提交路径都能通过', () => {
+  const submissions = []
+  for (const { file, source } of promptJsonBlocks()) {
+    let value
+    try {
+      value = JSON.parse(source)
+    } catch (error) {
+      // 不是 JSON 的块只能是写法示意（如 fast_author 的 <条件> 占位），不能是提交示例
+      assert.ok(!/"tree"\s*:/.test(source), `${file}: 示例提交不是合法 JSON：${error.message}`)
+      continue
+    }
+    if (value?.tree) submissions.push({ file, value })
+  }
+  assert.ok(submissions.length >= 1, '至少 authoring.md 里有一个示例提交')
+  for (const { file, value } of submissions) {
+    const { bridge } = setup()
+    const plan = bridge.startPlanning({ sessionId: 's1', instruction: 'x' })
+    const res = bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree: value.tree, code: value.code })
+    assert.equal(res.ok, true, `${file} 的示例提交被拒：\n${(res.errors ?? []).join('\n')}`)
+  }
+})
+
+test('编写规则里 writes 的每种写法都能通过校验（authoring.md「黑板」一条）', () => {
+  const { bridge } = setup()
+  const plan = bridge.startPlanning({ sessionId: 's1', instruction: 'x' })
+  const code = {
+    stats: {
+      signature: { inputs: {}, outputs: { total: { type: 'int' }, best: { type: 'object' } } },
+      body: 'function main() { return { total: 3, best: { slot: 9, item: "oak_log" } } }'
+    }
+  }
+  const tree = {
+    seq: 'writes 的写法',
+    do: [
+      // "." = 整个结果，之后用 $键.字段 读
+      { compute: 'task/stats', writes: { 'all.stats': '.' } },
+      { cond: 'blackboard/compare', params: { key: 'all.stats.total', op: '>=', value: 1 } },
+      // 输出名 / 输出里的路径
+      { compute: 'task/stats', writes: { 'w.total': 'total', 'w.slot': 'best.slot' } },
+      { cond: 'blackboard/compare', params: { key: 'w.slot', op: '>=', value: 0 } },
+      // 不写 writes = 每个输出写进同名键
+      { compute: 'task/stats' },
+      { cond: 'blackboard/has', params: { key: 'best' } },
+      { expand: '继续' }
+    ]
+  }
+  const res = bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree, code })
+  assert.equal(res.ok, true, (res.errors ?? []).join('\n'))
+})
+
+test('回归 task-20261027130758-2 step 4：Compute 的 writes 写 "." 被接受，运行时写进整个结果', async () => {
+  const { bridge, executor } = setup()
+  const plan = bridge.startPlanning({ sessionId: 's1', instruction: '合成一个工作台' })
+  const res = bridge.submitTree({
+    sessionId: 's1', requestId: plan.requestId,
+    tree: {
+      seq: '准备材料',
+      do: [
+        { compute: 'task/plan-materials', name: '算木板缺口', writes: { 'craft.plan': '.' } },
+        { cond: 'blackboard/compare', params: { key: 'craft.plan.planksNeeded', op: '==', value: 4 } },
+        { expand: '按 $craft.plan 凑木板' }
+      ]
+    },
+    code: {
+      'plan-materials': {
+        signature: { inputs: {}, outputs: { ok: { type: 'bool' }, planksNeeded: { type: 'int' } } },
+        body: 'function main() { return { ok: true, planksNeeded: 4 } }'
+      }
+    }
+  })
+  assert.equal(res.ok, true, (res.errors ?? []).join('\n'))
+  await runUntil(executor, () => executor.task?.blackboard?.has?.('craft.plan') || executor.task?.state !== 'running')
+  const value = executor.task.blackboard.get('craft.plan')
+  assert.deepEqual(value, { ok: true, planksNeeded: 4 })
 })

@@ -288,7 +288,8 @@ export function validateTree(spec, { registry, library = null, kind = 'task', in
       for (const key of outputs) writtenKeys.add(key)
       return
     }
-    checkWrites(node, (source) => typeof source === 'string' && (/^\+\d+$/.test(source) || outputs.includes(source.split('.')[0])),
+    // "." = 整个结果（与 applyWrites、编写规则一致）：结果写黑板前已按 signature.outputs 校验过
+    checkWrites(node, (source) => typeof source === 'string' && (source === '.' || /^\+\d+$/.test(source) || outputs.includes(source.split('.')[0])),
       `must be one of the outputs (${outputs.join(', ')}) or a path into one`)
   }
 
