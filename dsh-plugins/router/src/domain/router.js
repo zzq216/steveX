@@ -100,7 +100,7 @@ function orderHandlers(selected) {
   return ordered
 }
 
-export function createRouter({ clarifyThreshold = 0.7 } = {}) {
+export function createRouter() {
   /** @type {Map<string, object>} */
   const registry = new Map()
   let nextSeq = 0
@@ -134,10 +134,10 @@ export function createRouter({ clarifyThreshold = 0.7 } = {}) {
    * @param {object} slotJson SlotJSON（§7）
    * @returns {{ slots: object, handlers: object[], order: string[], exclusive: boolean }}
    */
-  function decide(slotJson, { threshold = clarifyThreshold } = {}) {
+  function decide(slotJson) {
     const validated = validateSlotJson(slotJson)
 
-    if (needsClarification(validated, threshold)) {
+    if (needsClarification(validated)) {
       const clarify = registry.get('clarify')
       if (!clarify) {
         throw new RouterError('MISSING_CLARIFY', 'slots need clarification but no clarify handler is registered')
@@ -173,8 +173,8 @@ export function createRouter({ clarifyThreshold = 0.7 } = {}) {
    * 执行一次路由：选择 → 依次运行 → 按 onFailure 处理失败。
    * @returns {Promise<{ decision: object, parts: Array<{id: string, result: any}>, errors: Array<{id: string, error: Error}> }>}
    */
-  async function run(slotJson, context = {}, options = {}) {
-    const decision = decide(slotJson, options)
+  async function run(slotJson, context = {}) {
+    const decision = decide(slotJson)
     const parts = []
     const errors = []
 

@@ -33,7 +33,6 @@
 - id: stevex-router
   name: '@stevex/dsh-router'
   config:
-    confidenceThreshold: 0.7     # 决定性槽位低于它 → 追问
     clarifyMaxTurns: 2           # 连续追问上限
     enabledHandlers: [fact, task, default, unsupported, clarify]
     # logDir: null               # 默认 steveX/runtime/router/；null = 不写路由日志

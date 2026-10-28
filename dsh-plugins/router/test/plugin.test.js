@@ -138,7 +138,8 @@ test('provider 失败 → 按普通对话走 default，并注入降级说明（D
 })
 
 test('配置校验：非法值在插件加载时失败', () => {
-  assert.throws(() => apply(createFakeContext(), { confidenceThreshold: 2 }), /confidenceThreshold/)
+  // 旧 profile 里残留的 confidenceThreshold 直接忽略
+  assert.doesNotThrow(() => apply(createFakeContext(), { logger: null, confidenceThreshold: 0.7 }))
   assert.throws(() => apply(createFakeContext(), { enabledHandlers: [] }), /enabledHandlers/)
   assert.throws(() => apply(createFakeContext(), { enabledHandlers: ['nope'] }), /enabledHandlers/)
   assert.throws(() => apply(createFakeContext(), { provider: { mode: 'llm', route: { provider: 'x' } } }), /route/)
@@ -400,7 +401,7 @@ test('unsupported：注入"暂不支持"；同时下了指令时任务照跑', a
 
 test('追问：注入"只问一句、不调工具"；下一条消息带着追问上下文填槽；判定后清掉', async () => {
   const { llm, calls, say } = llmRouter([
-    reply({ action: 'unknown', confidences: { action: 0.4 }, clarification: '现在就去挖铁吗？' }),
+    reply({ action: 'unknown', clarification: '现在就去挖铁吗？' }),
     reply({ action: 'execute', payloads: { action: { instruction: '去挖 10 个铁' } } }),
     reply()
   ])
@@ -425,7 +426,7 @@ test('追问：没给 clarification 时按拿不准的槽位套 clarify.md 的�
 })
 
 test('追问上限（D6）：连续 2 次后仍拿不准 → 不再追问，按 none 走并提示 /bt task', async () => {
-  const unsure = () => reply({ action: 'unknown', knowledge: 'fact', confidences: { action: 0.3 } })
+  const unsure = () => reply({ action: 'unknown', knowledge: 'fact' })
   const { calls, say } = llmRouter([unsure(), unsure(), unsure()])
   assert.deepEqual((await say('a')).result.decision.order, ['clarify'])
   assert.deepEqual((await say('b')).result.decision.order, ['clarify'])
@@ -478,7 +479,7 @@ test('路由日志（D8）：一行 JSON，payload 只记长度，不记原话',
     assert.equal(row.provider, 'llm')
     assert.equal(row.model, 'deepseek/chat')
     assert.equal(row.attempts, 1)
-    assert.deepEqual(row.slots.action, ['execute', 0.95])
+    assert.deepEqual(row.slots, { domain: 'minecraft', knowledge: 'none', action: 'execute', artifact: 'none' })
     assert.deepEqual(row.payload, { action: JSON.stringify({ instruction: '做一把木镐' }).length })
     assert.deepEqual(row.handlers, ['task'])
     assert.deepEqual(row.outcomes, { task: 'ok' })
@@ -492,4 +493,11 @@ test('路由日志（D8）：一行 JSON，payload 只记长度，不记原话',
 test('statementOf：payload 的 statement 优先，否则取人说的话', () => {
   assert.equal(statementOf(makeSlots({ knowledge: 'fact', payloads: { knowledge: { statement: ' 岩浆会点燃玩家 ' } } }), [userMessage('x')]), '岩浆会点燃玩家')
   assert.equal(statementOf(makeSlots({ knowledge: 'fact' }), [userMessage('铁镐挖钻石')]), '铁镐挖钻石')
+})
+
+test('只给 clarification、没有 unknown → 不追问，照常编排（2026-10-28）', async () => {
+  const { calls, say } = llmRouter([reply({ action: 'execute', clarification: '现在就去吗？' })])
+  const { result } = await say('去砍树')
+  assert.deepEqual(result.decision.order, ['task'])
+  assert.equal(calls[0][0], 'plan')
 })

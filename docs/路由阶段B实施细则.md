@@ -84,7 +84,7 @@
 ### 4.2 规则块（`rules.md`）要点
 
 - 槽位正交，可以同时非 none（"熔炉 10 秒一个，帮我烧 8 个铁" → fact + execute）；
-- **不对称成本**：对 `execute` 保守（拿不准就 `unknown` + 低置信），对 `fact` 宽松；
+- **不对称成本**：对 `execute` 保守（拿不准就 `unknown`），对 `fact` 宽松；
 - 闲聊、问状态、问"你会什么"、评价上一步做得怎样 → 全 none；
 - "停下 / 别做了 / 换个任务" → `action=none`（放弃任务由主模型用 `bt_abort_task` 处理，不是新任务）；
 - 只输出 JSON。
@@ -118,7 +118,7 @@ provider:
 
 ## 6. 追问（clarify）
 
-触发条件不变（`clarification` 非空，或决定性槽位 `unknown` / 置信度 < 0.7）。
+触发条件：决定性槽位是 `unknown`（2026-10-28 修订，见 §14）。
 
 - **D4 怎么问出来**：`clarify` handler 返回 `prompt`，注入主模型：
   > （steveX 路由）没能确定你要我做什么。请只用一两句话向用户确认：「{问题}」。本回合不要调用任何工具，也不要回答问题本身。
@@ -156,7 +156,7 @@ provider:
 
 ```json
 { "at": "…", "session": "…", "turn": 3, "provider": "llm", "model": "…", "latencyMs": 1830, "attempts": 1,
-  "slots": { "domain": ["minecraft", 0.97], "knowledge": ["none", 0.95], "action": ["execute", 0.92], "artifact": ["none", 0.99] },
+  "slots": { "domain": "minecraft", "knowledge": "none", "action": "execute", "artifact": "none" },
   "payload": { "action": 12 }, "reason": "…", "clarification": null,
   "handlers": ["task"], "outcomes": { "task": "ok" }, "degraded": null }
 ```
@@ -252,3 +252,21 @@ provider:
 5. "以后看到苦力怕就跑" → 告知暂不支持。
 6. 看路由日志里的 `latencyMs`，判断延迟能否接受。
 7. 可选：`npm run eval` 跑评测集，看准确率。
+
+---
+
+## 14. 修订：删除 confidence（2026-10-28）
+
+**决定**（用户确认两点）：
+1. 删除槽位的 `confidence` 与配置项 `confidenceThreshold`；
+2. 追问**只看决定性槽位是不是 `unknown`**，`clarification` 非空不再单独触发追问——它只是追问时用的那句话。
+
+**理由**：模型自报的置信度不是真实概率，0.7 阈值比的是编出来的数；"拿不准"同时有 `unknown` / 低置信 / `clarification` 三条通道，会出现 `execute` 配 0.5 这类矛盾组合，还多一类校验失败。真要置信度应看 API 的 logprobs，与自报数字是两回事，现阶段不做。
+
+**改动**：
+- `domain/slots.js`：槽位形状 `{ value, payload }`；模型多给的 `confidence` 校验时忽略（不报错、不保留）；`needsClarification` / `resolveUnsure` 只看 `unknown`；
+- `domain/router.js`、`index.js`、`handlers.js`（`clarifyQuestion` 按 `unknown` 选问句）、`config.js`（旧 profile 里残留的 `confidenceThreshold` 直接忽略，不报错）；
+- `llm_slots.js` 的 `[OUTPUT]`、`slot_defs.md`、`rules.md`（规则 2：拿不准就 `unknown`；规则 7：给了 `unknown` 就写 `clarification`，否则 null）、`few_shot.md`（12 个示例去掉 confidence，`unknown` 与 `clarification` 一一对应）；
+- 路由日志 `slots` 改为只记取值；
+- 两个 `cordis.patch.yml` 去掉 `confidenceThreshold`；
+- 测试：路由包 62 个全部通过（新增"多给的 confidence 被忽略""只有 clarification 不追问"）。

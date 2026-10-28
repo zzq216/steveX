@@ -7,15 +7,12 @@ export function makeSlots({
   knowledge = 'none',
   action = 'none',
   artifact = 'none',
-  confidence = 0.95,
-  confidences = {},
   payloads = {},
   reason = 'test',
   clarification = null
 } = {}) {
   const slot = (name, value) => ({
     value,
-    confidence: confidences[name] ?? confidence,
     payload: payloads[name] ?? null
   })
   return {

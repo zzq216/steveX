@@ -14,10 +14,9 @@ function makeSlots({
   knowledge = 'none',
   action = 'none',
   artifact = 'none',
-  confidence = 0.95,
   reason = ''
 } = {}) {
-  const slot = (value) => ({ value, confidence, payload: null })
+  const slot = (value) => ({ value, payload: null })
   return {
     slots: { domain: slot(domain), knowledge: slot(knowledge), action: slot(action), artifact: slot(artifact) },
     reason,
@@ -27,11 +26,10 @@ function makeSlots({
 
 const cases = [
   ['正常回答', makeSlots({ domain: 'general', reason: '与 MC 无关' })],
-  ['MC 事实', makeSlots({ knowledge: 'fact', reason: '问钻石的生成高度' })],
+  ['MC 事实', makeSlots({ knowledge: 'fact', reason: '陈述熔炉的熔炼时间' })],
   ['MC 任务', makeSlots({ action: 'execute', reason: '去挖 8 个铁矿' })],
-  ['事实 + 任务', makeSlots({ knowledge: 'fact', action: 'execute', reason: '先查高度，再去挖' })],
+  ['事实 + 任务', makeSlots({ knowledge: 'fact', action: 'execute', reason: '陈述熔炼时间，再去烧铁' })],
   ['快树（未支持）', makeSlots({ artifact: 'fast_tree', reason: '修改快树' })],
-  ['低置信度 → 追问', makeSlots({ knowledge: 'fact', confidence: 0.45 })],
   ['unknown → 追问', makeSlots({ knowledge: 'unknown' })]
 ]
 

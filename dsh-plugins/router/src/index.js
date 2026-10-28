@@ -30,7 +30,7 @@ export const inject = []
 
 export function apply(ctx, rawConfig = {}) {
   const config = normalizeConfig(rawConfig)
-  const router = createRouter({ clarifyThreshold: config.confidenceThreshold })
+  const router = createRouter()
   // Cordis 的 ctx.get 读可选服务（不进 inject）；测试夹具没有 get，直接读属性
   const optional = (service) => (typeof ctx.get === 'function' ? ctx.get(service) : ctx[service]) ?? null
   // agent 插件是可选依赖：没装时 task / fact handler 报错（onFailure: continue），其余照常
@@ -170,7 +170,7 @@ export function apply(ctx, rawConfig = {}) {
     let selected = router.decide(slotJson)
     let clarifyCount = clarifyCounts.get(key) ?? 0
     if (selected.exclusive && clarifyCount >= config.clarifyMaxTurns) {
-      slotJson = resolveUnsure(selected.slots, config.confidenceThreshold)
+      slotJson = resolveUnsure(selected.slots)
       notice = { kind: 'clarify-limit' }
       selected = router.decide(slotJson)
     }

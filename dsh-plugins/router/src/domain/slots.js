@@ -13,7 +13,7 @@ export const SLOT_VALUES = Object.freeze({
   artifact: Object.freeze(['none', 'fast_tree', 'unknown'])
 })
 
-/** 「决定性槽位」：不同取值会导致不同处理器集合（§8）。domain 低置信不触发追问。 */
+/** 「决定性槽位」：不同取值会导致不同处理器集合（§8）。domain 是 unknown 不触发追问。 */
 export const DECISIVE_SLOTS = Object.freeze(['knowledge', 'action', 'artifact'])
 
 const MAX_PAYLOAD_DEPTH = 8
@@ -40,18 +40,19 @@ function isJsonValue(value, depth = 0) {
   return false
 }
 
+// 模型自报的 confidence 不是真实概率，不参与判定（2026-10-28 删除）；多给了也只是忽略
 function normalizeSlot(slot) {
-  return { value: slot.value, confidence: slot.confidence, payload: slot.payload }
+  return { value: slot.value, payload: slot.payload }
 }
 
 /** 默认槽位：无任何意图（provider=stub 时的兜底）。 */
 export function defaultSlots() {
   return {
     slots: {
-      domain: { value: 'general', confidence: 1, payload: null },
-      knowledge: { value: 'none', confidence: 1, payload: null },
-      action: { value: 'none', confidence: 1, payload: null },
-      artifact: { value: 'none', confidence: 1, payload: null }
+      domain: { value: 'general', payload: null },
+      knowledge: { value: 'none', payload: null },
+      action: { value: 'none', payload: null },
+      artifact: { value: 'none', payload: null }
     },
     reason: 'stub default (no intents)',
     clarification: null
@@ -60,7 +61,7 @@ export function defaultSlots() {
 
 /**
  * 校验并规范化一份 SlotJSON。
- * @returns {{ slots: Record<string, {value: string, confidence: number, payload: any}>, reason: string, clarification: string | null }}
+ * @returns {{ slots: Record<string, {value: string, payload: any}>, reason: string, clarification: string | null }}
  */
 export function validateSlotJson(input) {
   if (!isPlainObject(input)) throw new SlotValidationError('BAD_SHAPE', 'slots JSON must be an object')
@@ -82,10 +83,6 @@ export function validateSlotJson(input) {
         'BAD_SLOT_VALUE',
         `slots.${name}.value must be one of: ${SLOT_VALUES[name].join(' / ')} (got ${JSON.stringify(slot.value)})`
       )
-    }
-    if (typeof slot.confidence !== 'number' || !Number.isFinite(slot.confidence)
-      || slot.confidence < 0 || slot.confidence > 1) {
-      throw new SlotValidationError('BAD_CONFIDENCE', `slots.${name}.confidence must be a number in [0,1]`)
     }
     if (!hasOwn(slot, 'payload')) {
       throw new SlotValidationError('MISSING_PAYLOAD', `slots.${name}.payload key is required (may be null)`)
@@ -115,13 +112,12 @@ export function validateSlotJson(input) {
   }
 }
 
-/** 是否需要追问：显式 clarification，或任一决定性槽位 unknown / 低于阈值（§8）。 */
-export function needsClarification(slotJson, threshold = 0.7) {
-  if (slotJson.clarification !== null && slotJson.clarification !== undefined) return true
-  return DECISIVE_SLOTS.some((name) => {
-    const slot = slotJson.slots[name]
-    return slot.value === 'unknown' || slot.confidence < threshold
-  })
+/**
+ * 是否需要追问：任一决定性槽位是 unknown（§8；2026-10-28 起只看这一处）。
+ * clarification 只是追问时用的那句话，不单独触发追问。
+ */
+export function needsClarification(slotJson) {
+  return DECISIVE_SLOTS.some((name) => slotJson.slots[name].value === 'unknown')
 }
 
 /** 是否存在"非 none 的意图"；用于禁用处理器后的 unsupported 降级。 */
@@ -136,11 +132,10 @@ export function hasNonNoneIntent(slots) {
  * 追问达到上限后（阶段 B 细则 D6）：仍拿不准的决定性槽位按 none 处理——不开任务、不写事实，
  * clarification 清空，走正常编排。
  */
-export function resolveUnsure(slotJson, threshold = 0.7) {
+export function resolveUnsure(slotJson) {
   const slots = { ...slotJson.slots }
   for (const name of DECISIVE_SLOTS) {
-    const slot = slots[name]
-    if (slot.value === 'unknown' || slot.confidence < threshold) slots[name] = { value: 'none', confidence: 1, payload: null }
+    if (slots[name].value === 'unknown') slots[name] = { value: 'none', payload: null }
   }
   return { ...slotJson, slots, clarification: null }
 }

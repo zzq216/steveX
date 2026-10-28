@@ -51,11 +51,7 @@ export function normalizeConfig(raw = {}) {
   const contextMessages = nonNegativeInt(providerRaw.contextMessages ?? 6, 'config.provider.contextMessages')
   const contextChars = positiveInt(providerRaw.contextChars ?? 400, 'config.provider.contextChars')
 
-  const confidenceThreshold = raw.confidenceThreshold ?? 0.7
-  if (typeof confidenceThreshold !== 'number' || !Number.isFinite(confidenceThreshold)
-    || confidenceThreshold < 0 || confidenceThreshold > 1) {
-    throw new RouterError('BAD_CONFIG', 'config.confidenceThreshold must be a number in [0,1]')
-  }
+  // confidenceThreshold 已删除（2026-10-28，追问只看 unknown）：旧 profile 里还写着的不报错、直接忽略
 
   const clarifyMaxTurns = raw.clarifyMaxTurns ?? 2
   if (!Number.isInteger(clarifyMaxTurns) || clarifyMaxTurns < 1) {
@@ -98,7 +94,6 @@ export function normalizeConfig(raw = {}) {
       contextMessages,
       contextChars
     },
-    confidenceThreshold,
     clarifyMaxTurns,
     enabledHandlers: [...enabledHandlers],
     logDir,

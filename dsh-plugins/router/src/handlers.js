@@ -32,13 +32,10 @@ export function statementOf(slots, messages = []) {
   return userText(messages)
 }
 
-/** 追问的那句话：路由给的 clarification 优先，否则按哪个决定性槽位拿不准套 clarify.md 的模板。 */
-export function clarifyQuestion(slots, sections, threshold = 0.7) {
+/** 追问的那句话：路由给的 clarification 优先，否则按哪个决定性槽位是 unknown 套 clarify.md 的模板。 */
+export function clarifyQuestion(slots, sections) {
   if (typeof slots.clarification === 'string' && slots.clarification.trim()) return slots.clarification.trim()
-  const unsure = ['action', 'knowledge', 'artifact'].find((name) => {
-    const slot = slots.slots[name]
-    return slot.value === 'unknown' || slot.confidence < threshold
-  })
+  const unsure = ['action', 'knowledge', 'artifact'].find((name) => slots.slots[name].value === 'unknown')
   return sections?.[unsure ?? 'other'] ?? sections?.other ?? '你是想让我在游戏里去做这件事，还是只是聊聊？'
 }
 
@@ -115,7 +112,7 @@ export function createHandlers({ enabled = null, planner = () => null } = {}) {
       onFailure: 'stop',
       priority: 0,
       run: async (slots, context) => {
-        const question = clarifyQuestion(slots, context.prompts?.clarifySections, context.config?.confidenceThreshold)
+        const question = clarifyQuestion(slots, context.prompts?.clarifySections)
         const template = context.prompts?.clarifySections?.instruction
         return {
           text: `clarify #${context.clarifyCount ?? 1}: ${question}`,

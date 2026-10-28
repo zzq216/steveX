@@ -14,7 +14,7 @@ const SYSTEM = '你是 steveX 的输入路由器。steveX 是一个在 Minecraft
 
 /** [OUTPUT] 块：由词表生成，词表加值时自动跟上（设计方案 §7）。 */
 export function outputSpec() {
-  const lines = SLOT_NAMES.map((name) => `    "${name}": { "value": ${SLOT_VALUES[name].map((v) => `"${v}"`).join(' | ')}, "confidence": 0~1, "payload": … | null }`)
+  const lines = SLOT_NAMES.map((name) => `    "${name}": { "value": ${SLOT_VALUES[name].map((v) => `"${v}"`).join(' | ')}, "payload": … | null }`)
   return [
     '只输出下面这个形状的 JSON（四个槽位必须全部给出，每个都带 payload 键，可以是 null）：',
     '{',
@@ -22,7 +22,7 @@ export function outputSpec() {
     lines.join(',\n'),
     '  },',
     '  "reason": "一句话判据",',
-    '  "clarification": null 或 "需要向用户确认的一句话"',
+    '  "clarification": null，或者有槽位是 unknown 时要向用户确认的一句话',
     '}'
   ].join('\n')
 }

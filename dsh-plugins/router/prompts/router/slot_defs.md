@@ -1,4 +1,4 @@
-四个槽位彼此独立，每个都要单独判断。每个槽位给出 value、confidence（0~1，你对这个取值有多确定）、payload。
+四个槽位彼此独立，每个都要单独判断。每个槽位给出 value 和 payload。
 
 ## domain：说的是不是 Minecraft
 - `minecraft`：内容和 Minecraft 游戏、游戏里的世界 / 物品 / 方块 / 生物 / 机制有关，或者是在指挥、询问 steveX 这个游戏里的 agent。

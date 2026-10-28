@@ -29,7 +29,7 @@ export function routeRecord({ sessionId, turn, mode, trace = {}, slotJson, resul
   for (const name of SLOT_NAMES) {
     const slot = slotJson?.slots?.[name]
     if (!slot) continue
-    slots[name] = [slot.value, slot.confidence]
+    slots[name] = slot.value
     if (slot.payload !== null && slot.payload !== undefined) payload[name] = JSON.stringify(slot.payload).length
   }
   const outcomes = {}

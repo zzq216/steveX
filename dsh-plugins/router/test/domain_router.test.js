@@ -39,15 +39,15 @@ test('禁用某个 handler：对应意图降级为 unsupported', () => {
   assert.deepEqual(decision.order, ['unsupported'])
 })
 
-test('追问：unknown / 低置信度 → clarify 独占', () => {
+test('追问：unknown → clarify 独占；只有 clarification 没有 unknown 不追问', () => {
   const router = createTestRouter()
   const unknown = router.decide(makeSlots({ knowledge: 'unknown' }))
   assert.equal(unknown.exclusive, true)
   assert.deepEqual(unknown.order, ['clarify'])
 
-  const low = router.decide(makeSlots({ action: 'execute', confidence: 0.5 }))
-  assert.equal(low.exclusive, true)
-  assert.deepEqual(low.order, ['clarify'])
+  const sentenceOnly = router.decide(makeSlots({ action: 'execute', clarification: '现在就去吗？' }))
+  assert.equal(sentenceOnly.exclusive, false)
+  assert.deepEqual(sentenceOnly.order, ['task'])
 })
 
 test('缺少 clarify handler 时，需要追问 → MISSING_CLARIFY', () => {

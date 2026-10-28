@@ -56,7 +56,6 @@
     - id: stevex-router
       name: '@stevex/dsh-router'
       config:
-        confidenceThreshold: 0.7
         clarifyMaxTurns: 2
         enabledHandlers:
           - fact

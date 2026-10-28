@@ -34,23 +34,24 @@ test('缺少 / 多余槽位被拒绝', () => {
   assert.throws(() => validateSlotJson(missing), (e) => e.code === 'BAD_SLOTS')
 
   const extra = makeSlots()
-  extra.slots.extra = { value: 'none', confidence: 1, payload: null }
+  extra.slots.extra = { value: 'none', payload: null }
   assert.throws(() => validateSlotJson(extra), (e) => e.code === 'BAD_SLOTS')
 })
 
-test('取值不在词表 / confidence 非法被拒绝', () => {
+test('取值不在词表被拒绝', () => {
   assert.throws(
     () => validateSlotJson(makeSlots({ knowledge: 'maybe' })),
     (e) => e.code === 'BAD_SLOT_VALUE'
   )
-  assert.throws(
-    () => validateSlotJson(makeSlots({ confidences: { action: 1.5 } })),
-    (e) => e.code === 'BAD_CONFIDENCE'
-  )
-  assert.throws(
-    () => validateSlotJson(makeSlots({ confidences: { action: Number.NaN } })),
-    (e) => e.code === 'BAD_CONFIDENCE'
-  )
+})
+
+test('模型多给的 confidence 被忽略：不报错、也不留在结果里', () => {
+  const input = makeSlots({ action: 'execute' })
+  input.slots.action.confidence = 1.5
+  input.slots.knowledge.confidence = 'high'
+  const validated = validateSlotJson(input)
+  assert.deepEqual(validated.slots.action, { value: 'execute', payload: null })
+  assert.ok(!('confidence' in validated.slots.knowledge))
 })
 
 test('payload 键必须存在且必须是 JSON 值', () => {
@@ -87,13 +88,14 @@ test('reason / clarification 形态被校验', () => {
   assert.equal(validateSlotJson(makeSlots({ clarification: '问事实还是做任务？' })).clarification, '问事实还是做任务？')
 })
 
-test('needsClarification：unknown / 低置信度 / 显式 clarification', () => {
+test('needsClarification：只看决定性槽位是不是 unknown', () => {
   assert.equal(needsClarification(makeSlots()), false)
   assert.equal(needsClarification(makeSlots({ knowledge: 'unknown' })), true)
-  assert.equal(needsClarification(makeSlots({ knowledge: 'fact', confidence: 0.4 })), true)
-  assert.equal(needsClarification(makeSlots({ clarification: '你是在问什么？' })), true)
-  // domain 不是决定性槽位：低置信度不触发追问
-  assert.equal(needsClarification(makeSlots({ confidences: { domain: 0.1 } })), false)
+  assert.equal(needsClarification(makeSlots({ artifact: 'unknown' })), true)
+  // clarification 只是追问用的那句话，不单独触发追问
+  assert.equal(needsClarification(makeSlots({ clarification: '你是在问什么？' })), false)
+  // domain 不是决定性槽位
+  assert.equal(needsClarification(makeSlots({ domain: 'unknown' })), false)
 })
 
 test('hasNonNoneIntent 只看非 none 的意图', () => {
@@ -104,11 +106,11 @@ test('hasNonNoneIntent 只看非 none 的意图', () => {
   assert.equal(hasNonNoneIntent(makeSlots({ knowledge: 'unknown' }).slots), false)
 })
 
-test('resolveUnsure：拿不准的决定性槽位按 none，确定的保留，clarification 清空', () => {
-  const input = validateSlotJson(makeSlots({ knowledge: 'fact', action: 'unknown', artifact: 'fast_tree', confidences: { artifact: 0.2 }, clarification: '?' }))
-  const out = resolveUnsure(input, 0.7)
+test('resolveUnsure：unknown 的决定性槽位按 none，其余保留，clarification 清空', () => {
+  const input = validateSlotJson(makeSlots({ knowledge: 'fact', action: 'unknown', artifact: 'unknown', clarification: '?' }))
+  const out = resolveUnsure(input)
   assert.equal(out.slots.knowledge.value, 'fact')
-  assert.deepEqual(out.slots.action, { value: 'none', confidence: 1, payload: null })
+  assert.deepEqual(out.slots.action, { value: 'none', payload: null })
   assert.equal(out.slots.artifact.value, 'none')
   assert.equal(out.clarification, null)
   assert.equal(input.slots.action.value, 'unknown')
