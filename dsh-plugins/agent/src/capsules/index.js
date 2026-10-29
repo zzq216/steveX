@@ -2,4 +2,5 @@ export { CapsuleLibrary, LibraryError, parseRef, hashEntry, FOLDERS } from './li
 export { Sandbox, SandboxError } from './sandbox.js'
 export { createBuiltins, NBT_SOURCES } from './builtins.js'
 export { saveCapsule, saveDraft } from './save.js'
+export { CapsuleStats, usageSummary, rebuildStats } from './stats.js'
 export { VALUE_TYPES, checkValue, validateSignature, checkCallParams } from './signature.js'

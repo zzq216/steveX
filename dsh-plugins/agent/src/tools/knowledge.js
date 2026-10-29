@@ -1,4 +1,5 @@
 import { JSON_OUTPUT, jsonText, textBlocks, sessionOf } from './shared.js'
+import { usageSummary } from '../capsules/stats.js'
 import { STATE_SOURCES } from '../bt/validator.js'
 import { SOURCE_METHODS } from '../game/state.js'
 import { vocabText } from '../game/vocab.js'
@@ -26,8 +27,24 @@ import { structureOf } from '../llm/structure.js'
  * @param {object} [services.bridge]  复盘回合里 capsule_get task/… 从复盘请求持有的草稿拷贝取（P4 §2.4）
  * @param {number} services.maxOutputChars
  */
-export function knowledgeTools({ registry, library, game, json = null, jsonSources = [], nbt = null, nbtSources = [], taskId = () => null, bridge = null, maxOutputChars }) {
+export function knowledgeTools({ registry, library, stats = null, game, json = null, jsonSources = [], nbt = null, nbtSources = [], taskId = () => null, bridge = null, maxOutputChars }) {
   const render = (_args, value) => textBlocks(jsonText(value, maxOutputChars))
+  // 使用统计（整理方案 §4）：只展示，不参与排序；没有数据写"尚无记录"（没用过 ≠ 没用）
+  const keyOf = (ref) => ref.slice(0, ref.lastIndexOf('@'))
+  const usageOf = (ref, kind) => stats ? usageSummary(stats.byName(keyOf(ref))?.total ?? null, kind, keyOf(ref)) : '（没有统计）'
+  const usageDetail = (ref, entry) => {
+    const key = keyOf(ref)
+    const kind = entry.signature.returns === 'bool' ? 'condition' : 'compute'
+    const named = stats.byName(key)
+    const row = stats.get(ref)
+    return {
+      thisVersion: usageSummary(row, kind, key),
+      allVersions: usageSummary(named?.total ?? null, kind, key),
+      ...(named && named.versions.length > 1 ? { versions: named.versions.map(({ hash, row: r }) => `@${hash}: ${usageSummary(r, kind)}`) } : {}),
+      ...(row?.lastUsed ? { firstUsed: row.firstUsed, lastUsed: row.lastUsed } : {}),
+      ...(row?.errors?.length ? { recentErrors: row.errors } : {})
+    }
+  }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),
     ...(json ? jsonSources.map((s) => `json.${s}`) : []),
@@ -110,10 +127,12 @@ export function knowledgeTools({ registry, library, game, json = null, jsonSourc
       name: 'capsule_search',
       description: [
         '查胶囊库：可复用的条件代码（cond）、Compute 代码（compute）、子树（use），以及本任务的代码草稿（task/）。',
-        '给 query = 按空白拆成几个词，引用名或说明里含任一词就返回，含的词越多越靠前；不给 = 全部。返回每条的引用、种类、说明与输入 / 输出名；要看完整契约与正文用 capsule_get。'
+        '给 query = 按空白拆成几个词，引用名或说明里含任一词就返回，含的词越多越靠前；不给 = 全部。返回每条的引用、种类、说明、输入 / 输出名与使用统计（usage，同名各版本加总；只是记录，不影响排序）；要看完整契约、正文与统计明细用 capsule_get。',
+        '已下架的条目默认不返回；includeRetired = true 时一起返回，并带 retired（下架理由与取代者）。'
       ].join('\n'),
       parameters: {
-        query: { type: 'string', description: '一个或几个词（空白分隔），不区分大小写' }
+        query: { type: 'string', description: '一个或几个词（空白分隔），不区分大小写' },
+        includeRetired: { type: 'boolean', description: '也返回已下架的条目（默认 false）' }
       },
       output: { schema: JSON_OUTPUT, render },
       isConcurrencySafe: () => true,
@@ -121,6 +140,7 @@ export function knowledgeTools({ registry, library, game, json = null, jsonSourc
         const words = (args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean)
         const hits = (row) => words.filter((w) => row.ref.toLowerCase().includes(w) || row.description.toLowerCase().includes(w)).length
         return library.list()
+          .filter((row) => args.includeRetired || !row.retired)
           .map((row) => ({ row, n: words.length ? hits(row) : 1 }))
           .filter(({ n }) => n > 0)
           .sort((a, b) => b.n - a.n)
@@ -130,15 +150,17 @@ export function knowledgeTools({ registry, library, game, json = null, jsonSourc
               ref: row.ref, kind: row.kind, description: row.description,
               inputs: Object.keys(entry?.signature.inputs ?? {}),
               ...(entry?.signature.outputs ? { outputs: Object.keys(entry.signature.outputs) } : {}),
+              ...(row.draft ? {} : { usage: usageOf(row.ref, row.kind) }),
               ...(row.locked ? { locked: true } : {}),
-              ...(row.draft ? { draft: true } : {})
+              ...(row.draft ? { draft: true } : {}),
+              ...(row.retired ? { retired: row.retired } : {})
             }
           })
       }
     },
     {
       name: 'capsule_get',
-      description: '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）与正文（代码或子树）。ref 可以省略 @hash，取最新版。',
+      description: '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字）。ref 可以省略 @hash，取最新版。',
       parameters: {
         ref: { type: 'string', required: true, description: '如 "code/core.json.query"、"trees/x@1a2b3c4d"、"task/plan-grid"' }
       },
@@ -150,11 +172,16 @@ export function knowledgeTools({ registry, library, game, json = null, jsonSourc
         const ref = library.pin(args.ref)
         const entry = library.get(ref)
         const host = Boolean(library.host(ref))
+        const key = ref.slice(0, ref.lastIndexOf('@'))
+        const info = library.readManifest()[key]
         return {
           ref,
           description: entry.description ?? '',
           signature: entry.signature,
           ...(entry.preconditions?.length ? { preconditions: entry.preconditions } : {}),
+          ...(info?.retired ? { retired: info.retired } : {}),
+          ...(info && info.hash !== entry.hash ? { latest: `${key}@${info.hash}` } : {}),
+          ...(stats ? { usage: usageDetail(ref, entry) } : {}),
           ...(host ? { host: true, note: '宿主实现的内置查询：参数只许字面量' } : { body: entry.body })
         }
       }

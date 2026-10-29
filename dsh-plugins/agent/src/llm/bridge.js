@@ -5,6 +5,7 @@ import { renderDirectory, buildReflectDirectory, renderReflectDirectory } from '
 import { saveCapsule, saveDraft } from '../capsules/save.js'
 import { collectEvidence, checkLiterals } from '../capsules/literals.js'
 import { walkSpec } from '../bt/build.js'
+import { libraryRows, renderLibrary, checkReason, appendCurateLog } from '../capsules/curate.js'
 import { renderTemplate } from './prompts.js'
 
 /**
@@ -17,6 +18,8 @@ import { renderTemplate } from './prompts.js'
  *           证据由大模型用 bt_inspect 自己取 → bt_submit_patch（空补丁 = 原树继续）或 bt_abort_task
  *   reflect（P4）  任务结束 → 复盘：capsule_save（可多次）→ bt_reflect_done。不是执行器的请求、不挡新任务：
  *           请求自己持有结束的任务对象和草稿的拷贝，新任务换掉 executor.task 也不影响（P4 §2.3 / §2.4）
+ *   curate（整理方案 §5）  胶囊库整理：/bt curate，或每结束 curate.everyTasks 个任务自动发（默认 0 = 只能手动）。
+ *           只在空闲时发；给全库清单 → capsule_retire / capsule_describe（可多次）→ bt_curate_done。不属于任何任务
  * 不属于任何会话的任务（/bt run 的手写树）的修复请求不经过这里，由本地应答器回答（ownsTask）。
  *
  * - 一个请求对应一个会话：plan 属于下指令的会话，任务属于 plan 所在的会话（§7.2）
@@ -51,8 +54,13 @@ export const PATCH_TYPES = Object.freeze(['recover', 'escalate', 'failed', 'died
 const REFLECT_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, 'bt_view', 'bt_inspect', 'capsule_save', 'bt_reflect_done'])
 /** 只在复盘回合可用的工具（guard 据此拒绝其他回合的调用） */
 export const REFLECT_ONLY_TOOLS = Object.freeze(['capsule_save', 'bt_reflect_done'])
+/** 整理（整理方案 §5.4）：接口知识 + 下架 / 改说明 / 结束。不给 capsule_save：不经任务验证的新代码不进库 */
+const CURATE_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, 'capsule_retire', 'capsule_describe', 'bt_curate_done'])
+/** 只在整理回合可用的工具（guard 据此拒绝其他回合的调用） */
+export const CURATE_ONLY_TOOLS = Object.freeze(['capsule_retire', 'capsule_describe', 'bt_curate_done'])
 export const REQUEST_TOOLS = Object.freeze({
   reflect: REFLECT_TOOLS,
+  curate: CURATE_TOOLS,
   plan: Object.freeze([...KNOWLEDGE_TOOLS, 'bt_submit_tree', 'bt_abort_task']),
   expand: Object.freeze([...KNOWLEDGE_TOOLS, 'bt_view', 'bt_submit_expansion', 'bt_abort_task']),
   recover: PATCH_TOOLS,
@@ -60,7 +68,7 @@ export const REQUEST_TOOLS = Object.freeze({
   failed: PATCH_TOOLS,
   died: PATCH_TOOLS
 })
-const SUBMIT_TOOL = { reflect: 'bt_reflect_done', plan: 'bt_submit_tree', expand: 'bt_submit_expansion', recover: 'bt_submit_patch', escalate: 'bt_submit_patch', failed: 'bt_submit_patch', died: 'bt_submit_patch' }
+const SUBMIT_TOOL = { reflect: 'bt_reflect_done', curate: 'bt_curate_done', plan: 'bt_submit_tree', expand: 'bt_submit_expansion', recover: 'bt_submit_patch', escalate: 'bt_submit_patch', failed: 'bt_submit_patch', died: 'bt_submit_patch' }
 /** 修复请求用哪个 skill（集成方案 §4.6）：被打断 → 慢树恢复；根失败 → 慢树反思。 */
 const PATCH_SKILL = { recover: 'recover', escalate: 'recover', died: 'recover', failed: 'reflect' }
 const ACTIVE = ['running', 'suspended', 'paused']
@@ -82,8 +90,11 @@ export class Bridge {
    * @param {(sessionId: string, turn: number, tools: string[]) => void} [options.onBind]  回合绑定了请求：适配层据此限制工具
    * @param {object} [options.registry]  命令注册表（capsule_save 的字面量检查查枚举参数）
    * @param {object} [options.reflect]   { enabled, onFailed, literalCheck }（P4 §9）
+   * @param {import('../capsules/stats.js').CapsuleStats} [options.stats]  胶囊使用统计（整理清单、自动整理的计数）
+   * @param {object} [options.curate]    { everyTasks, listLimit }（整理方案 §5.2 / §5.3）
+   * @param {(sessionId, message) => boolean} [options.deliverIdle]  等会话空闲再 followup（自动整理可能在别的回合中途触发）；缺省 = deliver
    */
-  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {} }) {
+  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null }) {
     this.executor = executor
     this.library = library
     this.sandbox = sandbox
@@ -91,8 +102,13 @@ export class Bridge {
     this.reflectConfig = { enabled: true, onFailed: true, literalCheck: true, ...reflect }
     this.lastDrafts = null        // 最近结束的任务的草稿拷贝（/bt reflect 手动复盘用）
     this.reflectSeq = 0
+    this.stats = stats
+    this.curateConfig = { everyTasks: 0, listLimit: 150, ...curate }
+    this.curateSeq = 0
+    this.curateSession = null    // 最近一个结束的任务所属的会话：自动整理发到这里
     this.prompts = prompts
     this.deliver = deliver
+    this.deliverIdle = deliverIdle ?? deliver
     this.notify = notify
     this.runtimeDir = runtimeDir
     this.maxInvalidAttempts = maxInvalidAttempts
@@ -248,13 +264,16 @@ export class Bridge {
     for (const req of this.requests.values()) if (req.taskId === taskId && req.type !== 'reflect') req.closed = true
     const sessionId = this.taskSessions.get(taskId)
     this.taskSessions.delete(taskId)
-    if (!sessionId) return
+    if (!sessionId) return this.maybeCurate()
+    this.curateSession = sessionId
     const task = this.executor.task?.taskId === taskId ? this.executor.task : null
+    // 发了复盘就先不整理：复盘结束（closeReflect）时再查
     if (task && this.shouldReflect(summary) && this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
     const text = renderTemplate(this.prompts.requests.task_end, {
       taskId, state: summary.state, goal: summary.goal ?? '（无）', result: summary.result ?? '（无）'
     })
     this.notify(sessionId, { text, summary: `任务 ${taskId} ${summary.state}`, source: { kind: SOURCE_KIND, taskId, reason: 'task-end' } })
+    this.maybeCurate()
   }
 
   // ── 复盘（P4）─────────────────────────────────────────────────────────────
@@ -422,6 +441,129 @@ export class Bridge {
     // 证据随请求释放（P4 §2.4）
     req.task = null
     req.drafts = null
+    this.maybeCurate()
+  }
+
+  // ── 整理（整理方案 §5）───────────────────────────────────────────────────
+
+  /** 为什么现在不能整理；null = 空闲（没有在跑的任务、没有规划 / 复盘 / 整理请求没结束） */
+  busyReason() {
+    const task = this.activeTask()
+    if (task) return `任务 ${task.taskId} 还在 ${task.state}`
+    if (this.planning) return `规划请求 ${this.planning} 还没结束`
+    const open = [...this.requests.values()].find((r) => (r.type === 'reflect' || r.type === 'curate') && this.isOpen(r))
+    if (open) return `${open.type === 'reflect' ? '复盘' : '整理'}请求 ${open.requestId} 还没结束`
+    return null
+  }
+
+  /** 自动整理（C1 / C2）：everyTasks > 0、攒够了、空闲时才发；忙就等下一次检查（任务结束 / 复盘结束） */
+  maybeCurate() {
+    const every = this.curateConfig.everyTasks
+    if (!(every > 0) || !this.stats || !this.curateSession) return
+    if (this.stats.curateState().sinceLast < every) return
+    if (this.busyReason()) return
+    const result = this.startCurate({ sessionId: this.curateSession, trigger: 'auto' })
+    if (!result.ok) this.log(`[bt] auto curate not sent: ${result.error}`)
+  }
+
+  /**
+   * 发一个整理请求（/bt curate 手动；自动见 maybeCurate）。忙时直接返回说明，不排队（§5.2）。
+   * @returns {{ ok: true, requestId } | { ok: false, error }}
+   */
+  startCurate({ sessionId, trigger = 'manual' }) {
+    const busy = this.busyReason()
+    if (busy) return { ok: false, error: `${busy}；等它结束再整理（不排队）` }
+    const requestId = `k${++this.curateSeq}`
+    const state = this.stats?.curateState() ?? { sinceLast: 0, lastAt: null, lastRequestId: null }
+    const req = { requestId, type: 'curate', sessionId, trigger, sinceLast: state.sinceLast, changes: [], reminded: false, answered: false, closed: false, createdAt: this.now() }
+    this.requests.set(requestId, req)
+    const text = renderTemplate(this.prompts.requests.curate, {
+      requestId,
+      trigger: trigger === 'auto'
+        ? `（自动发起：自上次整理以来已经结束了 ${state.sinceLast} 个任务，达到 curate.everyTasks = ${this.curateConfig.everyTasks}。人可以随时取消这一回合。）`
+        : '（人用 /bt curate 发起）',
+      last: state.lastAt
+        ? `上次整理：${state.lastAt}（${state.lastRequestId}），之后结束了 ${state.sinceLast} 个任务`
+        : `还没有整理过；统计里已经记了 ${this.stats?.data.tasks.length ?? 0} 个任务`,
+      library: renderLibrary(libraryRows(this.library, this.stats), { listLimit: this.curateConfig.listLimit }),
+      skill: this.prompts.skills.curate
+    })
+    const summary = trigger === 'auto' ? `整理胶囊库：已累计 ${state.sinceLast} 个任务` : '整理胶囊库'
+    const send = trigger === 'auto' ? this.deliverIdle : this.deliver
+    if (!send(sessionId, this.message(req, text, summary))) {
+      this.closeCurate(req, 'abandoned', `session ${sessionId} not found`)
+      return { ok: false, error: `找不到会话 ${sessionId}` }
+    }
+    this.stats?.curateStarted(requestId, new Date(this.now()).toISOString())
+    this.log(`[bt] curate ${requestId} (${trigger})`)
+    return { ok: true, requestId }
+  }
+
+  /** 在飞的整理请求（/bt status）。 */
+  curating() {
+    return [...this.requests.values()].filter((r) => r.type === 'curate' && this.isOpen(r))
+      .map((r) => ({ requestId: r.requestId, trigger: r.trigger, changes: r.changes.length }))
+  }
+
+  /** capsule_retire（§5.4）：按名字下架 / 撤销。reason 必填。 */
+  retireCapsule({ sessionId, requestId, ref, reason, supersededBy, undo = false }) {
+    const check = this.checkRequest(sessionId, requestId, 'curate')
+    if (check.error) return { ok: false, error: check.error }
+    const why = checkReason(reason)
+    if (why.error) return { ok: false, error: why.error }
+    let change
+    try {
+      if (undo) {
+        const r = this.library.unretire(ref)
+        change = { op: 'undo', key: r.key, before: r.before, reason: why.reason }
+      } else {
+        const r = this.library.retire(ref, { reason: why.reason, supersededBy: supersededBy ?? null, at: new Date(this.now()).toISOString(), by: requestId })
+        change = { op: 'retire', key: r.key, before: r.before, after: r.after }
+      }
+    } catch (error) {
+      return { ok: false, error: error.message }
+    }
+    check.req.changes.push(change)
+    this.log(`[bt] curate ${requestId}: ${change.op} ${change.key}`)
+    return { ok: true, ...change }
+  }
+
+  /** capsule_describe（§5.4）：改说明，不产生新版本。 */
+  describeCapsule({ sessionId, requestId, ref, description }) {
+    const check = this.checkRequest(sessionId, requestId, 'curate')
+    if (check.error) return { ok: false, error: check.error }
+    if (typeof description !== 'string' || !description.trim()) return { ok: false, error: 'description is required: one line saying what it does and when it applies' }
+    let r
+    try {
+      r = this.library.describe(ref, description.trim())
+    } catch (error) {
+      return { ok: false, error: error.message }
+    }
+    const change = { op: 'describe', key: r.key, before: r.before, after: r.after }
+    check.req.changes.push(change)
+    this.log(`[bt] curate ${requestId}: describe ${r.key}`)
+    return { ok: true, ...change }
+  }
+
+  /** bt_curate_done：结束整理。reason 必填，什么都没改也要写为什么。 */
+  curateDone({ sessionId, requestId, reason }) {
+    const check = this.checkRequest(sessionId, requestId, 'curate')
+    if (check.error) return { ok: false, error: check.error }
+    if (typeof reason !== 'string' || !reason.trim()) return { ok: false, error: 'reason is required: what you changed and why, or why nothing needed changing' }
+    const { req } = check
+    req.answered = true
+    this.closeCurate(req, 'done', reason.trim())
+    return { ok: true, requestId, changes: req.changes }
+  }
+
+  closeCurate(req, outcome, reason) {
+    req.closed = true
+    const pick = (op) => req.changes.filter((c) => c.op === op)
+    appendCurateLog(this.library.dir, {
+      requestId: req.requestId, at: new Date(this.now()).toISOString(), trigger: req.trigger, sinceLast: req.sinceLast, outcome,
+      retired: pick('retire'), undone: pick('undo'), described: pick('describe'), reason
+    })
+    this.log(`[bt] curate ${req.requestId} ${outcome}: ${reason}`)
   }
 
   // ── 回合 ─────────────────────────────────────────────────────────────────
@@ -464,6 +606,17 @@ export class Bridge {
       this.turns.delete(key)
       return null
     }
+    if (req.type === 'curate') {
+      // 整理没结束：提醒一次；再没结束就按 abandoned 关闭，已经做的改动保留（照复盘）
+      if (!req.reminded) {
+        req.reminded = true
+        const text = renderTemplate(this.prompts.requests.curate_reminder, { requestId, changes: String(req.changes.length) })
+        return { steer: { text, summary: `提醒：整理 ${requestId} 还没有结束`, source: { kind: SOURCE_KIND, requestId, reason: 'reminder' } } }
+      }
+      this.turns.delete(key)
+      this.closeCurate(req, 'abandoned', 'the turn ended again without bt_curate_done')
+      return null
+    }
     if (req.type === 'reflect') {
       // 复盘没交（P4-D10）：提醒一次；再没交就按 abandoned 关闭，已经存进库的胶囊保留
       if (!req.reminded) {
@@ -498,6 +651,11 @@ export class Bridge {
     const req = this.requests.get(requestId)
     if (!this.isOpen(req)) return null
     const message = errorText(error)
+    // 整理回合出错（含人取消）：不自动重发（§5.2），要整理就再敲 /bt curate
+    if (req.type === 'curate') {
+      this.closeCurate(req, 'abandoned', `the turn errored: ${message}`)
+      return null
+    }
     const attemptsLeft = this.chargeAttempt(req, `the turn errored: ${message}`)
     if (attemptsLeft <= 0) return { failed: true }
     const template = req.type === 'reflect' ? this.prompts.requests.reflect_retry : this.prompts.requests.retry
@@ -529,6 +687,8 @@ export class Bridge {
     const plan = this.planning && this.requests.get(this.planning)
     if (plan && plan.sessionId === sessionId) this.closePlan(plan, 'session closed')
     for (const req of this.requests.values()) if (req.type === 'reflect' && req.sessionId === sessionId && this.isOpen(req)) this.closeReflect(req, 'abandoned', 'session closed')
+    for (const req of this.requests.values()) if (req.type === 'curate' && req.sessionId === sessionId && this.isOpen(req)) this.closeCurate(req, 'abandoned', 'session closed')
+    if (this.curateSession === sessionId) this.curateSession = null
     const task = this.activeTask()
     if (task && this.taskSessions.get(task.taskId) === sessionId) this.executor.abortTask(`session ${sessionId} was closed`, { by: 'session' })
   }
@@ -562,7 +722,7 @@ export class Bridge {
     this.planning = null
     this.taskSessions.set(req.taskId, req.sessionId)
     const task = this.executor.task
-    return { ok: true, taskId: task.taskId, requestId, version: task.version, tree: renderTree(task.spec) }
+    return { ok: true, taskId: task.taskId, requestId, version: task.version, tree: renderTree(task.spec), ...this.retiredWarnings(task.spec) }
   }
 
   /** bt_submit_expansion：替换一个 PendingExpansion。 */
@@ -575,7 +735,7 @@ export class Bridge {
     const result = this.executor.submitExpansion(requestId, subtree)
     if (!result.ok) return result
     req.answered = true
-    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids }
+    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids, ...this.retiredWarnings(this.executor.task?.spec, result.ids) }
   }
 
   /** bt_submit_patch：回答修复请求（P2 §3）。`ops: []` = 原树继续。 */
@@ -588,7 +748,7 @@ export class Bridge {
     const result = this.executor.submitPatch(requestId, ops ?? [])
     if (!result.ok) return result
     req.answered = true
-    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids }
+    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids, ...this.retiredWarnings(this.executor.task?.spec, result.ids) }
   }
 
   /** bt_inspect（P2 §4.4）：当前任务；复盘回合里看复盘请求持有的那个已结束的任务（P4 §2.4）。 */
@@ -657,9 +817,28 @@ export class Bridge {
 
   // ── 内部 ─────────────────────────────────────────────────────────────────
 
+  /**
+   * 树里引用了已下架的名字（D9）：只警告、不拦——下架可能是误判，带哈希的引用照常能跑。
+   * ids 给了只看这些新节点（展开 / 补丁），没给看整棵树（大纲）。@returns {{ warnings?: string[] }}
+   */
+  retiredWarnings(spec, ids = null) {
+    if (!spec) return {}
+    const manifest = this.library.readManifest()
+    const only = ids ? new Set(ids) : null
+    const warnings = []
+    walkSpec(spec, (node) => {
+      if (typeof node.ref !== 'string' || (only && !only.has(node.id))) return
+      const key = node.ref.split('@')[0]
+      const retired = manifest[key]?.retired
+      if (!retired) return
+      warnings.push(`[${node.id}] ${key} is retired (${retired.reason})${retired.supersededBy ? `; superseded by ${retired.supersededBy}` : ''}. The tree still runs — this is only a warning`)
+    })
+    return warnings.length ? { warnings } : {}
+  }
+
   isOpen(req) {
     if (!req || req.answered || req.closed) return false
-    if (req.type !== 'plan' && req.type !== 'reflect') return this.executor.task?.pending?.requestId === req.requestId
+    if (!['plan', 'reflect', 'curate'].includes(req.type)) return this.executor.task?.pending?.requestId === req.requestId
     return true
   }
 
@@ -697,7 +876,7 @@ export class Bridge {
   }
 
   message(req, text, summary) {
-    return { text, summary: summary.length > 120 ? `${summary.slice(0, 119)}…` : summary, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId: req.requestId, reason: req.type } }
+    return { text, summary: summary.length > 120 ? `${summary.slice(0, 119)}…` : summary, source: { kind: SOURCE_KIND, ...(req.taskId ? { taskId: req.taskId } : {}), requestId: req.requestId, reason: req.type } }
   }
 }
 

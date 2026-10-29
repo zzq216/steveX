@@ -136,9 +136,9 @@ function loadPlugin(extra = {}) {
 
 const enter = (messages) => async () => ({ kind: 'enter', messages })
 
-test('装载：注册二十二个工具（含三个 fast_*、两个复盘工具、四个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
+test('装载：注册二十五个工具（含三个 fast_*、两个复盘工具、三个整理工具、四个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
   const { tools, sections, dispose } = loadPlugin()
-  assert.equal(tools.size, 22)
+  assert.equal(tools.size, 25)
   assert.ok(tools.get('bt_submit_tree').output.schema, '经过 defineTool')
   assert.deepEqual(sections.map((s) => s.name), ['stevex:identity', 'stevex:authoring'])
   assert.ok(sections.every((s) => s.interpolate === false))
@@ -153,7 +153,7 @@ test('P1 适配层：/bt task → followup → 回合绑定（守卫按请求放
 
   await emit('agent/created', { agent })
   assert.equal(agent.restrictions.length, 1, 'exclusiveTools：会话只看得到 steveX 的工具')
-  assert.equal(agent.restrictions[0].allow.length, 19, '普通会话看不到 fast_*')
+  assert.equal(agent.restrictions[0].allow.length, 22, '普通会话看不到 fast_*')
   assert.equal(agent.restrictions[0].allow.includes('todo_write'), false, '没注册的内置工具不进 allow（restrict 会拒绝未知名字）')
 
   const started = commands[0].handler({ rawInput: 'task 做一把木镐', agent })
@@ -359,6 +359,8 @@ test('快树反思（P3）：批次 → ctx.agents.create 开会话（stevex 预
   agents.set('s1', normal)
   assert.match(guardReason('fast_submit_patch', normal), /only for fast-tree reflection sessions/)
   assert.match(guardReason('capsule_save', normal), /only for answering a task review/, '复盘工具只在复盘回合可用')
+  assert.match(guardReason('capsule_retire', normal), /only for answering a capsule library curation request/, '整理工具只在整理回合可用')
+  assert.match(guardReason('bt_curate_done', normal), /curation request/)
 
   await emit('agent/turn-stopping', { agent: session, turn: 1 })
   assert.match(session.steers[0].content[0].text, /快树批次 b1 还没有结束/)

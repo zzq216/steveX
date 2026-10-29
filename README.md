@@ -187,6 +187,7 @@ npm run start:all
 | `/bt run <file>` | 跑一棵手写树（如 `dsh-plugins/agent/examples/*.json`） |
 | `/bt reflect` | 手动对上一个任务发起复盘 |
 | `/bt capsules` | 列出胶囊库 |
+| `/bt curate` | 整理胶囊库：看全库清单与使用统计，下架过时条目、改说明（有任务或请求没结束时不发；`curate.everyTasks` 设为 N 可每 N 个任务自动发，默认 0） |
 | `/bt fact <陈述>` | 让 agent 查 MC 源码核实一句话，并写进事实库 |
 | `/bt facts [词]` / `/bt facts check` | 查事实库 / 重算引用、列出失效的事实 |
 | `/bt fast status \| log \| rollback <版本> \| reflect \| load <file>` | 快树（反射层）的状态、日志、回滚、反思 |
@@ -194,6 +195,8 @@ npm run start:all
 不启动 DSH 也能跑手写树：`cd dsh-plugins/agent && node scripts/bt-run.js examples/recipe_query.json`。
 
 运行产物写在 `runtime/tasks/<taskId>/`（事件日志 `events.jsonl`、树版本 `trees/v<N>.json`），不进 git。
+
+胶囊库维护（在 `dsh-plugins/agent` 里）：`npm run capsule-stats`（使用统计，`-- --rebuild` 从事件日志重算）、`npm run capsule-gc`（默认只演练，`-- --apply` 才把无人引用的旧版本移进 `archive/`）、`npm run capsule-retire -- <文件夹/名字> --reason …`（人手动下架，`--undo` 撤销）。
 
 ---
 

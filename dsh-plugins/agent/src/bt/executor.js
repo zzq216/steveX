@@ -458,7 +458,9 @@ export class Executor extends EventEmitter {
       requestExpansion: task ? (node) => { task.expansionNode = node } : undefined,
       onNode: task ? (node, phase, status) => this.log(task.taskId, {
         event: 'node', phase, id: node.id, type: node.type, name: node.name ?? undefined,
-        status, error: phase === 'exit' && status === FAILURE ? node.lastError ?? undefined : undefined
+        status, error: phase === 'exit' && status === FAILURE ? node.lastError ?? undefined : undefined,
+        // 调用胶囊的节点（Compute / 条件代码 / SubTree）退出时记下钉过哈希的引用：胶囊使用统计据此累计（整理方案 D1）
+        ref: phase === 'exit' ? node.spec.ref ?? undefined : undefined
       }) : undefined
     }
   }

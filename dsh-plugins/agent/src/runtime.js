@@ -1,6 +1,6 @@
 import { GameState, createModClient } from './game/index.js'
 import { Executor, EventLog, createLocalResponder } from './bt/index.js'
-import { CapsuleLibrary, Sandbox, createBuiltins } from './capsules/index.js'
+import { CapsuleLibrary, CapsuleStats, Sandbox, createBuiltins } from './capsules/index.js'
 import { createDefaultRegistry } from './commands.js'
 import { FastMonitor, FastVersions, FastReflector, EMPTY_FAST_TREE } from './fast/index.js'
 import { FactStore, SourceTree } from './facts/index.js'
@@ -40,6 +40,15 @@ export function createRuntime(config, deps = {}) {
     ? createLocalResponder(executor, { log: (line) => logger?.info?.(line), types: deps.responderTypes ?? null, skip: deps.responderSkip ?? null })
     : () => {}
 
+  // 胶囊使用统计（整理方案 §3）：节点退出事件累计到本任务，任务结束时并进 stats.json
+  executor.on('event', (record) => {
+    try {
+      capsules.stats.observe(record)
+    } catch (error) {
+      logger?.warn?.(`[bt] capsule stats: ${error.message}`)
+    }
+  })
+
   // 任务结束：通知查询 API（缓存已改为按版本，不再按任务钉住；保留这个钩子以兼容）
   executor.on('task', (summary) => {
     if (summary.state === 'done' || summary.state === 'failed') capsules.releaseTask(summary.taskId)
@@ -78,6 +87,7 @@ export function createRuntime(config, deps = {}) {
     fast: { monitor, versions, reflector },
     facts,
     library: capsules.library,
+    stats: capsules.stats,
     sandbox: capsules.sandbox,
     json: capsules.json,
     nbt: capsules.nbt,
@@ -97,6 +107,7 @@ export function createCapsules(config) {
   const { builtins, json, nbt } = createBuiltins({ jsonSources: config.jsonSources, visionRoot: config.visionRoot })
   return {
     library: new CapsuleLibrary({ dir: config.capsulesDir, builtins }),
+    stats: new CapsuleStats({ dir: config.capsulesDir }),
     sandbox: new Sandbox(config.sandbox),
     json,
     nbt,

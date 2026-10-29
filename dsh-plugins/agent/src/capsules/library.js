@@ -8,7 +8,8 @@ import { validateSignature } from './signature.js'
  *
  *   <dir>/code/<name>@<hash>.json    Compute / 条件代码（body = TS 源码）
  *   <dir>/trees/<name>@<hash>.json   可复用子树（body = 执行格式树）
- *   <dir>/manifest.json              每个 "文件夹/name" 的最新 hash + 一句话描述（给大模型选条目用）
+ *   <dir>/manifest.json              每个 "文件夹/name" 的最新 hash + 一句话描述（给大模型选条目用）+ 下架标记
+ *   <dir>/archive/<日期>/…            GC 归档（scripts/capsule-gc.js）：无人引用的旧版本移到这里，不真删
  *
  * - 引用 = `文件夹/name@hash`，前缀即 kind；哈希覆盖 signature + preconditions + body，不含 name / locked / description
  * - 改一个字符 = 新条目，老条目原样留下；取不到是错误，**不会退回最新版**（§8.4）
@@ -18,6 +19,8 @@ import { validateSignature } from './signature.js'
  *   校验与运行照 code/ 条目，落在 runtime/tasks/<taskId>/code/，不进库、不进 manifest
  * - 暂存（P3 §7.2）：快树补丁附带的条件代码在补丁被接受之前只在内存里——能被钉住、能求值，
  *   补丁被拒就丢掉（不进库、不动 manifest）；被接受时 commitStaged() 写进库，哈希与暂存时相同
+ * - 下架（整理方案 §5.4）：manifest 该名字加 `retired`，条目文件不动、带哈希的引用照常能装载；
+ *   capsule_search 默认不列它。同名写入新版本（write）时下架标记自然清掉
  */
 export class LibraryError extends Error {
   constructor(message) {
@@ -121,7 +124,7 @@ export class CapsuleLibrary {
     }
     for (const [key, info] of Object.entries(this.readManifest())) {
       const entry = this.tryGet(`${key}@${info.hash}`)
-      out.push({ ref: `${key}@${info.hash}`, description: info.description ?? '', locked: Boolean(info.locked), builtin: false, kind: entry ? kindOf(key, entry) : 'missing' })
+      out.push({ ref: `${key}@${info.hash}`, description: info.description ?? '', locked: Boolean(info.locked), builtin: false, kind: entry ? kindOf(key, entry) : 'missing', ...(info.retired ? { retired: info.retired } : {}) })
     }
     for (const [name, hash] of this.drafts?.latest ?? []) {
       const entry = this.drafts.entries.get(`task/${name}@${hash}`)
@@ -167,7 +170,12 @@ export class CapsuleLibrary {
     if (this.cache.has(key)) return this.cache.get(key)
     if (!this.dir) throw new LibraryError(`capsule ${key} not found (no capsule library directory configured)`)
     const file = path.join(this.dir, folder, `${name}@${hash}.json`)
-    if (!fs.existsSync(file)) throw new LibraryError(`capsule ${key} not found`)
+    if (!fs.existsSync(file)) {
+      const archived = this.archivedPath(folder, `${name}@${hash}.json`)
+      throw new LibraryError(archived
+        ? `capsule ${key} was archived by GC (no saved tree referenced it): ${path.relative(this.dir, archived)}`
+        : `capsule ${key} not found`)
+    }
     const entry = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (hashEntry(entry) !== hash) throw new LibraryError(`capsule ${key} was modified on disk (content no longer matches its hash)`)
     const frozen = deepFreeze({ ...entry, hash })
@@ -220,6 +228,76 @@ export class CapsuleLibrary {
     return { ref: `${folder}/${entry.name}@${hash}`, hash, created }
   }
 
+  /** 一个已归档文件的位置（archive/<日期>/<folder>/<file>，取最新的那次）；没有 = null */
+  archivedPath(folder, file) {
+    const root = path.join(this.dir, 'archive')
+    if (!fs.existsSync(root)) return null
+    for (const day of fs.readdirSync(root).sort().reverse()) {
+      const candidate = path.join(root, day, folder, file)
+      if (fs.existsSync(candidate)) return candidate
+    }
+    return null
+  }
+
+  // ── 整理（整理方案 §5.4）：下架、改说明。条目内容与哈希都不动 ──────────
+
+  /** "folder/name[@hash]" → manifest 的键与当前项；内置条目、找不到 → 抛错 */
+  manifestEntry(ref) {
+    const { folder, name } = parseRef(ref)
+    if (folder === 'task') throw new LibraryError(`${ref} is a task draft, not a library entry`)
+    const key = `${folder}/${name}`
+    if (this.builtinLatest.has(key)) throw new LibraryError(`${key} is a built-in entry and cannot be changed`)
+    const manifest = this.readManifest()
+    if (!manifest[key]) throw new LibraryError(`no capsule named ${key}`)
+    return { key, manifest, info: manifest[key] }
+  }
+
+  /** @returns {{ key, hash, before: object|null, after: object }} */
+  retire(ref, { reason, supersededBy = null, at, by = null }) {
+    const { key, manifest, info } = this.manifestEntry(ref)
+    if (info.locked) throw new LibraryError(`${key} is locked and cannot be retired`)
+    if (supersededBy !== null) {
+      const target = this.pin(supersededBy)
+      if (target.startsWith(`${key}@`)) throw new LibraryError('supersededBy cannot be the entry itself')
+      supersededBy = target.slice(0, target.lastIndexOf('@'))
+    }
+    const before = info.retired ?? null
+    const after = { at, reason, ...(supersededBy ? { supersededBy } : {}), ...(by ? { by } : {}) }
+    manifest[key] = { ...info, retired: after }
+    this.writeManifest(manifest)
+    return { key, hash: info.hash, before, after }
+  }
+
+  /** @returns {{ key, hash, before: object }} */
+  unretire(ref) {
+    const { key, manifest, info } = this.manifestEntry(ref)
+    if (!info.retired) throw new LibraryError(`${key} is not retired`)
+    const { retired: before, ...rest } = info
+    manifest[key] = rest
+    this.writeManifest(manifest)
+    return { key, hash: info.hash, before }
+  }
+
+  /** 改说明：manifest 与当前版本文件里的 description 一起改；description 不在哈希里，不产生新版本。@returns {{ key, hash, before, after }} */
+  describe(ref, description) {
+    const { key, manifest, info } = this.manifestEntry(ref)
+    const { folder, name } = parseRef(key)
+    const file = path.join(this.dir, folder, `${name}@${info.hash}.json`)
+    if (fs.existsSync(file)) {
+      const stored = JSON.parse(fs.readFileSync(file, 'utf8'))
+      writeAtomic(file, JSON.stringify(withDescription(stored, description), null, 2) + '\n')
+      this.cache.delete(`${key}@${info.hash}`)
+    }
+    manifest[key] = { ...info, description }
+    this.writeManifest(manifest)
+    return { key, hash: info.hash, before: info.description ?? '', after: description }
+  }
+
+  writeManifest(manifest) {
+    fs.mkdirSync(this.dir, { recursive: true })
+    writeAtomic(this.manifestPath(), JSON.stringify(sortKeys(manifest), null, 2) + '\n')
+  }
+
   // ── 任务内代码草稿 ──────────────────────────────────────────────────────
 
   /** 开始一个任务的草稿区（任务串行：同时只有一个）。dir = runtime/tasks/<taskId>/code，null = 不落盘。 */
@@ -263,6 +341,12 @@ function kindOf(key, entry) {
   if (key.startsWith('trees/')) return 'tree'
   if (entry.signature?.returns === 'bool') return 'condition'
   return entry.body?.host ? 'query' : 'compute'
+}
+
+/** 条目文件的字段顺序照 write()：name、description、其余 */
+function withDescription(stored, description) {
+  const { name, description: _old, ...rest } = stored
+  return { name, ...(description ? { description } : {}), ...rest }
 }
 
 function stableStringify(value) {

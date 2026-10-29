@@ -24,6 +24,9 @@
     "test": "node --test",
     "extract-recipes": "node scripts/extract-recipes.js",
     "bt-run": "node scripts/bt-run.js",
-    "capsule-save": "node scripts/capsule-save.js"
+    "capsule-save": "node scripts/capsule-save.js",
+    "capsule-stats": "node scripts/capsule-stats.js",
+    "capsule-gc": "node scripts/capsule-gc.js",
+    "capsule-retire": "node scripts/capsule-retire.js"
   }
 }

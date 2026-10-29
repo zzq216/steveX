@@ -134,8 +134,9 @@ export function treeTools({ bridge, maxOutputChars, inspectMaxBytes = 8000 }) {
 function renderSubmission(value) {
   if (value.ok) {
     const head = `已接受：任务 ${value.taskId}，请求 ${value.requestId}，树 v${value.version}。`
-    if (value.tree) return `${head}任务已开始执行。\n${value.tree}`
-    return `${head}新节点：${(value.ids ?? []).join(', ')}`
+    const warnings = value.warnings?.length ? `\n\n警告（不影响执行）：\n${value.warnings.map((w) => `- ${w}`).join('\n')}` : ''
+    if (value.tree) return `${head}任务已开始执行。\n${value.tree}${warnings}`
+    return `${head}新节点：${(value.ids ?? []).join(', ')}${warnings}`
   }
   if (value.stale) {
     const directory = value.directory ? `\n\n新的目录：\n${renderDirectory(value.directory)}` : ''

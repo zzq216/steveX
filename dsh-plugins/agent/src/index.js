@@ -5,7 +5,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { normalizeConfig, steveXRoot } from './config.js'
 import { createRuntime } from './runtime.js'
-import { Bridge, REFLECT_ONLY_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
+import { Bridge, REFLECT_ONLY_TOOLS, CURATE_ONLY_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
 import { FactTurns } from './llm/fact_turns.js'
 import { FastBridge, FAST_ONLY_TOOLS, FAST_TOOLS } from './llm/fast_bridge.js'
 import { loadPrompts } from './llm/prompts.js'
@@ -48,6 +48,7 @@ const USAGE = [
   '/bt pause | resume         暂停 / 继续任务树（快树照跑）',
   '/bt abort [理由]            放弃当前任务（默认中止流程：松键、关容器；不复盘）',
   '/bt reflect                对最近结束的任务手动发复盘请求（任务对象只留到下一个任务开始）',
+  '/bt curate                 整理胶囊库：发一个整理请求（看全库清单、下架 / 改说明）；有任务或请求没结束时不发、不排队',
   '/bt fact <陈述>             让大模型查 MC 源码确认一条事实，确认了就带引用写进事实库',
   '/bt facts [词] | check      列出事实库（按词筛）；check 重算所有引用，列出失效的',
   '/bt nodes                  任务树每个节点的状态',
@@ -115,7 +116,7 @@ export function apply(ctx, rawConfig = {}) {
     name: 'bt',
     description: 'steveX 行为树执行器：开始任务、跑手写树、查看 / 暂停 / 放弃任务、查看胶囊库',
     // 声明 input 才能带参数：没有 input 的命令，Web 输入框只在单独输入 "/bt" 时执行，带参数就当普通消息发给模型
-    input: { hint: 'status | task <指令> | fact <陈述> | facts [词|check] | run <tree.json> | pause | resume | abort [理由] | reflect | nodes | fast status|log|rollback|reflect|load | capsules' },
+    input: { hint: 'status | task <指令> | fact <陈述> | facts [词|check] | run <tree.json> | pause | resume | abort [理由] | reflect | curate | nodes | fast status|log|rollback|reflect|load | capsules' },
     handler: (invocation) => runCommand(executor, invocation.rawInput, {
       library: runtime.library, bridge, sessionId: invocation.agent?.id ?? null, fast: runtime.fast, facts: runtime.facts, factTurns
     })
@@ -142,6 +143,8 @@ function setupPlanner(ctx, config, runtime) {
   const bridge = new Bridge({
     executor, library, sandbox, prompts, registry,
     reflect: config.reflect,
+    stats: runtime.stats,
+    curate: config.curate,
     runtimeDir: config.runtimeDir,
     maxInvalidAttempts: config.maxInvalidAttempts,
     releaseTask: runtime.releaseTask,
@@ -157,6 +160,15 @@ function setupPlanner(ctx, config, runtime) {
     },
     notify(sessionId, message) {
       ctx.agents.get(sessionId)?.inject(toMessage(message))
+    },
+    // 自动整理可能在复盘回合中途（bt_reflect_done 里）触发：回合还在 running 时 followup 叫不醒驱动器，等 idle 再发
+    deliverIdle(sessionId, message) {
+      const agent = ctx.agents.get(sessionId)
+      if (!agent) return false
+      Promise.resolve(agent.whenIdle?.())
+        .then(() => ctx.agents.withoutInitiator(() => agent.followup(toMessage(message))))
+        .catch((e) => logger?.warn?.(`[bt] curate delivery failed: ${e?.message ?? e}`))
+      return true
     }
   })
 
@@ -223,6 +235,7 @@ function setupPlanner(ctx, config, runtime) {
     facts: runtime.facts,
     factTurns,
     game, registry, library, bridge,
+    stats: runtime.stats,
     methods: METHODS,
     readMethods: READ_METHODS,
     nbt: runtime.nbt,
@@ -280,6 +293,7 @@ function setupPlanner(ctx, config, runtime) {
     if (FAST_ONLY_TOOLS.includes(exec.name)) return `steveX: ${exec.name} is only for fast-tree reflection sessions`
     const turn = turnTools.get(sessionId)
     if (REFLECT_ONLY_TOOLS.includes(exec.name) && !turn?.allowed.has(exec.name)) return `steveX: ${exec.name} is only for answering a task review (reflect) request`
+    if (CURATE_ONLY_TOOLS.includes(exec.name) && !turn?.allowed.has(exec.name)) return `steveX: ${exec.name} is only for answering a capsule library curation request (/bt curate)`
     const allowed = turn?.allowed ?? (config.planner.exclusiveTools ? sessionAllowed : null)
     if (!allowed || allowed.has(exec.name)) return undefined
     if (turn && factTurns.isCheck(sessionId, turn.turn) && !bridge.turns.has(`${sessionId}#${turn.turn}`)) {
@@ -414,6 +428,12 @@ export function runCommand(executor, rawInput, { library = null, bridge = null, 
         const result = bridge.reflectLast({ sessionId })
         return result.ok ? { kind: 'success', text: `复盘请求 ${result.requestId} 已发给大模型` } : { kind: 'error', text: result.error }
       }
+      case 'curate': {
+        if (!bridge) return { kind: 'error', text: '大模型侧没有启用（planner.enabled = false）' }
+        if (!sessionId) return { kind: 'error', text: '/bt curate 只能在会话里用' }
+        const result = bridge.startCurate({ sessionId, trigger: 'manual' })
+        return result.ok ? { kind: 'success', text: `整理请求 ${result.requestId} 已发给大模型` } : { kind: 'error', text: result.error }
+      }
       case 'fact': {
         if (!factTurns) return { kind: 'error', text: '大模型侧没有启用（planner.enabled = false）' }
         if (!sessionId) return { kind: 'error', text: '/bt fact 只能在会话里用' }
@@ -526,6 +546,7 @@ function formatStatus(snap, bridge) {
   const plan = bridge?.planning ? bridge.requests.get(bridge.planning) : null
   if (plan) lines.push(`规划中：请求 ${plan.requestId}（任务 ${plan.taskId}）— ${plan.instruction}`)
   for (const r of bridge?.reflecting?.() ?? []) lines.push(`复盘中：请求 ${r.requestId}（任务 ${r.taskId}）；已存 ${r.saved.join(', ') || '无'}`)
+  for (const r of bridge?.curating?.() ?? []) lines.push(`整理中：请求 ${r.requestId}（${r.trigger === 'auto' ? '自动' : '手动'}）；已改 ${r.changes} 处`)
   if (!snap.task) lines.push('任务：无')
   else {
     const t = snap.task

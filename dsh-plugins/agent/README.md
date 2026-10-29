@@ -17,6 +17,7 @@ steveX 的行为树执行器、胶囊库与 Compute 沙箱，以及让大模型�
 | **P3** | 快树进化：`player` 补着火 / 岩浆 / 细雪 / 最近受伤字段并一直轮询、没任务时的死亡与重生、快树事件流、批次与限流、快树反思会话、`fast_*` 工具、版本链与回滚、`/bt fast …` | **已实现**，单元测试通过；待游戏内验收（[P3实施细则.md](../../docs/P3实施细则.md) §11） |
 | **P4** | 任务复盘与胶囊：`reflect` 请求、`bt_inspect tree`（树版本链）、`capsule_save`（草稿转正、写死的值检查、同名 `replaces`）、`bt_reflect_done`、`/bt reflect` | **已实现**；第一轮游戏内验收通过（存胶囊、下一次任务引用，[P4实施细则.md](../../docs/P4实施细则.md) §10.3），其余见 [P4待测场景.md](../../docs/P4待测场景.md) |
 | **P5** | 事实库：`fact_search` / `fact_write`、`mc_source_search` / `mc_source_read`（只读源码基准）、`/bt fact` 与路由 `fact` handler、查了源码没写事实的提醒、`/bt facts` | **已实现**，单元测试通过；待 DSH 内验收（[P5实施细则.md](../../docs/P5实施细则.md) §11.2） |
+| **整理** | 胶囊库整理：使用统计（`stats.json`，`capsule_search` / `capsule_get` 展示）、`/bt curate` 整理回合（`capsule_retire` / `capsule_describe` / `bt_curate_done`）、`curate.everyTasks` 自动触发（默认 0）、离线 GC 与脚本 | **已实现**，单元测试通过；待 DSH 内验收（[胶囊库整理设计方案.md](../../docs/胶囊库整理设计方案.md) §10.3） |
 
 **没有人写的技能**：读世界的条件、合成 / 挖掘这类高层动作、配方解析，都由 agent 在训练中写成胶囊。
 插件只提供接口：mod 的原始命令、两条黑板条件、沙箱、胶囊库、查询 API。
@@ -208,3 +209,21 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 - `/bt reflect`：对最近结束、任务对象还在内存里的任务手动复盘
 - 配置：`reflect.enabled`（false = 只发结束通知）、`reflect.onFailed`、`reflect.literalCheck`
 - 提示词正文都在 `prompts/`，改内容不改代码；缺文件 / 空文件 / 带 `TODO(内容层)` 装载即报错
+
+## 胶囊库整理
+
+设计见 [胶囊库整理设计方案.md](../../docs/胶囊库整理设计方案.md)。原则：只补证据与能力，不写"什么时候该下架"的规则。
+
+1. **统计**（`capsules/stats.js`）：节点退出事件带 `ref`；执行器事件流边跑边累计到本任务，`task/done | failed` 时并进 `<capsulesDir>/stats.json`（同一任务只并一次）。按完整引用记：调用次数、条件的判真 / 判假 / 报错、Compute / 子树的成败、用过它的任务数与成败、最近 3 条错误；草稿转正时带上草稿时期的数字。快树里的使用不计入。`capsule_search` 每条带 `usage`（同名各版本加总，**不影响排序**），`capsule_get` 带明细
+2. **整理回合**（`bridge.startCurate`）：`/bt curate`，或每结束 `curate.everyTasks` 个任务自动发（默认 0 = 只手动；只在空闲时发，复盘没结束就等它）。有任务 / 规划 / 复盘 / 整理没结束时直接拒绝、不排队。消息给全库清单（按名字排序；超过 `curate.listLimit` 只给目录）。没结束就提醒一次、再结束按 `abandoned` 关闭；回合出错（含人取消）直接关闭、不重发。每次整理在 `<capsulesDir>/curate.jsonl` 记一行
+3. **下架**：manifest 该名字加 `retired: { at, reason, supersededBy?, by }`，条目文件不动。`capsule_search` 默认不返回（`includeRetired: true` 才返回）；带哈希的引用照常装载；新提交的树引用下架的名字 → 提交结果里给警告，不拦。同名存新版本时标记自动清掉。内置与 `locked` 条目不能下架
+4. **GC**（`capsules/gc.js`，离线）：保留当前版本、`locked`、三处树（库里 `trees/`、`runtime/tasks/*/trees/`、快树版本库）引用的版本及子树传递闭包、最近 `--keep-days` 天用过的；其余移到 `archive/<日期>/`，`archive/index.jsonl` 记一行。装载已归档的引用时报错写明"已归档"
+
+| 工具（只在整理回合） | 作用 |
+|---|---|
+| `capsule_retire` | `{ requestId, ref, reason, supersededBy?, undo? }`，`reason` 必填 |
+| `capsule_describe` | `{ requestId, ref, description }`，不换哈希 |
+| `bt_curate_done` | `{ requestId, reason }` |
+
+- 脚本：`npm run capsule-stats [-- --rebuild]`、`npm run capsule-gc [-- --apply] [--keep-days n]`、`npm run capsule-retire -- <文件夹/名字> --reason … [--superseded-by …] [--undo]`
+- 配置：`curate.everyTasks`（默认 0）、`curate.listLimit`（默认 150）

@@ -81,6 +81,13 @@ export const DEFAULTS = Object.freeze({
     /** 保存胶囊时查写死的值（P4 §5）；false 只用于调试 */
     literalCheck: true
   },
+  /** 胶囊库整理（胶囊库整理设计方案 §5） */
+  curate: {
+    /** 每结束几个任务自动发一次整理请求；0 = 只能手动 /bt curate（C1） */
+    everyTasks: 0,
+    /** 条目超过这么多时，整理请求只给目录、不给全量清单（C5） */
+    listLimit: 150
+  },
   planner: {
     enabled: true,
     /** 工具结果的字符上限，超出截断并提示缩小查询（§5.2） */
@@ -105,6 +112,7 @@ export function normalizeConfig(raw = {}) {
     planner: { ...DEFAULTS.planner, ...(raw.planner ?? {}) },
     fast: { ...DEFAULTS.fast, ...(raw.fast ?? {}) },
     reflect: { ...DEFAULTS.reflect, ...(raw.reflect ?? {}) },
+    curate: { ...DEFAULTS.curate, ...(raw.curate ?? {}) },
     facts: { ...DEFAULTS.facts, ...(raw.facts ?? {}) }
   }
   for (const key of ['tickMs', 'statePollMs', 'maxExpansionNodes', 'maxInvalidAttempts', 'maxValueBytes', 'maxCapsuleDepth', 'snapshotKeep', 'reactiveEveryMs', 'respawnTimeoutMs']) {
@@ -113,6 +121,8 @@ export function normalizeConfig(raw = {}) {
   for (const key of ['batchSize', 'batchMaxEvents', 'reflectMaxParallel', 'incidentQuietMs', 'episodeMergeMs', 'snapshotKeep', 'maxArms', 'maxEpisodeMs']) {
     if (!(Number.isInteger(config.fast[key]) && config.fast[key] > 0)) throw new Error(`stevex-agent config: fast.${key} must be a positive integer`)
   }
+  if (!(Number.isInteger(config.curate.everyTasks) && config.curate.everyTasks >= 0)) throw new Error('stevex-agent config: curate.everyTasks must be a non-negative integer (0 = manual only)')
+  if (!(Number.isInteger(config.curate.listLimit) && config.curate.listLimit > 0)) throw new Error('stevex-agent config: curate.listLimit must be a positive integer')
   for (const key of ['maxOutputChars', 'inspectMaxBytes']) {
     if (!(Number.isInteger(config.planner[key]) && config.planner[key] > 0)) throw new Error(`stevex-agent config: planner.${key} must be a positive integer`)
   }

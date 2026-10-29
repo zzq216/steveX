@@ -36,11 +36,11 @@ function setup({ mod } = {}) {
   return { ...rt, bridge, tools, call, text, delivered }
 }
 
-test('工具清单：十五个工具，没有任何按键 / 点击工具（I2）', () => {
+test('工具清单：十八个工具，没有任何按键 / 点击工具（I2）', () => {
   const { tools } = setup()
   assert.deepEqual(Object.keys(tools).sort(), [
-    'bt_abort_task', 'bt_inspect', 'bt_reflect_done', 'bt_submit_expansion', 'bt_submit_patch', 'bt_submit_tree', 'bt_view',
-    'capsule_get', 'capsule_save', 'capsule_search', 'command_docs', 'data_shapes', 'json_query', 'mod_query', 'nbt_query'
+    'bt_abort_task', 'bt_curate_done', 'bt_inspect', 'bt_reflect_done', 'bt_submit_expansion', 'bt_submit_patch', 'bt_submit_tree', 'bt_view',
+    'capsule_describe', 'capsule_get', 'capsule_retire', 'capsule_save', 'capsule_search', 'command_docs', 'data_shapes', 'json_query', 'mod_query', 'nbt_query'
   ])
 })
 
