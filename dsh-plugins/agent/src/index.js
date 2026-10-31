@@ -57,7 +57,9 @@ const USAGE = [
   '/bt fast rollback <版本>    回滚：把那一版另存为新的一版',
   '/bt fast reflect           马上把待反思事件打成一批（不等凑够）',
   '/bt fast load <file> [理由] 手动放一版快树（走同样的校验，写进版本链）',
-  '/bt capsules              胶囊库条目（内置查询 + 已保存的条件 / Compute / 子树 + 本任务的草稿）'
+  '/bt capsules              胶囊库条目（内置查询 + 已保存的条件 / Compute / 子树 + 本任务的草稿）',
+  '',
+  '注意：DSH Web 只在会话开过回合后才显示命令结果。新会话里先说一句话（或 /bt task …），再用 status / nodes / capsules 这类查看命令'
 ].join('\n')
 
 export function apply(ctx, rawConfig = {}) {

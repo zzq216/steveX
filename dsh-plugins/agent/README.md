@@ -123,6 +123,8 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 4. 回合要结束时请求还没被回答 → `steer` 提醒，算一次不合法尝试；同一请求 3 次 → 规划作废 / 任务失败
 5. 任务结束 → `inject` 一条通知（不叫醒）
 
+> **空白会话里的 `/bt` 查看命令看不到结果**：DSH Web 只在会话开过回合（`turn/start`）后才渲染命令行；只执行过命令的会话仍算空白，DSH 0.2.1-rc.5 的"新建会话"还会复用它，看起来像卡死。`/bt task` / `fact` / `reflect` / `curate` 用 `followup` 自己开回合，不受影响；`status` / `nodes` / `capsules` / `facts` / `fast status | log` 等要先在会话里说一句话。见根目录 README「常见问题」。
+
 | 工具 | 作用 |
 |---|---|
 | `mod_query` | 透传 mod 的只读方法（`player` / `inventory` / `f3` / `container/get` …），有作用的方法一律拒绝 |

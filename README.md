@@ -159,6 +159,8 @@ steveX 人设只对**新建**的会话生效，旧会话保留它创建时的预
 
 agent 先写大纲，再逐个展开，执行器在游戏里执行。任务结束后自动复盘，用得好的子树和代码存进胶囊库。
 
+> **新会话里先说一句话，再用 `/bt status` 这类查看命令。** DSH 的 Web 界面只在会话开过回合后才显示命令结果；起始页的空白会话里执行 `/bt status`，结果被记录了却不显示。DSH 0.2.1-rc.5 起"新建会话"还会复用这个空白会话，看起来像卡死、也新建不了会话。见下文「常见问题」。
+
 ### 4.（可选）启动记忆世界
 
 ```powershell
@@ -178,6 +180,8 @@ npm run start:all
 ---
 
 ## 常用 `/bt` 命令（DSH 会话里）
+
+只显示信息的子命令（`status`、`nodes`、`capsules`、`facts`、`fast status | log` 等）在**还没开过回合的空白会话**里结果不显示，先在会话里说一句话再用（见「常见问题」）。
 
 | 命令 | 作用 |
 |---|---|
@@ -346,6 +350,7 @@ curl -s -X POST http://localhost:8090/api/mod/batch/<batchId>/stop     # 中止�
 
 - **`/bt task …` 被当成普通消息发给了模型**：多半是进了不带插件的 `web` profile（例如用了 `npm run dsh -- web` 或 `.\start-dsh.bat web`），或者会话不是新建的。用 `npm run dsh -- --profile stevex --dump-config` 确认插件在，再新建会话。
 - **直接说"做一把木镐"没有开任务，只当成聊天**：看 `runtime/router/` 里这条的记录。`degraded` 有值 = 路由调用失败（超时 / 模型出错），模型会提示你改用 `/bt task`；没有这个目录 = 路由可能还在 `stub` 模式（不判断，全按聊天）——看 DSH 设置 → 插件 → `stevex-router` 的配置，`provider.mode` 是 `stub` 就改成 `llm` 或删掉这一项（默认就是 `llm`）。
+- **在起始页敲 `/bt status` 后界面没反应，"新建会话"也一直回到同一个空白页**：不是卡死。DSH Web 只在会话开过回合后才显示命令结果（上游已知限制，见 DSH `packages/feedback/command-feedback/README.md`「No visible acknowledgement on a fresh session」）；只执行过命令的会话仍算空白，而 DSH 0.2.1-rc.5 的"新建会话"会复用工作区里的空白会话，于是一直回到它。**恢复**：在这个会话里正常发一句话（如"你好"），回合开始后之前的命令结果会一起显示，之后新建会话也恢复正常。**避免**：新会话里先说一句话或直接 `/bt task …`，再用 `/bt status`、`/bt nodes`、`/bt capsules`、`/bt facts`、`/bt fast status` 等查看命令。`/bt task`、`/bt fact`、`/bt reflect`、`/bt curate` 会自己开回合，空白会话里也能用
 - **agent 说查不到配方**：没生成 `dsh-plugins/agent/data/recipes.json`（首次准备第 3 步）。
 - **`mc_source_*` 不可用**：没有 `1.21.11_src/`（首次准备第 4 步）。
 - **NBT 查询报 `SOURCE_MISSING`**：采集端还没在当前世界做过快照，或从没进入过世界。
