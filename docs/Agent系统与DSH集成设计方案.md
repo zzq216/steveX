@@ -680,7 +680,7 @@ DSH 另有 `appendPluginRecord`（`plugin:` 前缀的会话记录，[dsh-session
 
 ---
 
-## 12. 已核对的 DSH 接口（0.2.1-rc.2）
+## 12. 已核对的 DSH 接口（0.2.1-rc.2；2026-10-31 对照 0.2.1-rc.5 复核：这些接口所在的包源码未变，见 [integrations/dsh/README.md](../integrations/dsh/README.md)）
 
 本文依赖的 DSH 接口，均在 `node_modules/@deepseek-ai/` 的类型声明里确认存在（2026-10-23）：
 
