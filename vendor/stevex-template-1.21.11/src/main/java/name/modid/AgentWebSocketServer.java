@@ -73,6 +73,7 @@ public class AgentWebSocketServer extends WebSocketServer {
         SignApi.register(handlers);
         BookApi.register(handlers);
         VisionApi.register(handlers);
+        ArenaApi.register(handlers);
     }
 
     /** 当前正在执行（尚未返回）的 API 方法名集合，用于 status/busy 上报 */

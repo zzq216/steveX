@@ -29,6 +29,13 @@ export class GameState {
     this.pollSources = new Set()
     this.pollTimer = null
     this.polling = false
+    this.callListeners = new Set()
+  }
+
+  /** 监听经命令运行环境发出的 mod 调用（训练器用它记 agent 有没有用 chat/send）。@returns 取消监听 */
+  onCall(listener) {
+    this.callListeners.add(listener)
+    return () => this.callListeners.delete(listener)
   }
 
   setPollSources(sources) {
@@ -99,16 +106,26 @@ export class GameState {
   env(signal) {
     const mod = this.mod
     const timing = this.timing
-    const check = () => { if (signal?.aborted) throw new Error('aborted') }
+    const listeners = this.callListeners
+    const check = (method, params) => {
+      if (signal?.aborted) throw new Error('aborted')
+      for (const listener of listeners) {
+        try {
+          listener(method, params)
+        } catch {
+          // 监听器只是旁观者：它出错不能让命令失败
+        }
+      }
+    }
     return {
       signal,
       timing,
       async call(method, params = {}) {
-        check()
+        check(method, params)
         return mod.call(method, params)
       },
       async must(method, params = {}) {
-        check()
+        check(method, params)
         const res = await mod.call(method, params)
         if (!res.ok) throw new Error(`${method}: ${res.error}`)
         return res.data

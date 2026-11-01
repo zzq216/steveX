@@ -1,9 +1,12 @@
 package name.modid;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 
+import name.modid.arena.ArenaCommand;
+import name.modid.arena.ArenaManager;
 import name.modid.vision.EffectSampler;
 
 import net.minecraft.resources.Identifier;
@@ -32,6 +35,11 @@ public class SteveX implements ModInitializer {
 		// 必须清空：否则"玩完单机 → 退出 → 连服务器"会读到上一个世界的陈旧数据，
 		// 把"未知"伪装成"已知"（§12.3）。
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> EffectSampler.reset());
+
+		// 训练场（docs/训练场设计方案.md）：监测合成统计、清场内敌对生物；游戏内 /arena 传送到场外
+		ServerTickEvents.END_SERVER_TICK.register(ArenaManager::onServerTick);
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> ArenaManager.reset());
+		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ArenaCommand.register(dispatcher));
 
 		LOGGER.info("Hello Fabric world!");
 	}

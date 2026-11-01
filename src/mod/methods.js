@@ -1,7 +1,7 @@
 /**
  * 采集端 mod（stevex-template-1.21.11）WebSocket API 方法清单。
  *
- * 共 51 个方法，分组与参数 schema 已按 mod Java 源码逐条核实
+ * 共 56 个方法，分组与参数 schema 已按 mod Java 源码逐条核实
  * （见 steveX_改进方案.md 附录 §十一；websocket 分发在 AgentWebSocketServer /
  * api\*Api.java 各 handler 内，方法名注册与参数读取是两套并存的 ad hoc 逻辑）。
  * 上层通过 POST /api/mod/:method 原样透传，mod 侧对未知方法会返回
@@ -10,12 +10,13 @@
  * 条目字段：
  *   method    方法名（含斜杠，透传路径用）
  *   category  分组键（稳定）：continuous / one-shot / camera / query / system /
- *             container / chat / sign / book / vision
+ *             container / chat / sign / book / vision / arena
  *   description  英文短描述（/api/skills 语义，历史兼容）
  *   zh        中文说明（Mod API 查询器展示 + 搜索用）。带参方法自带
  *             "params 填 {…}" 枚举可填键（? 表示可省略）；无参方法无可填。
  *   paramDefs 参数 schema 数组（权威，供查询器填参与 hints、未来 LLM 工具 schema）：
- *             { name, type: 'bool'|'int'|'double'|'string', required?, def?, hint, sample? }
+ *             { name, type: 'bool'|'int'|'double'|'string'|'json', required?, def?, hint, sample? }
+ *             json = 数组或对象（只有 arena/* 用到）
  *             sample = 查询器预填的示例值（可与 def 不同以示可改）；无参数则 []。
  *
  * 参数读取语义（来自 mod 源码，直接影响填写建议）：
@@ -206,6 +207,32 @@ const METHODS = [
     zh: '按 uuid 查询本会话最近一次采集帧中的实体薄投影（非实时直读；首次采集前、切维后尚未重新采集、不在该帧可见范围时均报错）；params 填 { uuid(必填) }：uuid=实体 UUID（来自 vision/snapshot）。只返回物理态及可见摘要：掉落物 item{id,count,enchanted?}、展示实体 content、活体 living；不会返回复原侧完整物品组件、payload 或隐藏效果。响应带 effectsSource，unavailable 时效果缺席表示未知',
     paramDefs: [
       { name: 'uuid', type: 'string', required: true, hint: '实体 UUID（来自 f3 准星目标或 vision/snapshot）', sample: '00000000-0000-0000-0000-000000000000' }
+    ] },
+
+  // ── 训练场（4，docs/训练场设计方案.md）：只供 DSH 训练器调用，不登记给 agent（raw_commands.js 跳过）；需要单人世界 ──
+  { method: 'arena/build', category: 'arena', description: 'Build a training arena (idempotent)',
+    zh: '幂等搭建训练场（场内地板 + 屏障墙、场外平台 + 按钮 + 告示牌）并登记位置；params 填 { arena, origin? }：arena=场地名，origin=[x,y,z] 场内地板中心（已登记的场地可省略）',
+    paramDefs: [
+      { name: 'arena', type: 'string', required: true, hint: '场地名（[a-z0-9_]）', sample: 'craft2x2' },
+      { name: 'origin', type: 'json', hint: '[x, y, z]，场内地板中心方块', sample: [10000, 120, 10000] }
+    ] },
+  { method: 'arena/prepare', category: 'arena', description: 'Reset the player and start a training run',
+    zh: '开始一轮：关界面、清空物品栏与光标、传送进场、清场内掉落物与敌对生物、回满状态、白天晴天、重置配方书、发放材料，并开始监测 watch 中物品的 crafted 统计；已有进行中的一轮时报错；params 填 { arena, origin?, items, watch, dayTime? }',
+    paramDefs: [
+      { name: 'arena', type: 'string', required: true, hint: '场地名', sample: 'craft2x2' },
+      { name: 'origin', type: 'json', hint: '[x, y, z]（已登记的场地可省略）', sample: [10000, 120, 10000] },
+      { name: 'items', type: 'json', required: true, hint: '[{ slot: 0-35, id, count }]', sample: [{ slot: 4, id: 'minecraft:oak_planks', count: 2 }] },
+      { name: 'watch', type: 'json', required: true, hint: '要监测 crafted 统计的物品 id 列表', sample: ['minecraft:stick'] },
+      { name: 'dayTime', type: 'int', def: 1000, hint: '本轮开始时设置的时间（tick）', sample: 1000 }
+    ] },
+  { method: 'arena/status', category: 'arena', description: 'Current training run state',
+    zh: '当前一轮的状态：{ active, arena, startedAtMs, craftedAtMs, craftedItem, craftedDelta{id:n}, inventory{id:n}, insideArena, playerOnline }；没有进行中的一轮时只有 active:false，无参数',
+    paramDefs: [] },
+  { method: 'arena/finish', category: 'arena', description: 'End the training run and teleport outside',
+    zh: '结束本轮：返回与 arena/status 相同的最终状态后关界面、传送到场外平台；没有进行中的一轮时只传送；params 填 { arena, origin? }',
+    paramDefs: [
+      { name: 'arena', type: 'string', required: true, hint: '场地名（无进行中的一轮时用它定位场外平台）', sample: 'craft2x2' },
+      { name: 'origin', type: 'json', hint: '[x, y, z]（已登记的场地可省略）', sample: [10000, 120, 10000] }
     ] },
 ]
 

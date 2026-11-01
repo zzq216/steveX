@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 import { normalizeConfig, steveXRoot } from './config.js'
 import { createRuntime } from './runtime.js'
 import { Bridge, REFLECT_ONLY_TOOLS, CURATE_ONLY_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
@@ -12,6 +13,7 @@ import { loadPrompts } from './llm/prompts.js'
 import { createTools } from './tools/index.js'
 import { METHODS, READ_METHODS } from './game/index.js'
 import { NBT_SOURCES } from './capsules/index.js'
+import { Trainer, parseTrainArgs } from './training/trainer.js'
 
 /**
  * steveX agent 插件（DSH / Cordis 适配层，集成方案 §2.3）。
@@ -25,6 +27,7 @@ import { NBT_SOURCES } from './capsules/index.js'
  *   - P2：修复类请求（recover / escalate / failed / died）也经 Bridge 交给大模型——只推目录，证据由它用 bt_inspect 自己取；
  *     不属于任何会话的任务（/bt run 的手写树）仍由本地应答器回答
  *   - P3：快树反思批次经 FastBridge 交给专用会话（ctx.agents.create，每批一个）；该会话只准入 fast_* 与接口知识工具
+ *   - 训练场：/bt train 经 Trainer 连续跑"给材料 → 发任务 → 判定 → 记录"（训练场设计方案）
  *   - 插件卸载 / 热重载时停掉执行器、断开 mod
  */
 export const name = 'stevex-agent'
@@ -37,6 +40,9 @@ const IN_TREE = {
   bt_inspect: ' bt_inspect is only for repair requests (recover / escalate / failed / died). To act on the current state, read it inside the tree: { "cond": "code/…", "read": ["player"] } or { "compute": "code/…", "read": [...] }; to check that earlier steps worked, give them an "expect".',
   mod_query: ' Read state inside the tree: condition code { "cond": "code/…", "read": ["inventory"] } or { "compute": "code/…", "read": [...] } (state arrives as main(params, state)). To learn field names and enum values first, call data_shapes with sources ["state.<source>"].'
 }
+
+/** 训练器发到控制台会话的通知的消息来源（T13 N2） */
+const TRAIN_SOURCE_KIND = 'stevex-train'
 
 /** 系统提示词分段的位置：DSH 内置工具说明（≤ 3100）之后、工具 SDK（5000）之前。 */
 const SECTION_ORDER = 3200
@@ -58,6 +64,8 @@ const USAGE = [
   '/bt fast reflect           马上把待反思事件打成一批（不等凑够）',
   '/bt fast load <file> [理由] 手动放一版快树（走同样的校验，写进版本链）',
   '/bt capsules              胶囊库条目（内置查询 + 已保存的条件 / Compute / 子树 + 本任务的草稿）',
+  '/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>]  训练场：每轮重置、发材料、发任务、判定，记录写 runtime/training/<场地>.jsonl（需要单人世界）',
+  '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
   '注意：DSH Web 只在会话开过回合后才显示命令结果。新会话里先说一句话（或 /bt task …），再用 status / nodes / capsules 这类查看命令'
 ].join('\n')
@@ -85,6 +93,7 @@ export function apply(ctx, rawConfig = {}) {
   bridge = planner?.bridge ?? null
   const fastBridge = planner?.fastBridge ?? null
   const factTurns = planner?.factTurns ?? null
+  const trainer = planner?.trainer ?? null
 
   ctx.provide('stevexBt', {
     executor,
@@ -118,13 +127,14 @@ export function apply(ctx, rawConfig = {}) {
     name: 'bt',
     description: 'steveX 行为树执行器：开始任务、跑手写树、查看 / 暂停 / 放弃任务、查看胶囊库',
     // 声明 input 才能带参数：没有 input 的命令，Web 输入框只在单独输入 "/bt" 时执行，带参数就当普通消息发给模型
-    input: { hint: 'status | task <指令> | fact <陈述> | facts [词|check] | run <tree.json> | pause | resume | abort [理由] | reflect | curate | nodes | fast status|log|rollback|reflect|load | capsules' },
+    input: { hint: 'status | task <指令> | fact <陈述> | facts [词|check] | run <tree.json> | pause | resume | abort [理由] | reflect | curate | nodes | fast status|log|rollback|reflect|load | capsules | train <场地>|status|stop' },
     handler: (invocation) => runCommand(executor, invocation.rawInput, {
-      library: runtime.library, bridge, sessionId: invocation.agent?.id ?? null, fast: runtime.fast, facts: runtime.facts, factTurns
+      library: runtime.library, bridge, sessionId: invocation.agent?.id ?? null, fast: runtime.fast, facts: runtime.facts, factTurns, trainer
     })
   }))
 
   ctx.effect(() => () => {
+    trainer?.dispose()
     bridge?.dispose()
     fastBridge?.dispose()
     runtime.dispose()
@@ -185,6 +195,36 @@ function setupPlanner(ctx, config, runtime) {
       return null
     }
   }
+  /**
+   * 会话当前的模型：最近一次在 web 端切换的模型（会话事件 model/selection），没切过就是建会话时的模型。
+   * @returns {{ provider?, model, reasoningEffort? } | null}
+   */
+  const sessionModel = (sessionId) => {
+    const agent = ctx.agents.get(sessionId)
+    if (!agent) return null
+    const events = agent.session?.snapshotEvents?.() ?? []
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]?.type === 'model/selection' && events[i].data?.model) return events[i].data
+    }
+    return agent.options?.model ? agent.options : null
+  }
+  /** 新建一个根会话（快树反思批次、训练的每一轮），返回会话 id。selection 缺省 = DSH 默认模型。 */
+  async function createSession({ selection = defaultModel(), fast = false } = {}) {
+    const sessionId = `session-${randomUUID()}`
+    // agent/created 在 create 返回之前就发出：快树会话先登记，监听器据此给它快树会话的可见名单
+    if (fast) creatingFast.add(sessionId)
+    try {
+      const { provider, model, reasoningEffort } = selection ?? {}
+      const handle = await ctx.agents.create({
+        sessionId,
+        ...(model ? { agentOptions: { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } } : {}),
+        meta: { cwd: steveXRoot, agentPreset: config.fast.sessionPreset }
+      })
+      return handle.agent.id
+    } finally {
+      creatingFast.delete(sessionId)
+    }
+  }
   const followup = (sessionId, message) => {
     const agent = ctx.agents.get(sessionId)
     if (!agent) return false
@@ -199,22 +239,7 @@ function setupPlanner(ctx, config, runtime) {
     maxInvalidAttempts: config.maxInvalidAttempts,
     log: (line) => logger?.info?.(line),
     deliver: followup,
-    async openSession() {
-      const selection = defaultModel()
-      const sessionId = `session-${randomUUID()}`
-      // agent/created 在 create 返回之前就发出：先登记，监听器据此给它快树会话的可见名单
-      creatingFast.add(sessionId)
-      try {
-        const handle = await ctx.agents.create({
-          sessionId,
-          ...(selection ? { agentOptions: { provider: selection.provider, model: selection.model } } : {}),
-          meta: { cwd: steveXRoot, agentPreset: config.fast.sessionPreset }
-        })
-        return handle.agent.id
-      } finally {
-        creatingFast.delete(sessionId)
-      }
-    }
+    openSession: () => createSession({ fast: true })
   })
 
   // ── 事实确认回合与"查了源码就要补事实库"（P5 §2 / §7）──
@@ -371,7 +396,27 @@ function setupPlanner(ctx, config, runtime) {
     turnTools.clear()
   })
 
-  return { bridge, fastBridge, factTurns }
+  // ── 训练场（训练场设计方案）：后台连续跑多轮，每轮一个新会话（T13）；token 用 DSH 的会话事件按回合算 ──
+  const trainer = new Trainer({
+    bridge, executor, game, prompts,
+    config: config.training,
+    runtimeDir: config.runtimeDir,
+    async whenIdle(sessionId) {
+      const agent = ctx.agents.get(sessionId)
+      if (!agent) return false
+      await agent.whenIdle()
+      return true
+    },
+    // 本轮会话跟随控制台会话当前的模型，取不到就用默认模型（T13 N4）
+    openSession: (consoleSessionId) => createSession({ selection: sessionModel(consoleSessionId) ?? defaultModel() }),
+    notify: (sessionId, text) => ctx.agents.get(sessionId)?.inject(toMessage({ text, summary: text, source: { kind: TRAIN_SOURCE_KIND } })),
+    sessionExists: (sessionId) => Boolean(ctx.agents.get(sessionId)),
+    sessionEvents: (sessionId) => ctx.agents.get(sessionId)?.session?.snapshotEvents?.() ?? null,
+    deriveUsage: deriveTurnTokenUsage,
+    log: (line) => logger?.info?.(line)
+  })
+
+  return { bridge, fastBridge, factTurns, trainer }
 }
 
 function safely(dispose) {
@@ -382,7 +427,7 @@ function safely(dispose) {
   }
 }
 
-export function runCommand(executor, rawInput, { library = null, bridge = null, sessionId = null, fast = null, facts = null, factTurns = null } = {}) {
+export function runCommand(executor, rawInput, { library = null, bridge = null, sessionId = null, fast = null, facts = null, factTurns = null, trainer = null } = {}) {
   const [sub = 'status', ...rest] = rawInput.trim().split(/\s+/).filter(Boolean)
   try {
     switch (sub) {
@@ -391,6 +436,7 @@ export function runCommand(executor, rawInput, { library = null, bridge = null, 
       case 'task': {
         if (!bridge) return { kind: 'error', text: '大模型侧没有启用（planner.enabled = false）' }
         if (!sessionId) return { kind: 'error', text: '/bt task 只能在会话里用' }
+        if (trainer?.running()) return { kind: 'error', text: '训练进行中，任务由训练器发；要手动发任务先 /bt train stop' }
         const instruction = rawInput.trim().replace(/^task\s*/, '')
         if (!instruction) return { kind: 'error', text: `用法：\n${USAGE}` }
         const result = bridge.startPlanning({ sessionId, instruction })
@@ -454,6 +500,8 @@ export function runCommand(executor, rawInput, { library = null, bridge = null, 
         if (rows.length === 0) return { kind: 'success', text: '胶囊库是空的' }
         return { kind: 'success', text: rows.map((r) => `${r.ref.padEnd(40)} ${r.kind.padEnd(9)} ${r.locked ? 'locked ' : ''}${r.draft ? 'draft ' : ''}${r.description}`).join('\n') }
       }
+      case 'train':
+        return runTrainCommand(rest, trainer, sessionId)
       case 'nodes': {
         const snap = executor.snapshot()
         if (!snap.task) return { kind: 'success', text: '没有任务' }
@@ -465,6 +513,23 @@ export function runCommand(executor, rawInput, { library = null, bridge = null, 
   } catch (error) {
     return { kind: 'error', text: error.message }
   }
+}
+
+/** /bt train <场地> [选项] | status | stop（训练场设计方案 T1）。 */
+function runTrainCommand(args, trainer, sessionId) {
+  if (!trainer) return { kind: 'error', text: '大模型侧没有启用（planner.enabled = false）' }
+  const [first] = args
+  if (!first) return { kind: 'error', text: `用法：
+${USAGE}` }
+  if (first === 'status') return { kind: 'success', text: trainer.status() }
+  if (first === 'stop') {
+    const result = trainer.stop()
+    return result.ok ? { kind: 'success', text: result.text } : { kind: 'error', text: result.error }
+  }
+  const parsed = parseTrainArgs(args)
+  if (!parsed.ok) return { kind: 'error', text: parsed.error }
+  const result = trainer.start({ sessionId, arena: parsed.arena, item: parsed.item, runs: parsed.runs, seed: parsed.seed })
+  return result.ok ? { kind: 'success', text: result.text } : { kind: 'error', text: result.error }
 }
 
 /** /bt facts [词] | check（P5 §10）。 */

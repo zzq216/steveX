@@ -572,6 +572,9 @@ export class Bridge {
     const key = turnKey(sessionId, turn)
     if (this.turns.get(key) === requestId) return
     this.turns.set(key, requestId)
+    // 回合绑定在回合结束时就删掉了；训练器事后要按任务统计回合与 token，所以在请求上留一份
+    const req = this.requests.get(requestId)
+    if (req) (req.boundTurns ??= []).push({ sessionId, turn })
     this.onBind(sessionId, turn, REQUEST_TOOLS[this.requests.get(requestId).type])
   }
 

@@ -59,7 +59,7 @@ export const DEFAULTS = Object.freeze({
   /** 大模型侧（集成方案 §4 / §5，P1）：只在 DSH 适配层里生效，scripts/ 不用 */
   /** 事实库与 MC 源码（P5 §10） */
   facts: {
-    /** 事实库目录（进 git） */
+    /** 事实库目录（训练产物，只留本地，不进 git） */
     dir: path.join(steveXRoot, 'facts'),
     /** MC 源码基准：mc_source_* 只能读这个目录（P5-D9） */
     sourceRoot: path.join(steveXRoot, '1.21.11_src'),
@@ -88,6 +88,19 @@ export const DEFAULTS = Object.freeze({
     /** 条目超过这么多时，整理请求只给目录、不给全量清单（C5） */
     listLimit: 150
   },
+  /** 训练场（训练场设计方案 §5）：/bt train 每轮"给材料 → 发任务 → 判定 → 记录"，记录写 runtime/training/<场地>.jsonl */
+  training: {
+    /** 从发任务起算的时间上限（秒，T6）；到时中止任务、记 timeout */
+    timeoutSec: 600,
+    /** 一轮进行中查 arena/status 的间隔（毫秒） */
+    pollMs: 1000,
+    /** 配方表（抽样用，T7），相对 steveX/ */
+    recipes: 'dsh-plugins/agent/data/recipes.json',
+    /** 场地：名字 → { origin: 场内地板中心 [x,y,z], mode: named | hidden（T5）, exclude: 不抽的配方名 } */
+    arenas: {
+      craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] }
+    }
+  },
   planner: {
     enabled: true,
     /** 工具结果的字符上限，超出截断并提示缩小查询（§5.2） */
@@ -113,7 +126,8 @@ export function normalizeConfig(raw = {}) {
     fast: { ...DEFAULTS.fast, ...(raw.fast ?? {}) },
     reflect: { ...DEFAULTS.reflect, ...(raw.reflect ?? {}) },
     curate: { ...DEFAULTS.curate, ...(raw.curate ?? {}) },
-    facts: { ...DEFAULTS.facts, ...(raw.facts ?? {}) }
+    facts: { ...DEFAULTS.facts, ...(raw.facts ?? {}) },
+    training: normalizeTraining(raw.training)
   }
   for (const key of ['tickMs', 'statePollMs', 'maxExpansionNodes', 'maxInvalidAttempts', 'maxValueBytes', 'maxCapsuleDepth', 'snapshotKeep', 'reactiveEveryMs', 'respawnTimeoutMs']) {
     if (!(Number.isInteger(config[key]) && config[key] > 0)) throw new Error(`stevex-agent config: ${key} must be a positive integer`)
@@ -123,6 +137,20 @@ export function normalizeConfig(raw = {}) {
   }
   if (!(Number.isInteger(config.curate.everyTasks) && config.curate.everyTasks >= 0)) throw new Error('stevex-agent config: curate.everyTasks must be a non-negative integer (0 = manual only)')
   if (!(Number.isInteger(config.curate.listLimit) && config.curate.listLimit > 0)) throw new Error('stevex-agent config: curate.listLimit must be a positive integer')
+  for (const key of ['timeoutSec', 'pollMs']) {
+    if (!(Number.isInteger(config.training[key]) && config.training[key] > 0)) throw new Error(`stevex-agent config: training.${key} must be a positive integer`)
+  }
+  for (const [name, arena] of Object.entries(config.training.arenas)) {
+    if (!/^[a-z0-9_]{1,32}$/.test(name)) throw new Error(`stevex-agent config: training.arenas key "${name}" must match [a-z0-9_]{1,32}`)
+    if (!(Array.isArray(arena.origin) && arena.origin.length === 3 && arena.origin.every(Number.isInteger))) {
+      throw new Error(`stevex-agent config: training.arenas.${name}.origin must be [x, y, z] integers`)
+    }
+    if (!['named', 'hidden'].includes(arena.mode)) throw new Error(`stevex-agent config: training.arenas.${name}.mode must be "named" or "hidden"`)
+    if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of recipe names`)
+    }
+  }
+  config.training.recipes = path.resolve(steveXRoot, config.training.recipes)
   for (const key of ['maxOutputChars', 'inspectMaxBytes']) {
     if (!(Number.isInteger(config.planner[key]) && config.planner[key] > 0)) throw new Error(`stevex-agent config: planner.${key} must be a positive integer`)
   }
@@ -133,6 +161,15 @@ export function normalizeConfig(raw = {}) {
     Object.entries(config.jsonSources ?? {}).map(([id, target]) => [id, path.resolve(steveXRoot, target)])
   )
   return config
+}
+
+/** 场地逐个合并缺省值：只覆盖 craft2x2 的 mode 时 origin 照旧。 */
+function normalizeTraining(raw = {}) {
+  const arenas = {}
+  for (const [name, arena] of Object.entries({ ...DEFAULTS.training.arenas, ...(raw.arenas ?? {}) })) {
+    arenas[name] = { ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
+  }
+  return { ...DEFAULTS.training, ...raw, arenas }
 }
 
 export { steveXRoot }

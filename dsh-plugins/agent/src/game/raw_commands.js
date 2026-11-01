@@ -8,18 +8,24 @@ import { METHODS } from './mod.js'
  * - 读取方法 → action + read:true：校验器拒绝它出现在 Steps / Action 里，读状态请用 Condition
  * - vision/snapshot 不登记：它会写记忆文件，属于采集循环的职责（集成方案 §5.1.1）
  * - player/respawn 不登记：死亡后由执行器自动重生（P2 实施细则 §8.3），不出现在树里
+ * - arena/* 不登记：训练场操作只给训练器用（训练场设计方案 T3），agent 拿到就能给自己发材料、判自己成功
  */
 export const READ_METHODS = new Set([
   'player', 'inventory', 'f3', 'sound', 'profiler', 'status', 'tablist', 'settings/get',
   'container/get', 'sign/get', 'book/get', 'vision/entity'
 ])
 const SKIPPED = new Set(['vision/snapshot', 'settings/set', 'player/respawn'])
+const SKIPPED_PREFIXES = ['arena/']
+
+export function isAgentMethod(method) {
+  return !SKIPPED.has(method) && !SKIPPED_PREFIXES.some((prefix) => method.startsWith(prefix))
+}
 
 const TYPE_MAP = { bool: 'bool', int: 'int', double: 'number', string: 'string' }
 
 export function registerRawCommands(registry) {
   for (const m of METHODS) {
-    if (SKIPPED.has(m.method)) continue
+    if (!isAgentMethod(m.method)) continue
     const params = {}
     for (const def of m.paramDefs ?? []) {
       params[def.name] = { type: TYPE_MAP[def.type] ?? 'any', required: Boolean(def.required), hint: def.hint }

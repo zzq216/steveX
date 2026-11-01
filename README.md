@@ -82,7 +82,7 @@ cd ../..
 事实库的 `mc_source_search` / `mc_source_read` 只读 `steveX/1.21.11_src/`：MC 1.21.11 客户端 + 服务端合一的反编译 `.java` 源码（约 6600 个文件）。它是 Mojang 代码，不进 git，需要自己放进来。
 
 - 缺了它，这两个工具不可用，其余功能不受影响。
-- `facts/` 里已有事实的行号引用对应的是项目作者机器上的那一份反编译结果。用别的反编译器或参数生成的版本，行号可能对不上，`/bt facts check` 会报告失效引用。要复用已有事实，请向项目维护者获取同一份基准。
+- `facts/` 只留在本地、不进 git。从别人那里拿到的事实，行号引用对应的是对方机器上的那一份反编译结果。用别的反编译器或参数生成的版本，行号可能对不上，`/bt facts check` 会报告失效引用。要复用已有事实，请向项目维护者获取同一份基准。
 
 ### 5. 建 `stevex` profile 并装插件
 
@@ -195,6 +195,7 @@ npm run start:all
 | `/bt fact <陈述>` | 让 agent 查 MC 源码核实一句话，并写进事实库 |
 | `/bt facts [词]` / `/bt facts check` | 查事实库 / 重算引用、列出失效的事实 |
 | `/bt fast status \| log \| rollback <版本> \| reflect \| load <file>` | 快树（反射层）的状态、日志、回滚、反思 |
+| `/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>]` | 训练场：每轮新建一个会话（执行命令的会话只收进度通知）、重置 agent、发 1 份材料、发任务、按 `crafted` 统计判定，记录写 `runtime/training/<场地>.jsonl`；`/bt train status` 看进度，`/bt train stop` 中止。需要关闭作弊的单人世界，游戏内 `/arena craft2x2` 传送到场外平台（[训练场设计方案](docs/训练场设计方案.md)） |
 
 不启动 DSH 也能跑手写树：`cd dsh-plugins/agent && node scripts/bt-run.js examples/recipe_query.json`。
 
@@ -245,7 +246,7 @@ steveX/
     bt/trees/fast/     #   快树版本链（进 git）
     nbt/  json/        #   NBT / JSON 查询 API 的宿主侧（agent 插件调用）
     mod/  web/  agent/ #   steveX Web 面板：mod WS 客户端、Express 8090、51 方法清单
-  facts/               # 事实库（进 git）
+  facts/               # 事实库（训练产物，只留本地，不进 git）
   vendor/
     stevex-template-1.21.11/       # 采集端 mod（源码 + gradle wrapper）
     stevex-test-template-1.21.11/  # 记忆世界 mod

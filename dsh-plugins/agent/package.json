@@ -27,6 +27,7 @@
     "capsule-save": "node scripts/capsule-save.js",
     "capsule-stats": "node scripts/capsule-stats.js",
     "capsule-gc": "node scripts/capsule-gc.js",
-    "capsule-retire": "node scripts/capsule-retire.js"
+    "capsule-retire": "node scripts/capsule-retire.js",
+    "training-report": "node scripts/training-report.js"
   }
 }
