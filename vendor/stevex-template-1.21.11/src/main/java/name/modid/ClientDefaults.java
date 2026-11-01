@@ -16,6 +16,10 @@ import org.slf4j.Logger;
  * 以标记文件 {@code config/stevex/client_defaults.applied} 持久化"已初始化"状态，
  * 后续启动直接跳过（值经 options.txt 持久化）。与记忆端 {@code MemoryWorldManager} 的
  * 首启初始化对称，只是挂在标题界面空闲时执行（真实世界需手动进入世界）。
+ *
+ * <p>例外：失去焦点不暂停（{@code pauseOnLostFocus = false}）每次启动都强制，不受标记文件约束。
+ * agent 在后台操作客户端，窗口没有焦点是常态；暂停菜单一出来按键就不再处理（{@code Minecraft.tick}
+ * 只在 {@code screen == null} 时处理按键）、单人世界整个停下，agent 只能看到"按了 E 背包不开"。
  */
 public final class ClientDefaults {
 
@@ -35,6 +39,12 @@ public final class ClientDefaults {
     }
 
     private static void apply(final Minecraft mc) {
+        if (mc.options.pauseOnLostFocus) {
+            mc.options.pauseOnLostFocus = false;
+            mc.options.save();
+            LOGGER.info("[ClientDefaults] pauseOnLostFocus forced off");
+        }
+
         Path marker = mc.gameDirectory.toPath().resolve("config").resolve("stevex")
                 .resolve("client_defaults.applied");
         if (Files.exists(marker)) {
