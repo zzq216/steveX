@@ -97,9 +97,17 @@ test('统计：落盘到 stats.json；重建从 events.jsonl 重算，结果与�
   assert.deepEqual(reloaded.data, live.data)
 
   const result = rebuildStats(reloaded, runtimeDir)
-  assert.deepEqual(result, { tasks: 2, recorded: 2, refs: 2 })
+  assert.deepEqual(result, { tasks: 2, excluded: 0, recorded: 2, refs: 2 })
   assert.deepEqual(reloaded.data.refs, live.data.refs)
   assert.equal(reloaded.curateState().lastRequestId, 'k1', '重建不动整理计数')
+  assert.equal(reloaded.curateState().sinceLast, live.curateState().sinceLast, '重算时的任务结束不累加到整理计数上')
+
+  // exclude：该任务的使用和它的转正记录都不算；不存在的 id 不计入 excluded
+  const without = rebuildStats(reloaded, runtimeDir, { exclude: ['task-2', 'task-404'] })
+  assert.deepEqual(without, { tasks: 1, excluded: 1, recorded: 1, refs: 1 })
+  assert.deepEqual(Object.keys(reloaded.data.refs), ['code/x@11111111'])
+  assert.deepEqual(reloaded.data.tasks, ['task-1'])
+  assert.deepEqual(reloaded.data.promotions, [])
 })
 
 function setup() {

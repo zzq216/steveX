@@ -164,19 +164,29 @@ export function usageSummary(stat, kind, key = '') {
   return parts.length ? parts.join('；') + fastNote : `尚无记录${fastNote}`
 }
 
-/** 重建（scripts/capsule-stats.js --rebuild）：按任务目录读 events.jsonl，顺序喂给 observe。 */
-export function rebuildStats(stats, runtimeDir) {
+/**
+ * 重建（scripts/capsule-stats.js --rebuild）：按任务目录读 events.jsonl，顺序喂给 observe。
+ * exclude：不计入的任务 id（如环境故障造成失败的任务，或胶囊已删掉的旧任务）；它们的转正记录也一起不算。
+ */
+export function rebuildStats(stats, runtimeDir, { exclude = [] } = {}) {
   const tasksDir = path.join(runtimeDir, 'tasks')
-  const curate = stats.data.curate
-  stats.data = { ...emptyData(), curate }
+  const skip = new Set(exclude)
+  // 整理计数原样保留：重算时每个任务结束都会给 sinceLast 加 1，所以存一份拷贝、最后放回
+  const curate = { ...stats.data.curate }
+  stats.data = { ...emptyData(), curate: { ...curate } }
   stats.running.clear()
   stats.drafts.clear()
   const file = stats.file
   stats.file = null // 重建期间不逐条写盘
   let tasks = 0
+  let excluded = 0
   try {
     const dirs = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir).sort() : []
     for (const dir of dirs) {
+      if (skip.has(dir)) {
+        excluded++
+        continue
+      }
       const log = path.join(tasksDir, dir, 'events.jsonl')
       if (!fs.existsSync(log)) continue
       for (const line of fs.readFileSync(log, 'utf8').split(/\r?\n/)) {
@@ -192,7 +202,7 @@ export function rebuildStats(stats, runtimeDir) {
   }
   stats.data.curate = curate
   stats.save()
-  return { tasks, recorded: stats.data.tasks.length, refs: Object.keys(stats.data.refs).length }
+  return { tasks, excluded, recorded: stats.data.tasks.length, refs: Object.keys(stats.data.refs).length }
 }
 
 function emptyData() {
