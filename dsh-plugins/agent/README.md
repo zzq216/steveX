@@ -213,7 +213,7 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 | `bt_reflect_done` | `{ requestId, summary }` |
 
 - `/bt reflect`：对最近结束、任务对象还在内存里的任务手动复盘
-- 配置：`reflect.enabled`（false = 只发结束通知）、`reflect.onFailed`、`reflect.literalCheck`
+- 配置：`reflect.enabled`（false = 只发结束通知）、`reflect.onFailed`、`reflect.literalCheck`、`reflect.session`（`new` = 自动复盘另开会话，默认；`same` = 留在任务会话）
 - 提示词正文都在 `prompts/`，改内容不改代码；缺文件 / 空文件 / 带 `TODO(内容层)` 装载即报错
 
 ## 胶囊库整理

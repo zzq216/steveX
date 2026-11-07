@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Bridge, SOURCE_KIND, REQUEST_TOOLS } from '../src/llm/bridge.js'
+import { Bridge, SOURCE_KIND, REQUEST_TOOLS, isTransientError } from '../src/llm/bridge.js'
 import { loadPrompts, renderTemplate } from '../src/llm/prompts.js'
 import { saveCapsule } from '../src/capsules/index.js'
 import { makeRuntime, runUntil, tempDir } from './helpers.js'
@@ -236,6 +236,12 @@ test('I13：产出树的回合不准入读状态 / 查数据的工具；展开�
 test('回合出错（如模型返回坏 JSON）：计一次不合法，发重试消息开新回合；用完 → 作废 / 任务失败', async () => {
   const { bridge, executor, delivered } = setup()
   assert.equal(bridge.onTurnError({ sessionId: 's1', turn: 9, error: new Error('x') }), null, '没绑定请求的回合不管')
+  assert.equal(isTransientError(new Error('DeepSeek Messages stream ended before message_stop')), true)
+  assert.equal(isTransientError({ message: 'The operation was aborted due to timeout' }), true)
+  assert.equal(isTransientError({ message: '503 Service Unavailable' }), true)
+  assert.equal(isTransientError({ message: 'DeepSeek Messages stream: tool input is invalid JSON', code: 'MALFORMED_RESPONSE' }), false, '坏 JSON 是模型交了坏东西')
+  assert.equal(isTransientError({ message: 'turn cancelled: training stopped (/bt train stop)' }), false)
+  assert.equal(isTransientError('boom'), false)
 
   const plan = bridge.startPlanning({ sessionId: 's1', instruction: '做点什么' })
   claim(bridge, delivered, 1)
@@ -245,6 +251,17 @@ test('回合出错（如模型返回坏 JSON）：计一次不合法，发重试
   assert.match(first.retry.text, /tool input is invalid JSON/)
   assert.match(first.retry.text, /还剩 2 次/)
   assert.equal(bridge.onTurnStopping({ sessionId: 's1', turn: 1 }), null, '出错的回合已解绑，之后的 turn-stopping 不重复计数')
+
+  // API / 网络故障：不算不合法尝试，另有 5 次重试；用完之后照常计次
+  let t = 100
+  for (let i = 1; i <= 5; i++) {
+    bridge.onPreStep({ sessionId: 's1', turn: t, step: 1, messages: [{ source: first.retry.source }] })
+    const r = bridge.onTurnError({ sessionId: 's1', turn: t++, error: new Error('DeepSeek Messages stream ended before message_stop') })
+    assert.match(r.retry.text, new RegExp(`不算不合法尝试（这类重试还剩 ${5 - i} 次）`))
+  }
+  bridge.onPreStep({ sessionId: 's1', turn: t, step: 1, messages: [{ source: first.retry.source }] })
+  assert.match(bridge.onTurnError({ sessionId: 's1', turn: t, error: new Error('DeepSeek Messages stream ended before message_stop') }).retry.text, /算作一次不合法尝试，还剩 1 次/)
+  bridge.requests.get(plan.requestId).invalidAttempts = 1
 
   // 重试消息开的新回合按来源重新绑定
   assert.equal(bridge.onPreStep({ sessionId: 's1', turn: 2, step: 1, messages: [{ source: first.retry.source }] }).requestId, plan.requestId)

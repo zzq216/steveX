@@ -517,9 +517,12 @@ export class Trainer {
       offCall?.()
     }
 
-    // 复盘 / 整理结束后再统计：它们的回合不算进本轮，但要等它们结束才能开下一轮（复盘在本轮的会话里）
+    // 复盘 / 整理结束后再统计：它们的回合不算进本轮，但要等它们结束才能开下一轮
+    // 自动复盘另开会话（2026-11-07）：本轮会话和复盘会话都要空闲
     current.phase = '等复盘 / 整理结束'
-    await this.waitIdle(sessionId, batch)
+    await this.waitIdle(() => [sessionId, ...(this.bridge.reviewSessions?.(record.taskId) ?? [])], batch)
+    const reviewSessions = (this.bridge.reviewSessions?.(record.taskId) ?? []).filter((id) => id !== sessionId)
+    if (reviewSessions.length) finishRecord({ reviewSessions })
     const turns = this.turnsOf(record.taskId, sessionId)
     const plan = [...this.bridge.requests.values()].find((r) => r.type === 'plan' && r.taskId === record.taskId)
     finishRecord({
@@ -584,9 +587,10 @@ export class Trainer {
   }
 
   /**
-   * 等到没有任务、请求；给了 sessionId 还要等这个会话空闲。会话不在了 → false；要停止时也 → false。
+   * 等到没有任务、请求；给了会话还要等这些会话空闲（sessions：会话 id、数组，或每次现取的函数）。
+   * 会话不在了 → false；要停止时也 → false。
    */
-  async waitIdle(sessionId, batch) {
+  async waitIdle(sessions, batch) {
     for (;;) {
       if (batch.stopping && !this.bridge.busyReason()) return false
       while (this.bridge.busyReason()) {
@@ -604,7 +608,8 @@ export class Trainer {
         await this.sleep(this.config.pollMs)
       }
       if (batch.stopping) return false
-      if (sessionId && !(await this.whenIdle(sessionId))) return false
+      const ids = [...new Set([typeof sessions === 'function' ? sessions() : sessions].flat().filter(Boolean))]
+      for (const id of ids) if (!(await this.whenIdle(id))) return false
       if (!this.bridge.busyReason()) return !batch.stopping
     }
   }

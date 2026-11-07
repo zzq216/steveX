@@ -176,6 +176,8 @@ function setupPlanner(ctx, config, runtime) {
     notify(sessionId, message) {
       ctx.agents.get(sessionId)?.inject(toMessage(message))
     },
+    // 自动复盘另开会话（2026-11-07）：模型跟随任务会话当前的模型
+    openReviewSession: (taskSessionId) => createSession({ selection: sessionModel(taskSessionId) ?? defaultModel() }),
     // 自动整理可能在复盘回合中途（bt_reflect_done 里）触发：回合还在 running 时 followup 叫不醒驱动器，等 idle 再发
     deliverIdle(sessionId, message) {
       const agent = ctx.agents.get(sessionId)
@@ -260,19 +262,37 @@ function setupPlanner(ctx, config, runtime) {
     }
   })
 
-  /** 任务的回合与 token：规划 / 展开 / 修补回合一份，复盘回合另一份（reflectTokens） */
+  /**
+   * 任务的回合与 token：规划 / 展开 / 修补回合一份，复盘回合另一份（reflectTokens）。
+   * 回合按它所在的会话分别算再相加：自动复盘另开会话（2026-11-07），复盘回合不在任务会话里。
+   */
   function taskUsage(taskId, sessionId) {
     if (!sessionId) return {}
-    const turns = new Set()
-    const reflectTurns = new Set()
+    const bySession = new Map()
     for (const req of bridge.requests.values()) {
       if (req.taskId !== taskId || req.type === 'curate') continue
-      for (const bound of req.boundTurns ?? []) if (bound.sessionId === sessionId) (req.type === 'reflect' ? reflectTurns : turns).add(bound.turn)
+      for (const bound of req.boundTurns ?? []) {
+        if (!bySession.has(bound.sessionId)) bySession.set(bound.sessionId, { work: new Set(), reflect: new Set() })
+        bySession.get(bound.sessionId)[req.type === 'reflect' ? 'reflect' : 'work'].add(bound.turn)
+      }
     }
-    const list = [...turns].sort((a, b) => a - b)
-    const events = ctx.agents.get(sessionId)?.session?.snapshotEvents?.() ?? null
-    const out = { turns: list.length, tokens: sumTurnUsage(events, list, deriveTurnTokenUsage) }
-    if (reflectTurns.size) out.reflectTokens = sumTurnUsage(events, [...reflectTurns].sort((a, b) => a - b), deriveTurnTokenUsage)
+    const sum = (kind) => {
+      let total = { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
+      for (const [sid, sets] of bySession) {
+        if (!sets[kind].size) continue
+        const events = ctx.agents.get(sid)?.session?.snapshotEvents?.() ?? null
+        const part = sumTurnUsage(events, [...sets[kind]].sort((a, b) => a - b), deriveTurnTokenUsage)
+        if (!part) return null
+        for (const key of Object.keys(total)) {
+          if (part[key] === undefined) delete total[key]
+          else total[key] += part[key]
+        }
+      }
+      return total
+    }
+    const turns = [...bySession.values()].reduce((n, sets) => n + sets.work.size, 0)
+    const out = { turns, tokens: turns ? sum('work') : sumTurnUsage(ctx.agents.get(sessionId)?.session?.snapshotEvents?.() ?? null, [], deriveTurnTokenUsage) }
+    if ([...bySession.values()].some((sets) => sets.reflect.size)) out.reflectTokens = sum('reflect')
     return out
   }
 

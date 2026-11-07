@@ -104,12 +104,14 @@ export class Bridge {
    * @param {object} [options.curate]    { everyTasks, listLimit }（整理方案 §5.2 / §5.3）
    * @param {(sessionId, message) => boolean} [options.deliverIdle]  等会话空闲再 followup（自动整理可能在别的回合中途触发）；缺省 = deliver
    */
-  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null }) {
+  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null, openReviewSession = null }) {
     this.executor = executor
     this.library = library
     this.sandbox = sandbox
     this.registry = registry
-    this.reflectConfig = { enabled: true, onFailed: true, literalCheck: true, ...reflect }
+    this.reflectConfig = { enabled: true, onFailed: true, literalCheck: true, session: 'new', ...reflect }
+    /** 给自动复盘开新会话（2026-11-07）：(任务会话 id) => Promise<新会话 id>；不给 = 复盘留在任务会话里 */
+    this.openReviewSession = openReviewSession
     this.lastDrafts = null        // 最近结束的任务的草稿拷贝（/bt reflect 手动复盘用）
     this.reflectSeq = 0
     this.stats = stats
@@ -339,12 +341,52 @@ export class Bridge {
       skill: this.prompts.skills.review
     })
     this.executor.log(task.taskId, { event: 'reflect/start', requestId, manual: manual || undefined })
-    if (!this.deliver(sessionId, this.message(req, text, `复盘：任务 ${task.taskId} ${task.state}${task.goal ? `（${task.goal}）` : ''}`))) {
+    const message = this.message(req, text, `复盘：任务 ${task.taskId} ${task.state}${task.goal ? `（${task.goal}）` : ''}`)
+    if (!manual && this.reflectConfig.session === 'new' && this.openReviewSession) {
+      req.taskSessionId = sessionId
+      req.opening = this.openInReviewSession(req, message)
+      return { ok: true, requestId }
+    }
+    if (!this.deliver(sessionId, message)) {
       this.closeReflect(req, 'abandoned', `session ${sessionId} not found`)
       return { ok: false, error: `找不到会话 ${sessionId}` }
     }
     this.log(`[bt] reflect ${requestId} (${task.taskId} ${task.state})`)
     return { ok: true, requestId }
+  }
+
+  /**
+   * 自动复盘另开会话（2026-11-07）：复盘用不到规划回合的推理，留在任务会话里每一步都要重读它（一个任务多读上百万 token）。
+   * 复盘请求本身自带树、成本画像、目录，证据用 bt_inspect 取，不依赖任务会话的上下文。
+   * 新会话开不出来就退回任务会话。开的过程中请求被放弃（停止训练）就不再发。之后的整理也在复盘会话里做。
+   */
+  async openInReviewSession(req, message) {
+    const taskSession = req.taskSessionId
+    let target = taskSession
+    try {
+      target = (await this.openReviewSession(taskSession)) || taskSession
+    } catch (error) {
+      this.log(`[bt] reflect ${req.requestId}: 开复盘会话失败，改在任务会话里复盘：${error?.message ?? error}`)
+    }
+    if (req.closed) return
+    req.sessionId = target
+    if (this.curateSession === taskSession) this.curateSession = target
+    if (target !== taskSession) {
+      const text = `任务 ${req.taskId} 的复盘 ${req.requestId} 在新会话 ${target} 里进行。`
+      this.notify(taskSession, { text, summary: text, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId: req.requestId, reason: 'reflect-session' } })
+    }
+    if (!this.deliver(target, message)) {
+      this.closeReflect(req, 'abandoned', `session ${target} not found`)
+      return
+    }
+    this.log(`[bt] reflect ${req.requestId} (${req.taskId}) in session ${target}`)
+  }
+
+  /** 这个任务的复盘所在的会话（训练器等它们空闲了再开下一轮）。 */
+  reviewSessions(taskId) {
+    const out = new Set()
+    for (const req of this.requests.values()) if (req.type === 'reflect' && req.taskId === taskId && req.sessionId) out.add(req.sessionId)
+    return [...out]
   }
 
   /** /bt reflect：对最近结束、任务对象还在内存里的任务手动复盘。 */
@@ -581,7 +623,7 @@ export class Bridge {
       if (req.type === 'reflect') this.closeReflect(req, 'abandoned', reason)
       else if (req.type === 'curate') this.closeCurate(req, 'abandoned', reason)
       else continue
-      sessions.add(req.sessionId)
+      if (req.sessionId) sessions.add(req.sessionId)
     }
     return [...sessions]
   }
@@ -814,6 +856,8 @@ export class Bridge {
    * agent/error：绑定了请求的回合因错误结束（如模型返回了坏的工具参数 JSON）。
    * 这种回合不经过 turn-stopping，不处理的话请求会一直等下去、挡住后面的任务。
    * 算一次不合法尝试，解除回合绑定；还有次数 → 返回一条重试消息（由适配层 followup 开新回合，新回合按来源重新绑定）。
+   * 模型 API / 网络故障（流提前断开、超时、限流、5xx……，2026-11-07）不是模型的错：不算不合法尝试，
+   * 每个请求另有 TRANSIENT_RETRY_MAX 次重试；用完之后再出这类错照常计次。
    * @returns {null | { retry: OutgoingMessage } | { failed: true }}
    */
   onTurnError({ sessionId, turn, error }) {
@@ -829,10 +873,21 @@ export class Bridge {
       this.closeCurate(req, 'abandoned', `the turn errored: ${message}`)
       return null
     }
-    const attemptsLeft = this.chargeAttempt(req, `the turn errored: ${message}`)
-    if (attemptsLeft <= 0) return { failed: true }
+    const transient = isTransientError(error) && (req.transientRetries ?? 0) < TRANSIENT_RETRY_MAX
+    let charge
+    if (transient) {
+      req.transientRetries = (req.transientRetries ?? 0) + 1
+      charge = `这是模型 API / 网络的故障，不算不合法尝试（这类重试还剩 ${TRANSIENT_RETRY_MAX - req.transientRetries} 次）。`
+      this.log(`[bt] ${requestId}: transient turn error, retry ${req.transientRetries}/${TRANSIENT_RETRY_MAX}: ${message}`)
+    } else {
+      const attemptsLeft = this.chargeAttempt(req, `the turn errored: ${message}`)
+      if (attemptsLeft <= 0) return { failed: true }
+      charge = req.type === 'reflect'
+        ? `还能再出错 ${attemptsLeft} 次，用完复盘按放弃关闭。`
+        : `这次出错算作一次不合法尝试，还剩 ${attemptsLeft} 次。`
+    }
     const template = req.type === 'reflect' ? this.prompts.requests.reflect_retry : this.prompts.requests.retry
-    const text = renderTemplate(template, { requestId, submitTool: SUBMIT_TOOL[req.type], attemptsLeft, error: message })
+    const text = renderTemplate(template, { requestId, submitTool: SUBMIT_TOOL[req.type], charge, error: message })
     return { retry: { text, summary: `重试：请求 ${requestId}（上一回合出错）`, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId, reason: 'retry' } } }
   }
 
@@ -1055,6 +1110,18 @@ export class Bridge {
   message(req, text, summary) {
     return { text, summary: summary.length > 120 ? `${summary.slice(0, 119)}…` : summary, source: { kind: SOURCE_KIND, ...(req.taskId ? { taskId: req.taskId } : {}), requestId: req.requestId, reason: req.type } }
   }
+}
+
+/** 每个请求不计次的 API / 网络故障重试上限 */
+const TRANSIENT_RETRY_MAX = 5
+const MODEL_FAULT = /invalid json|malformed|tool input|schema|invalid arguments/i
+const TRANSIENT = /stream ended before message_stop|stream (?:was )?(?:closed|interrupted|aborted)|premature close|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|fetch failed|network|timed? ?out|timeout|rate.?limit|overloaded|too many requests|service unavailable|bad gateway|gateway timeout|\b(?:429|500|502|503|504|529)\b/i
+
+/** 回合出错是不是模型 API / 网络的故障（而不是模型交了坏东西）。人或训练器取消回合不算。 */
+export function isTransientError(error) {
+  const text = `${error?.code ?? ''} ${errorText(error)}`
+  if (MODEL_FAULT.test(text) || /cancel|abort(?:ed)? by|training stopped/i.test(text)) return false
+  return TRANSIENT.test(text) || ['ETIMEDOUT', 'ECONNRESET', 'STREAM_INTERRUPTED', 'NETWORK_ERROR', 'RATE_LIMITED', 'OVERLOADED'].includes(error?.code)
 }
 
 function errorText(error) {

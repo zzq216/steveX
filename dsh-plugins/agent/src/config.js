@@ -86,7 +86,9 @@ export const DEFAULTS = Object.freeze({
     /** failed 的任务也复盘（人 /bt abort、会话没了的除外，P4-D1） */
     onFailed: true,
     /** 保存胶囊时查写死的值（P4 §5）；false 只用于调试 */
-    literalCheck: true
+    literalCheck: true,
+    /** 自动复盘在哪个会话里做：'new' = 另开新会话（不带规划回合的上下文，2026-11-07）；'same' = 任务会话。/bt reflect 手动复盘总在当前会话 */
+    session: 'new'
   },
   /** 胶囊库整理（胶囊库整理设计方案 §5） */
   curate: {

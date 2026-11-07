@@ -44,12 +44,12 @@ const CAPSULE_BODY = {
 }
 const CAPSULE_SIGNATURE = { inputs: { n: { type: 'int', required: true } } }
 
-function setup({ reflect = {} } = {}) {
+function setup({ reflect = {}, openReviewSession = null } = {}) {
   const rt = makeRuntime()
   const delivered = []
   const notified = []
   const bridge = new Bridge({
-    executor: rt.executor, library: rt.library, sandbox: rt.sandbox, registry: rt.registry, prompts, reflect,
+    executor: rt.executor, library: rt.library, sandbox: rt.sandbox, registry: rt.registry, prompts, reflect, openReviewSession,
     deliver: (sessionId, message) => { delivered.push({ sessionId, ...message }); return true },
     notify: (sessionId, message) => notified.push({ sessionId, ...message })
   })
@@ -303,4 +303,57 @@ test('abandonReviews（/bt train stop）：关掉在飞的复盘、返回它所�
   assert.equal(bridge.busyReason(), null)
   assert.equal(bridge.onTurnError({ sessionId: 's1', turn: 3, error: new Error('cancelled') }), null)
   assert.deepEqual(bridge.abandonReviews('again'), [], 'nothing left to abandon')
+})
+
+test('自动复盘另开会话：请求发到新会话、任务会话留一条通知；工具按新会话认请求；开不出来退回任务会话；手动复盘留在当前会话', async () => {
+  const opened = []
+  const ctx = setup({ openReviewSession: async (from) => { opened.push(from); return 'r1' } })
+  await planAndExpand(ctx)
+  await runUntil(ctx.executor, () => ctx.executor.task.state === 'done')
+  const req = [...ctx.bridge.requests.values()].find((r) => r.type === 'reflect')
+  assert.equal(ctx.bridge.busyReason(), `复盘请求 ${req.requestId} 还没结束`, '开会话期间请求已经算在飞')
+  await req.opening
+  assert.deepEqual(opened, ['s1'])
+  const review = ctx.delivered.at(-1)
+  assert.equal(review.sessionId, 'r1')
+  assert.match(review.text, /# 复盘请求 c1/)
+  assert.match(ctx.notified.at(-1).text, /复盘 c1 在新会话 r1 里进行/)
+  assert.equal(ctx.notified.at(-1).sessionId, 's1')
+  assert.deepEqual(ctx.bridge.reviewSessions(req.taskId), ['r1'])
+  ctx.bridge.onPreStep({ sessionId: 'r1', turn: 1, step: 1, messages: [{ source: review.source }] })
+  assert.equal(ctx.bridge.reflectRequestFor('r1')?.requestId, 'c1')
+  assert.equal(ctx.bridge.reflectRequestFor('s1'), null)
+  assert.equal(ctx.bridge.reflectDone({ sessionId: 'r1', requestId: 'c1', summary: '没有值得存的' }).ok, true)
+  assert.equal(ctx.bridge.busyReason(), null)
+  // 手动复盘不另开
+  assert.equal(ctx.bridge.reflectLast({ sessionId: 's1' }).ok, true)
+  assert.equal(ctx.delivered.at(-1).sessionId, 's1')
+  assert.deepEqual(opened, ['s1'])
+
+  const failing = setup({ openReviewSession: async () => { throw new Error('no model') } })
+  await planAndExpand(failing)
+  await runUntil(failing.executor, () => failing.executor.task.state === 'done')
+  await [...failing.bridge.requests.values()].find((r) => r.type === 'reflect').opening
+  assert.equal(failing.delivered.at(-1).sessionId, 's1', '开不出来退回任务会话')
+  assert.match(failing.delivered.at(-1).text, /# 复盘请求/)
+
+  // 开会话期间被放弃（停止训练）：不再发
+  let release
+  const slow = setup({ openReviewSession: () => new Promise((resolve) => { release = resolve }) })
+  await planAndExpand(slow)
+  await runUntil(slow.executor, () => slow.executor.task.state === 'done')
+  const pending = [...slow.bridge.requests.values()].find((r) => r.type === 'reflect')
+  const before = slow.delivered.length
+  slow.bridge.abandonReviews('training stopped')
+  release('r9')
+  await pending.opening
+  assert.equal(slow.delivered.length, before)
+  assert.equal(slow.bridge.busyReason(), null)
+
+  // reflect.session = 'same'：照旧留在任务会话
+  const same = setup({ reflect: { session: 'same' }, openReviewSession: async () => 'rX' })
+  await planAndExpand(same)
+  await runUntil(same.executor, () => same.executor.task.state === 'done')
+  assert.equal(same.delivered.at(-1).sessionId, 's1')
+  assert.match(same.delivered.at(-1).text, /# 复盘请求/)
 })
