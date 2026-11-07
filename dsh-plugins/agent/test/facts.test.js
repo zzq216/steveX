@@ -165,6 +165,32 @@ test('fact_search（P5-D7）：多词任一命中、按命中数排序、标签�
   assert.equal(store.search({ query: 'burn' }).facts[0].refs[0].stale, 'content changed')
 })
 
+test('fact_search 相关度：名字 > 标签 > 陈述，中文按二字组部分匹配；merge：并引用、旧名字进 aliases、文件移进 merged/、按旧名字仍搜得到', () => {
+  const { root } = fakeBaseline()
+  const dir = tempDir('stevex-facts-')
+  const store = new FactStore({ dir, source: new SourceTree({ root }) })
+  const ent = { file: 'net/minecraft/world/entity/Entity.java', lines: [10, 12] }
+  const mob = { file: 'net/minecraft/world/entity/Mob.java', lines: [2, 2] }
+  store.write({ name: 'click.cursor-direction', statement: '左键时光标里的物品放进格子', refs: [ent] })
+  store.write({ name: 'menu.other', statement: '与光标方向有关的另一件事，提到 cursor', refs: [mob], tags: ['cursor'] })
+  store.write({ name: 'menu.third', statement: '只在陈述里写 cursor', refs: [mob] })
+  assert.deepEqual(store.search({ query: 'cursor' }).facts.map((f) => f.name), ['click.cursor-direction', 'menu.other', 'menu.third'], '名字命中 > 标签 > 陈述')
+  assert.deepEqual(store.search({ query: '光标方向' }).facts.map((f) => f.name), ['menu.other', 'click.cursor-direction'], '整词命中排前，部分二字组也能搜到')
+
+  const merged = store.merge({ keep: 'click.cursor-direction', drop: ['menu.other'], statement: '合并后的陈述' })
+  assert.equal(merged.ok, true, JSON.stringify(merged))
+  assert.equal(merged.fact.rev, 2)
+  assert.deepEqual(merged.fact.refs.map((r) => r.file), [ent.file, mob.file])
+  assert.deepEqual(merged.fact.aliases, ['menu.other'])
+  assert.deepEqual(merged.fact.tags, ['cursor'])
+  assert.equal(store.get('menu.other'), null)
+  assert.ok(fs.existsSync(path.join(dir, 'merged', 'menu.other@1.json')))
+  assert.match(fs.readFileSync(path.join(dir, 'merged', 'index.jsonl'), 'utf8'), /"into":"click\.cursor-direction"/)
+  assert.equal(store.search({ query: 'menu.other' }).facts[0].name, 'click.cursor-direction', '按旧名字搜到合并后的')
+  assert.deepEqual(store.write({ name: 'click.cursor-direction', statement: '再修订', refs: [ent], replaces: 2 }).fact.aliases, ['menu.other'], '再修订时保留 aliases')
+  assert.match(store.merge({ keep: 'click.cursor-direction', drop: ['nope'], statement: 'x' }).errors[0], /no fact named nope/)
+})
+
 test('工具：fact_write 的 source 由适配层填；mc_source_* 记账；越界的读取返回错误而不是抛出', async () => {
   const { root } = fakeBaseline()
   const source = new SourceTree({ root })

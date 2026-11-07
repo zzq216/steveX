@@ -46,7 +46,7 @@ export class Executor extends EventEmitter {
     this.capsules = capsules
     this.eventLog = eventLog
     this.config = {
-      tickMs: 50, maxExpansionNodes: 15, maxInvalidAttempts: 3, maxValueBytes: 16384, snapshotKeep: 20, reactiveEveryMs: 1000, respawnTimeoutMs: 10000, respawnPollMs: 200,
+      tickMs: 50, maxExpansionNodes: 25, maxInvalidAttempts: 3, maxValueBytes: 16384, snapshotKeep: 20, reactiveEveryMs: 1000, respawnTimeoutMs: 10000, respawnPollMs: 200,
       fastMaxEpisodeMs: 30000,
       ...config,
       observe: { enabled: true, sources: DEFAULT_OBSERVE_SOURCES, ...(config.observe ?? {}) }
@@ -460,7 +460,9 @@ export class Executor extends EventEmitter {
         event: 'node', phase, id: node.id, type: node.type, name: node.name ?? undefined,
         status, error: phase === 'exit' && status === FAILURE ? node.lastError ?? undefined : undefined,
         // 调用胶囊的节点（Compute / 条件代码 / SubTree）退出时记下钉过哈希的引用：胶囊使用统计据此累计（整理方案 D1）
-        ref: phase === 'exit' ? node.spec.ref ?? undefined : undefined
+        ref: phase === 'exit' ? node.spec.ref ?? undefined : undefined,
+        // 叶子本次发出的 mod 调用（任务历史方案 H1）：成本画像据此按节点 / 胶囊汇总
+        calls: phase === 'exit' && node.calls && (node.calls.actions || node.calls.reads) ? { ...node.calls } : undefined
       }) : undefined
     }
   }
@@ -776,6 +778,8 @@ export class Executor extends EventEmitter {
 
   setState(state) {
     this.task.state = state
+    // 状态切换落进事件流（任务历史方案 H1）：纯执行时间 = 处于 running 的累计时长
+    this.log(this.task.taskId, { event: 'task/state', state })
     this.emit('task', this.taskSummary())
   }
 

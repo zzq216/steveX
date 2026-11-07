@@ -88,6 +88,7 @@ export class FactStore {
       statement: statement.trim(),
       refs: checked.refs,
       ...(tags.length ? { tags: [...new Set(tags.map((t) => t.trim()))] } : {}),
+      ...(current?.aliases?.length ? { aliases: current.aliases } : {}),
       rev: current ? current.rev + 1 : 1,
       createdAt: this.now().toISOString(),
       source: withoutNullish(source)
@@ -100,6 +101,39 @@ export class FactStore {
     }
     writeAtomic(path.join(this.dir, `${name}.json`), JSON.stringify(fact, null, 2) + '\n')
     return { ok: true, fact, created: !current, similar: this.similar(fact) }
+  }
+
+  /**
+   * 合并重复的事实（2026-11-07）：keep 写一个新修订（陈述、标签由调用方给；引用 = keep 与 drop 的并集，去重，至多 maxRefs 条，keep 的在前），
+   * drop 的文件移进 merged/（不真删），名字记进 keep 的 aliases——以前的任务记录里提到旧名字时，按旧名字搜仍能搜到 keep。
+   * @param {{ keep: string, drop: string[], statement: string, tags?: string[] }} plan
+   * @returns {{ ok: true, fact, dropped: string[] } | { ok: false, errors: string[] }}
+   */
+  merge({ keep, drop = [], statement, tags }, source = {}) {
+    const current = this.get(keep)
+    const errors = []
+    if (!current) errors.push(`no fact named ${keep}`)
+    const others = drop.map((name) => [name, this.get(name)])
+    for (const [name, fact] of others) if (!fact) errors.push(`no fact named ${name}`)
+    if (drop.includes(keep)) errors.push('keep is also in drop')
+    if (errors.length) return { ok: false, errors }
+    const refs = []
+    for (const ref of [current, ...others.map(([, f]) => f)].flatMap((f) => f.refs)) {
+      if (refs.some((r) => r.file === ref.file && r.lines[0] === ref.lines[0] && r.lines[1] === ref.lines[1])) continue
+      if (refs.length < this.maxRefs) refs.push({ file: ref.file, lines: ref.lines })
+    }
+    const allTags = tags ?? [...new Set([current, ...others.map(([, f]) => f)].flatMap((f) => f.tags ?? []))]
+    const written = this.write({ name: keep, statement, refs, tags: allTags, replaces: current.rev }, { ...source, kind: source.kind ?? 'merge', merged: drop })
+    if (!written.ok) return written
+    const fact = { ...written.fact, aliases: [...new Set([...(current.aliases ?? []), ...drop, ...others.flatMap(([, f]) => f.aliases ?? [])])] }
+    writeAtomic(path.join(this.dir, `${keep}.json`), JSON.stringify(fact, null, 2) + '\n')
+    const mergedDir = path.join(this.dir, 'merged')
+    fs.mkdirSync(mergedDir, { recursive: true })
+    for (const [name, old] of others) {
+      fs.renameSync(path.join(this.dir, `${name}.json`), path.join(mergedDir, `${name}@${old.rev}.json`))
+      fs.appendFileSync(path.join(mergedDir, 'index.jsonl'), JSON.stringify({ at: this.now().toISOString(), name, rev: old.rev, into: keep, intoRev: fact.rev }) + '\n')
+    }
+    return { ok: true, fact, dropped: drop }
   }
 
   /**
@@ -145,14 +179,13 @@ export class FactStore {
    * @returns {{ total: number, facts: object[] }}  每条带 refs（不带源码正文）；失效的引用标 stale
    */
   search({ query = '', tags = [], limit = 20 } = {}) {
-    const words = String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean)
+    const terms = queryTerms(query)
     const wanted = Array.isArray(tags) ? tags : []
     const rows = []
     for (const fact of this.list()) {
       if (wanted.length && !wanted.every((t) => (fact.tags ?? []).includes(t))) continue
-      const hay = [fact.name, fact.statement, ...(fact.tags ?? [])].join('\n').toLowerCase()
-      const score = words.filter((w) => hay.includes(w)).length
-      if (words.length && score === 0) continue
+      const score = relevance(fact, terms)
+      if (terms.length && score === 0) continue
       rows.push({ fact, score })
     }
     rows.sort((a, b) => b.score - a.score || a.fact.name.localeCompare(b.fact.name))
@@ -221,6 +254,43 @@ export function shaOf(lines, start, end) {
 }
 
 /** 英文词（≥ 3 字符）+ 中文二字组，去重。 */
+/**
+ * fact_search 的查询词（2026-11-07 相关度排序）：按空白拆；英文 / 数字 / 下划线每段 ≥ 2 字符一个词，
+ * 中文没有分词，每段切成二字组（单字段保留单字）——"光标方向"拆成 光标 / 标方 / 方向，部分命中也算。
+ * @returns {Array<{ word: string, grams: string[] }>}  每个原词一组
+ */
+function queryTerms(query) {
+  const out = []
+  for (const word of String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean)) {
+    const grams = [...(word.match(/[a-z0-9_]{2,}/g) ?? [])]
+    for (const run of word.match(/[\u4e00-\u9fff]+/g) ?? []) {
+      if (run.length <= 2) grams.push(run)
+      else for (let i = 0; i + 1 < run.length; i++) grams.push(run.slice(i, i + 2))
+    }
+    if (grams.length) out.push({ word, grams: [...new Set(grams)] })
+  }
+  return out
+}
+
+/**
+ * 一条事实对查询的相关度：每个原词按命中的位置计分——名字 / 合并来的旧名字 3、标签 2、陈述 1；
+ * 整词命中按满分，只命中部分二字组按命中比例折算。分数相同按名字排。
+ */
+function relevance(fact, terms) {
+  const name = [fact.name, ...(fact.aliases ?? [])].join('\n').toLowerCase()
+  const tags = (fact.tags ?? []).join('\n').toLowerCase()
+  const statement = String(fact.statement ?? '').toLowerCase()
+  const weightOf = (s) => (name.includes(s) ? 3 : tags.includes(s) ? 2 : statement.includes(s) ? 1 : 0)
+  let score = 0
+  for (const { word, grams } of terms) {
+    const whole = weightOf(word)
+    if (whole) { score += whole; continue }
+    const hits = grams.map(weightOf)
+    score += hits.reduce((a, b) => a + b, 0) / grams.length
+  }
+  return Math.round(score * 100) / 100
+}
+
 function tokensOf(text) {
   const lower = String(text).toLowerCase()
   const words = lower.match(/[a-z0-9_]{3,}/g) ?? []

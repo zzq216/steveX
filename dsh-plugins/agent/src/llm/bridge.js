@@ -3,10 +3,12 @@ import { TreeError } from '../bt/executor.js'
 import { renderTree, ancestorsOf } from '../bt/overview.js'
 import { renderDirectory, buildReflectDirectory, renderReflectDirectory } from '../bt/evidence.js'
 import { saveCapsule, saveDraft } from '../capsules/save.js'
+import { CapsuleVersions } from '../capsules/versions.js'
 import { collectEvidence, checkLiterals } from '../capsules/literals.js'
 import { walkSpec } from '../bt/build.js'
 import { libraryRows, renderLibrary, checkReason, appendCurateLog } from '../capsules/curate.js'
 import { renderTemplate } from './prompts.js'
+import { formatProfile } from '../history/profile.js'
 
 /**
  * 执行器 ↔ 大模型会话的桥（集成方案 §4）。零 DSH 依赖：会话只通过注入的 deliver / notify 触达。
@@ -48,21 +50,29 @@ export const KNOWLEDGE_TOOLS = Object.freeze(['command_docs', 'data_shapes', 'ca
  * 修复请求（P2）：多一个 bt_inspect——能看自己的状态与树自己的执行过程（快照、事件、黑板值、现场读取），
  * 记忆世界的值仍然不给（P2 §4.5）。
  */
-const PATCH_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, 'bt_view', 'bt_inspect', 'bt_submit_patch', 'bt_abort_task'])
+/**
+ * 任务历史（任务历史与复盘评估设计方案 H5）：查做过的同类任务。规划、展开、修补、复盘回合可用；整理回合不给。
+ * task_assess 只在复盘回合（H2）。
+ */
+export const HISTORY_TOOLS = Object.freeze(['task_search', 'task_get'])
+const PATCH_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_inspect', 'bt_submit_patch', 'bt_abort_task'])
 export const PATCH_TYPES = Object.freeze(['recover', 'escalate', 'failed', 'died'])
 /** 复盘（P4 §3.2）：任务已结束，没有树可改；bt_inspect 不给 live（由执行器拒绝）。 */
-const REFLECT_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, 'bt_view', 'bt_inspect', 'capsule_save', 'bt_reflect_done'])
+/** capsule_describe 也给复盘（2026-11-07）：只能改这次任务用到的 / 本次复盘存下的条目的说明，好把实测写进说明 */
+const REFLECT_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_inspect', 'capsule_save', 'capsule_describe', 'task_assess', 'bt_reflect_done'])
 /** 只在复盘回合可用的工具（guard 据此拒绝其他回合的调用） */
-export const REFLECT_ONLY_TOOLS = Object.freeze(['capsule_save', 'bt_reflect_done'])
+export const REFLECT_ONLY_TOOLS = Object.freeze(['capsule_save', 'task_assess', 'bt_reflect_done'])
 /** 整理（整理方案 §5.4）：接口知识 + 下架 / 改说明 / 结束。不给 capsule_save：不经任务验证的新代码不进库 */
 const CURATE_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, 'capsule_retire', 'capsule_describe', 'bt_curate_done'])
 /** 只在整理回合可用的工具（guard 据此拒绝其他回合的调用） */
-export const CURATE_ONLY_TOOLS = Object.freeze(['capsule_retire', 'capsule_describe', 'bt_curate_done'])
+export const CURATE_ONLY_TOOLS = Object.freeze(['capsule_retire', 'bt_curate_done'])
+/** 只在复盘 / 整理回合可用的工具（guard 据此拒绝其他回合的调用） */
+export const REVIEW_OR_CURATE_TOOLS = Object.freeze(['capsule_describe'])
 export const REQUEST_TOOLS = Object.freeze({
   reflect: REFLECT_TOOLS,
   curate: CURATE_TOOLS,
-  plan: Object.freeze([...KNOWLEDGE_TOOLS, 'bt_submit_tree', 'bt_abort_task']),
-  expand: Object.freeze([...KNOWLEDGE_TOOLS, 'bt_view', 'bt_submit_expansion', 'bt_abort_task']),
+  plan: Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_submit_tree', 'bt_abort_task']),
+  expand: Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_submit_expansion', 'bt_abort_task']),
   recover: PATCH_TOOLS,
   escalate: PATCH_TOOLS,
   failed: PATCH_TOOLS,
@@ -94,7 +104,7 @@ export class Bridge {
    * @param {object} [options.curate]    { everyTasks, listLimit }（整理方案 §5.2 / §5.3）
    * @param {(sessionId, message) => boolean} [options.deliverIdle]  等会话空闲再 followup（自动整理可能在别的回合中途触发）；缺省 = deliver
    */
-  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null }) {
+  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null }) {
     this.executor = executor
     this.library = library
     this.sandbox = sandbox
@@ -103,6 +113,10 @@ export class Bridge {
     this.lastDrafts = null        // 最近结束的任务的草稿拷贝（/bt reflect 手动复盘用）
     this.reflectSeq = 0
     this.stats = stats
+    // 任务历史（任务历史方案）：null = 不记；taskUsage(taskId, sessionId) → { turns, tokens }
+    this.history = history
+    this.taskUsage = taskUsage
+    this.historyViews = new Map() // taskId → Set(被 task_get 看过的记录)：本任务的前驱（H7）
     this.curateConfig = { everyTasks: 0, listLimit: 150, ...curate }
     this.curateSeq = 0
     this.curateSession = null    // 最近一个结束的任务所属的会话：自动整理发到这里
@@ -261,7 +275,12 @@ export class Bridge {
     // 草稿区照旧关掉（新任务的 beginDrafts 不受影响），复盘读的是这份拷贝（P4 §2.4）
     this.lastDrafts = copyDrafts(this.library, taskId)
     this.library.endDrafts(taskId)
-    for (const req of this.requests.values()) if (req.taskId === taskId && req.type !== 'reflect') req.closed = true
+    const ended = `任务已结束（${summary.state}${summary.result ? `：${summary.result}` : ''}）`
+    for (const req of this.requests.values()) {
+      if (req.taskId !== taskId || req.type === 'reflect' || req.closed) continue
+      req.closed = true
+      req.closeReason ??= ended
+    }
     const sessionId = this.taskSessions.get(taskId)
     this.taskSessions.delete(taskId)
     if (!sessionId) return this.maybeCurate()
@@ -269,6 +288,7 @@ export class Bridge {
     const task = this.executor.task?.taskId === taskId ? this.executor.task : null
     // 发了复盘就先不整理：复盘结束（closeReflect）时再查
     if (task && this.shouldReflect(summary) && this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
+    if (task) this.writeHistory(task, { sessionId })
     const text = renderTemplate(this.prompts.requests.task_end, {
       taskId, state: summary.state, goal: summary.goal ?? '（无）', result: summary.result ?? '（无）'
     })
@@ -296,8 +316,10 @@ export class Bridge {
     const req = {
       requestId, type: 'reflect', taskId: task.taskId, sessionId, task,
       drafts: drafts?.taskId === task.taskId ? drafts : { taskId: task.taskId, entries: new Map(), latest: new Map() },
-      saved: [], promoted: new Map(), reminded: false, errors: 0, answered: false, closed: false, createdAt: this.now()
+      saved: [], described: [], promoted: new Map(), reminded: false, errors: 0, answered: false, closed: false, createdAt: this.now(),
+      predecessors: [...(this.historyViews.get(task.taskId) ?? [])], assessment: null, claimReview: []
     }
+    req.versionClaims = this.openVersionClaims(task)
     this.requests.set(requestId, req)
     const directory = buildReflectDirectory(task, { drafts: draftList(req.drafts) })
     const text = renderTemplate(this.prompts.requests.reflect, {
@@ -310,6 +332,10 @@ export class Bridge {
       manual: manual ? '（人手动发起的复盘）\n\n' : '',
       directory: renderReflectDirectory(directory),
       tree: renderTree(task.spec, { statuses: statusMap(task) }),
+      profile: this.history ? `${formatProfile(this.history.profile(task.taskId))}\n${renderLlmLine(this.llmUsage(task.taskId, sessionId), this.history.profile(task.taskId))}` : '（没有启用任务历史）',
+      review: this.history ? renderOpenIssues(this.history.openIssues(req.predecessors)) : '（没有启用任务历史）',
+      versionClaims: renderVersionClaims(req.versionClaims),
+      compare: this.history ? renderCompare({ ...this.history.profile(task.taskId), ...this.llmUsage(task.taskId, sessionId) }, req.predecessors.map((id) => this.history.read(id)).filter(Boolean)) : '（没有启用任务历史）',
       skill: this.prompts.skills.review
     })
     this.executor.log(task.taskId, { event: 'reflect/start', requestId, manual: manual || undefined })
@@ -350,7 +376,7 @@ export class Bridge {
    * capsule_save（P4 §4）。
    * @returns {{ ok: true, ref, created, rewritten?, from?, keptLiterals? } | { ok: false, errors: string[] } | { ok: false, error }}
    */
-  saveCapsule({ sessionId, requestId, folder, name, description, from, signature, body, preconditions, replaces, keepLiterals }) {
+  saveCapsule({ sessionId, requestId, folder, name, description, from, signature, body, preconditions, replaces, keepLiterals, versionNote }) {
     const check = this.checkRequest(sessionId, requestId, 'reflect')
     if (check.error) return { ok: false, error: check.error }
     const { req } = check
@@ -367,6 +393,10 @@ export class Bridge {
       const info = `${key}@${existing.hash}: ${existing.description || '(no description)'}; signature ${JSON.stringify(current?.signature ?? null)}`
       if (replaces === undefined) return { ok: false, errors: [`${key} already exists (${info}). To improve it, resubmit with replaces: "${existing.hash}"; if this is something else, pick another name`] }
       if (replaces !== existing.hash) return { ok: false, errors: [`replaces "${replaces}" is not the latest version of ${key} (latest: ${info}); look at it with capsule_get and resubmit on top of it`] }
+      // 版本说明（胶囊版本说明设计方案 V2）：替换时必填，先校验再存
+      const checked = CapsuleVersions.check(versionNote)
+      if (!checked.ok) return { ok: false, errors: checked.errors }
+      versionNote = checked.note
     } else if (replaces !== undefined) {
       return { ok: false, errors: [`replaces given, but there is no ${key} in the library yet`] }
     }
@@ -413,10 +443,13 @@ export class Bridge {
     if (!result.ok) return result
     if (draft) req.promoted.set(draft.name, { hash: draft.hash, ref: result.ref })
     if (!req.saved.includes(result.ref)) req.saved.push(result.ref)
+    const savedHash = result.ref.slice(result.ref.lastIndexOf('@') + 1)
+    if (existing && savedHash !== replaces) this.library.versions.record(key, savedHash, { parent: replaces, by: req.taskId, note: versionNote })
     const keptLiterals = hits.length ? Object.fromEntries(hits.map((h) => [h.path, keepLiterals[h.path]])) : undefined
     this.executor.log(req.taskId, {
       event: 'capsule/saved', requestId, ref: result.ref, folder, from: from ?? undefined,
-      replaces: replaces ?? undefined, created: result.created, keptLiterals
+      replaces: replaces ?? undefined, created: result.created, keptLiterals,
+      versionNote: existing && savedHash !== replaces ? versionNote : undefined
     })
     this.log(`[bt] reflect ${requestId}: saved ${result.ref}`)
     return { ok: true, ref: result.ref, created: result.created, ...(result.rewritten ? { rewritten: result.rewritten } : {}), ...(fromInfo ? { from: fromInfo } : {}), ...(keptLiterals ? { keptLiterals } : {}) }
@@ -428,6 +461,9 @@ export class Bridge {
     if (check.error) return { ok: false, error: check.error }
     const { req } = check
     if (typeof summary !== 'string' || !summary.trim()) return { ok: false, error: 'summary is required: what you saved and why, or why nothing was worth saving' }
+    if (this.history && req.task?.state === 'done' && !req.assessment) {
+      return { ok: false, error: '任务做成了：先用 task_assess 评估这次的树（成本高、耗时多或容易出错的地方；没有就写 none 和理由），再结束复盘' }
+    }
     req.answered = true
     const saved = [...req.saved]
     this.closeReflect(req, 'done', summary.trim())
@@ -436,12 +472,118 @@ export class Bridge {
 
   closeReflect(req, outcome, reason) {
     req.closed = true
-    this.executor.log(req.taskId, { event: `reflect/${outcome}`, requestId: req.requestId, saved: [...req.saved], reason })
+    req.closedAt = this.now()
+    req.closeReason ??= `${outcome}：${reason}`
+    if (req.task) this.writeHistory(req.task, { sessionId: req.sessionId, assessment: req.assessment, predecessors: req.predecessors, reflect: req })
+    for (const item of req.claimReview ?? []) this.library.versions?.review(item.key, item.newHash, item.index, { status: item.status, evidence: item.evidence, by: req.taskId })
+    this.executor.log(req.taskId, { event: `reflect/${outcome}`, requestId: req.requestId, saved: [...req.saved], described: req.described.map((c) => c.key), reason })
     this.log(`[bt] reflect ${req.requestId} ${outcome}: ${reason}`)
     // 证据随请求释放（P4 §2.4）
     req.task = null
     req.drafts = null
     this.maybeCurate()
+  }
+
+  // ── 任务历史（任务历史与复盘评估设计方案）──────────────────────────────────
+
+  /** task_assess（H2、H3）：评估这次的树；同一次复盘里再调用就覆盖。 */
+  assess({ sessionId, requestId, issues, none, review, claims }) {
+    if (!this.history) return { ok: false, error: '没有启用任务历史' }
+    const check = this.checkRequest(sessionId, requestId, 'reflect')
+    if (check.error) return { ok: false, error: check.error }
+    const { req } = check
+    const result = this.history.checkAssessment({ issues, none, review }, { taskId: req.taskId, spec: req.task?.spec ?? null, predecessors: req.predecessors })
+    const claimCheck = checkClaimReview(claims, req.versionClaims ?? [])
+    const errors = [...(result.ok ? [] : result.errors), ...claimCheck.errors]
+    if (errors.length) return { ok: false, errors }
+    req.assessment = result.assessment
+    req.claimReview = claimCheck.items
+    return { ok: true, requestId, issues: result.assessment.issues.length, none: Boolean(result.assessment.none), reviewed: result.assessment.review.length, claims: claimCheck.items.length }
+  }
+
+  /**
+   * 涉及这个任务所用版本的 open 判断（胶囊版本说明方案 V4）：用到的版本 = 各版本树里钉住的引用 + 执行时进过的（成本画像，含子树里的）。
+   * @returns {Array<{ key, newHash, oldHash, index, claim, side, used }>}
+   */
+  openVersionClaims(task) {
+    const versions = this.library.versions
+    if (!versions) return []
+    const used = new Set()
+    const add = (ref) => { if (typeof ref === 'string' && ref.includes('@') && !ref.startsWith('task/')) used.add(ref) }
+    for (const spec of [task.spec, ...(task.versions ?? []).map((v) => v?.spec)]) if (spec) walkSpec(spec, (node) => add(node.ref))
+    for (const c of this.history?.profile(task.taskId)?.capsules ?? []) add(c.ref)
+    const out = new Map()
+    for (const ref of used) {
+      const at = ref.lastIndexOf('@')
+      for (const item of versions.claimsInvolving(ref.slice(0, at), ref.slice(at + 1))) {
+        if (item.claim.status !== 'open') continue
+        const id = `${item.key}@${item.newHash}#${item.index}`
+        const prev = out.get(id)
+        out.set(id, { ...item, used: [...new Set([...(prev?.used ?? []), item.side])] })
+      }
+    }
+    return [...out.values()]
+  }
+
+  /**
+   * task_get 看了一条记录：记成这个会话当前任务的前驱（H7）。当前任务 = 这个会话在等的大纲请求的任务，或它在跑的任务。
+   * 复盘回合里看的不算（任务已经结束）。@returns 记到了哪个任务；没有 → null
+   */
+  noteHistoryView(sessionId, recordId) {
+    const plan = this.planning && this.requests.get(this.planning)
+    let taskId = plan && this.isOpen(plan) && plan.sessionId === sessionId ? plan.taskId : null
+    const task = this.activeTask()
+    if (!taskId && task && this.taskSessions.get(task.taskId) === sessionId) taskId = task.taskId
+    if (!taskId || taskId === recordId) return null
+    let views = this.historyViews.get(taskId)
+    if (!views) {
+      this.historyViews.set(taskId, views = new Set())
+      while (this.historyViews.size > 5) this.historyViews.delete(this.historyViews.keys().next().value)
+    }
+    views.add(recordId)
+    return taskId
+  }
+
+  /** 任务结束：写一条记录（H4）。出错只记日志，不影响任务流程。 */
+  writeHistory(task, { sessionId = null, assessment = null, predecessors = null, reflect = null } = {}) {
+    if (!this.history) return null
+    try {
+      const usage = { ...this.llmUsage(task.taskId, sessionId), ...(reflect ? { reflectMs: reflect.closedAt - reflect.createdAt } : {}) }
+      return this.history.record({
+        task: { taskId: task.taskId, goal: task.goal, state: task.state, result: task.result, finishedBy: task.finishedBy, spec: task.spec },
+        tree: task.spec ? renderTree(task.spec, { statuses: statusMap(task) }) : '',
+        assessment,
+        predecessors: predecessors ?? [...(this.historyViews.get(task.taskId) ?? [])],
+        usage
+      })
+    } catch (error) {
+      this.log(`[bt] history ${task.taskId}: ${error.message}`)
+      return null
+    }
+  }
+
+  /** 这个任务的 LLM 用时与 token（任务历史方案 §7.3）：规划回合（发请求 → 交树）、规划 / 展开 / 修补回合的 token、复盘回合的 token。 */
+  llmUsage(taskId, sessionId) {
+    const usage = this.taskUsage?.(taskId, sessionId) ?? {}
+    const plan = [...this.requests.values()].find((r) => r.type === 'plan' && r.taskId === taskId)
+    return { ...usage, ...(plan?.answeredAt ? { planMs: plan.answeredAt - plan.createdAt } : {}) }
+  }
+
+  /**
+   * 放弃所有在飞的复盘 / 整理请求（训练器 /bt train stop：一轮做完、正在复盘时也要能停下）。
+   * 先关请求、再由调用方取消回合：回合被取消后走 agent/error，请求已经关了就不会重发。
+   * @returns {string[]} 这些请求所在的会话（调用方去取消它们的当前回合）
+   */
+  abandonReviews(reason) {
+    const sessions = new Set()
+    for (const req of [...this.requests.values()]) {
+      if (!this.isOpen(req)) continue
+      if (req.type === 'reflect') this.closeReflect(req, 'abandoned', reason)
+      else if (req.type === 'curate') this.closeCurate(req, 'abandoned', reason)
+      else continue
+      sessions.add(req.sessionId)
+    }
+    return [...sessions]
   }
 
   // ── 整理（整理方案 §5）───────────────────────────────────────────────────
@@ -485,7 +627,7 @@ export class Bridge {
       last: state.lastAt
         ? `上次整理：${state.lastAt}（${state.lastRequestId}），之后结束了 ${state.sinceLast} 个任务`
         : `还没有整理过；统计里已经记了 ${this.stats?.data.tasks.length ?? 0} 个任务`,
-      library: renderLibrary(libraryRows(this.library, this.stats), { listLimit: this.curateConfig.listLimit }),
+      library: renderLibrary(libraryRows(this.library, this.stats, this.history), { listLimit: this.curateConfig.listLimit }),
       skill: this.prompts.skills.curate
     })
     const summary = trigger === 'auto' ? `整理胶囊库：已累计 ${state.sinceLast} 个任务` : '整理胶囊库'
@@ -528,11 +670,22 @@ export class Bridge {
     return { ok: true, ...change }
   }
 
-  /** capsule_describe（§5.4）：改说明，不产生新版本。 */
+  /**
+   * capsule_describe（§5.4）：改说明，不产生新版本。整理回合能改库里任何条目；
+   * 复盘回合只能改这次任务用到的（树里引用的、执行时进过的）和本次复盘存下的条目。
+   */
   describeCapsule({ sessionId, requestId, ref, description }) {
-    const check = this.checkRequest(sessionId, requestId, 'curate')
+    const check = this.checkRequest(sessionId, requestId, ['curate', 'reflect'])
     if (check.error) return { ok: false, error: check.error }
+    const { req } = check
     if (typeof description !== 'string' || !description.trim()) return { ok: false, error: 'description is required: one line saying what it does and when it applies' }
+    const key = typeof ref === 'string' ? ref.trim().split('@')[0] : ''
+    if (req.type === 'reflect') {
+      const allowed = this.reflectRefs(req)
+      if (!allowed.has(key)) {
+        return { ok: false, error: `复盘时只能改这次任务用到的或本次复盘存下的条目的说明；${key || ref} 不在其中（这次能改：${[...allowed].sort().join('、') || '无'}）。其他条目要到整理（/bt curate）时改` }
+      }
+    }
     let r
     try {
       r = this.library.describe(ref, description.trim())
@@ -540,9 +693,25 @@ export class Bridge {
       return { ok: false, error: error.message }
     }
     const change = { op: 'describe', key: r.key, before: r.before, after: r.after }
-    check.req.changes.push(change)
-    this.log(`[bt] curate ${requestId}: describe ${r.key}`)
+    if (req.type === 'reflect') {
+      req.described.push(change)
+      this.executor.log(req.taskId, { event: 'reflect/describe', requestId, key: r.key, before: r.before, after: r.after })
+      this.log(`[bt] reflect ${requestId}: describe ${r.key}`)
+    } else {
+      req.changes.push(change)
+      this.log(`[bt] curate ${requestId}: describe ${r.key}`)
+    }
     return { ok: true, ...change }
+  }
+
+  /** 复盘回合能改说明的条目：任务树（各版本）里引用的、执行时进过的（含子树里的）、本次复盘存下的（不含 task/ 草稿）。 */
+  reflectRefs(req) {
+    const keys = new Set()
+    const add = (ref) => { if (typeof ref === 'string' && !ref.startsWith('task/')) keys.add(ref.split('@')[0]) }
+    for (const spec of [req.task?.spec, ...(req.task?.versions ?? []).map((v) => v?.spec)]) if (spec) walkSpec(spec, (node) => add(node.ref))
+    for (const c of this.history?.profile(req.taskId)?.capsules ?? []) add(c.ref)
+    for (const ref of req.saved) add(ref)
+    return keys
   }
 
   /** bt_curate_done：结束整理。reason 必填，什么都没改也要写为什么。 */
@@ -558,6 +727,7 @@ export class Bridge {
 
   closeCurate(req, outcome, reason) {
     req.closed = true
+    req.closeReason ??= `${outcome}：${reason}`
     const pick = (op) => req.changes.filter((c) => c.op === op)
     appendCurateLog(this.library.dir, {
       requestId: req.requestId, at: new Date(this.now()).toISOString(), trigger: req.trigger, sinceLast: req.sinceLast, outcome,
@@ -722,6 +892,7 @@ export class Bridge {
       return { ok: false, errors, attemptsLeft }
     }
     req.answered = true
+    req.answeredAt = this.now()
     this.planning = null
     this.taskSessions.set(req.taskId, req.sessionId)
     const task = this.executor.task
@@ -850,12 +1021,15 @@ export class Bridge {
     if (!req) return { error: `没有请求 ${requestId}` }
     if (Array.isArray(type) ? !type.includes(req.type) : req.type !== type) return { error: `${requestId} 是 ${req.type} 请求，请用 ${SUBMIT_TOOL[req.type]} 回答` }
     if (sessionId && req.sessionId !== sessionId) return { error: `请求 ${requestId} 属于另一个会话` }
-    if (!this.isOpen(req)) return { error: `请求 ${requestId} 已经回答过或已关闭` }
+    if (req.answered) return { error: `请求 ${requestId} 已经回答过` }
+    if (req.closed) return { error: `请求 ${requestId} 已关闭${req.closeReason ? `：${req.closeReason}` : ''}；本回合交不上了，不必再交` }
+    if (!this.isOpen(req)) return { error: `请求 ${requestId} 已关闭（执行器已经不在等它）` }
     return { req }
   }
 
   closePlan(req, reason) {
     req.closed = true
+    req.closeReason ??= reason
     if (this.planning === req.requestId) this.planning = null
     this.library.endDrafts(req.taskId)
     this.releaseTask(req.taskId)
@@ -1002,4 +1176,70 @@ export function shapeOf(value, depth = 0, { maxDepth = MAX_SHAPE_DEPTH, maxField
     return `{${fields.join(', ')}}`
   }
   return typeof value
+}
+
+/** 复盘请求里"和参考过的同类任务比"一段（任务历史方案 H12）：只列数字，不下结论。 */
+function renderCompare(profile, records) {
+  if (records.length === 0) return '（没有：这次规划 / 展开 / 修补时没有用 task_get 参考过以往任务）'
+  const sec = (ms) => (Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)} s` : '?')
+  const row = (label, m) => `${label}：mod 调用 ${m?.modCalls ?? '?'} 次，执行 ${sec(m?.execMs)}，回合 ${m?.turns ?? '?'}` +
+    `；规划 ${sec(m?.planMs)}，执行中等 LLM ${sec(m?.waitMs)}，复盘 ${m?.reflectMs === 'now' ? '（进行中）' : sec(m?.reflectMs)}` +
+    `，token ${m?.tokens?.total ?? '?'}${m?.reflectTokens?.total ? `（复盘另 ${m.reflectTokens.total}）` : ''}`
+  const lines = [row('这次', profile ? { ...profile, reflectMs: 'now' } : null)]
+  for (const rec of records) lines.push(`${row(rec.taskId, rec.metrics)}（${rec.outcome}；${rec.goal}）`)
+  return lines.join('\n')
+}
+
+/** 复盘请求里"涉及这次所用版本的待核对判断"一段（胶囊版本说明方案 V4）。 */
+function renderVersionClaims(items) {
+  if (!items?.length) return '（没有）'
+  const lines = ['（`task_assess` 的 claims 里每条写 { ref: "<名字>@<新版哈希>", claim: <方括号里的序号>, status: confirmed | refuted | open, evidence }）']
+  for (const item of items) {
+    const better = item.claim.better === 'new' ? `新版 @${item.newHash} 更好` : `旧版 @${item.oldHash} 更好`
+    const used = item.used.map((side) => (side === 'new' ? `新版 @${item.newHash}` : `旧版 @${item.oldHash}`)).join('、')
+    lines.push(`${item.key}@${item.newHash}（替换了 @${item.oldHash}）[${item.index}] ${better}：${item.claim.when}（${item.claim.basis === 'measured' ? `实测：${item.claim.evidence ?? ''}` : '推测'}）；这次用到的是${used}`)
+  }
+  return lines.join('\n')
+}
+
+/** task_assess 的 claims：只能核对复盘请求里列出的判断。@returns {{ items, errors }} */
+function checkClaimReview(claims, open) {
+  const errors = []
+  const items = []
+  if (claims === undefined || claims === null) return { items, errors }
+  if (!Array.isArray(claims)) return { items, errors: ['claims 要是数组'] }
+  const byId = new Map(open.map((item) => [`${item.key}@${item.newHash}#${item.index}`, item]))
+  const listed = open.map((item) => `{ ref: "${item.key}@${item.newHash}", claim: ${item.index} }`)
+  for (const [i, c] of claims.entries()) {
+    const at = `claims[${i}]`
+    const ref = typeof c?.ref === 'string' ? c.ref.trim() : ''
+    const index = typeof c?.claim === 'string' && /^\s*\[?\d+\]?\s*$/.test(c.claim) ? Number(c.claim.replace(/[[\]\s]/g, '')) : c?.claim
+    const item = byId.get(`${ref}#${index}`)
+    if (!item) {
+      errors.push(listed.length
+        ? `${at}：对不上待核对的判断（ref=${JSON.stringify(c?.ref)}，claim=${JSON.stringify(c?.claim)}）。ref 写"名字@新版哈希"，claim 写方括号里的序号；这次能核对的是：${listed.join('、')}`
+        : `${at}：这次没有可核对的版本判断（复盘请求里没有列出），不用写 claims`)
+    }
+    if (!['confirmed', 'refuted', 'open'].includes(c?.status)) errors.push(`${at}.status 要是 confirmed / refuted / open 之一`)
+    if (typeof c?.evidence !== 'string' || !c.evidence.trim()) errors.push(`${at}.evidence 必填：凭什么这么判断（这次的条件与指标）`)
+    if (item) items.push({ key: item.key, newHash: item.newHash, index: item.index, status: c.status, evidence: String(c.evidence ?? '').trim() })
+  }
+  return { items, errors }
+}
+
+/** 成本画像后面的一行：LLM 回合花的时间与 token（执行的成本画像只算树执行）。 */
+function renderLlmLine(usage, profile) {
+  const sec = (ms) => (Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)} s` : '?')
+  return `LLM 回合：规划（发请求到交树）${sec(usage.planMs)}，执行中等 LLM（展开 / 修补）${sec(profile?.waitMs)}；规划 / 展开 / 修补回合 token ${usage.tokens?.total ?? '?'}（复盘回合不在内）`
+}
+
+/** 复盘请求里"前驱的待验证问题"一段（H7）。 */
+function renderOpenIssues(records) {
+  if (records.length === 0) return '（没有：这次规划 / 展开 / 修补时没有用 task_get 参考过以往任务，或参考的任务没有待验证的问题）'
+  const lines = ['（`task_assess` 的 review 里每条写 { record: "<任务 id>", issue: <方括号里的序号>, status, evidence }）']
+  for (const rec of records) {
+    lines.push(`${rec.taskId}（${rec.goal}）`)
+    for (const issue of rec.issues) lines.push(`  [${issue.index}] ${issue.where}（${issue.kind}）：${issue.problem}；证据：${issue.evidence}${issue.idea ? `；当时的设想：${issue.idea}` : ''}`)
+  }
+  return lines.join('\n')
 }

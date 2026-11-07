@@ -2,7 +2,9 @@
 
 指令：**{{instruction}}**
 
-本回合不能调用 `mod_query` / `nbt_query` / `json_query` / `bt_inspect`：树要用的数据由树自己读（`read`、`code/core.nbt.query`、`code/core.json.query`）；数据的字段结构与取值用 `data_shapes` 查。
+**验收标准**：先要做对；做对的前提下，树执行时的操作越少越好（mod 调用次数、执行时间，复盘时会按成本画像评估）。做过同类任务的，以那次的成本为参照，不比它多（那次已经做到最少时，照着做就是最优）。
+
+本回合不能调用 `mod_query` / `nbt_query` / `json_query` / `bt_inspect`：树要用的数据由树自己读（`read`、`code/core.nbt.query`、`code/core.json.query`）；数据的字段结构与取值用 `data_shapes` 查。工作台 / 背包合成配方（有序 shaped、无序 shapeless）都在配方表 `json.recipes` 里（由 1.21.11 源码里的配方生成器提取，内容与源码一致）。配方的内容（形状、材料、产量、要不要先做中间产物）不在本回合弄清楚：在树里用 `code/core.json.query` 读进黑板，由后面的条件代码 / Compute 按读到的内容决定怎么做（展开时黑板也只给形状、不给值）。背包里放的是什么材料、分成几堆、各多少，同样不在本回合弄清楚：树用 `read` 读进来，由代码按读到的内容决定。`mc_source_*` 用来确认游戏机制，不用来查合成配方；熔炼、切石、锻造等 `json.recipes` 里没有的配方照常可以查源码。以往从 MC 源码确认过的游戏机制存在事实库里（每条带源码引用）：确认机制先用 `fact_search` 查，库里没有再查源码。
 
 请按下面的「慢树大纲」写出这个任务的大纲树，用 `bt_submit_tree` 提交（`requestId: "{{requestId}}"`）。树不合法时工具会返回逐条错误，请在本回合内修正后重交；同一请求最多 {{maxAttempts}} 次。
 

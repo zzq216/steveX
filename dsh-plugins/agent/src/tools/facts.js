@@ -7,12 +7,24 @@ import { SourceError } from '../facts/source.js'
  * 源码与事实是接口知识（和 command_docs 同类），不是此刻的世界状态，所以进所有回合（P5-D11，不违反 I13）。
  * 只读源码基准：路径一律相对基准，越界的拒绝（P5-D9）。
  * 用过源码 / 写过事实都告诉适配层（turns.note），回合结束时据此决定要不要提醒补事实库（§7）。
+ * 结果里出现配方生成器的源码（net/minecraft/data/recipes/）时附一句说明（训练场设计方案 T14）：工作台合成配方
+ * 已在 json.recipes 里、在树里读；这里的熔炼、切石、锻造等 json.recipes 没有。只是补充证据，不拦截。
  *
  * @param {object} services
  * @param {{ store: import('../facts/store.js').FactStore, source: import('../facts/source.js').SourceTree }} services.facts
  * @param {{ note: (sessionId, kind: 'source'|'write') => void, source: (sessionId) => object }} [services.factTurns]
  * @param {number} services.maxOutputChars
  */
+/** 配方生成器所在的目录（基准内相对路径） */
+export const RECIPE_SOURCE_DIR = 'net/minecraft/data/recipes/'
+export const RECIPE_SOURCE_NOTE = '注意：net/minecraft/data/recipes/ 是配方生成器。工作台 / 背包合成配方（有序 shaped、无序 shapeless）都已经在 json.recipes 里，在树里用 code/core.json.query 读；这里的熔炼、切石、锻造等配方 json.recipes 没有。'
+
+/** 搜索结果的某一行、或读的文件在配方生成器目录下 → 说明文字；否则 null */
+export function recipeSourceNote({ text = '', file = '' } = {}) {
+  const hit = file.startsWith(RECIPE_SOURCE_DIR) || text.split('\n').some((line) => line.startsWith(RECIPE_SOURCE_DIR))
+  return hit ? RECIPE_SOURCE_NOTE : null
+}
+
 export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }, maxOutputChars }) {
   const { store, source } = facts
   const render = (_args, value) => textBlocks(jsonText(value, maxOutputChars))
@@ -22,7 +34,7 @@ export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }
       name: 'fact_search',
       description: [
         '查事实库：从 MC 源码里确认过、带源码引用的事实。查 MC 机制先查这里，库里有、引用有效就不必再翻源码。',
-        'query 按空白拆成几个词，名字、陈述、标签里含任一词就返回，含的词越多越靠前（中文没有分词：搜不到就换几个短词再搜）；不给 = 全部。',
+        'query 按空白拆成几个词，名字、陈述、标签里含任一词就返回；按相关度排：名字里命中最高、标签次之、陈述再次，中文词按二字组部分匹配（如"光标方向"拆成 光标 / 标方 / 方向）；不给 = 全部。',
         '返回每条的名字、陈述、源码引用（文件 + 行号；要看原文用 mc_source_read）与修订号；引用对不上当前源码的标出 stale。'
       ].join('\n'),
       parameters: {
@@ -85,7 +97,9 @@ export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }
       async execute(args, exec) {
         factTurns.note(sessionOf(exec), 'source')
         try {
-          return { ok: true, ...(await source.search(args)) }
+          const result = await source.search(args)
+          const note = recipeSourceNote(result)
+          return { ok: true, ...result, ...(note ? { note } : {}) }
         } catch (error) {
           return { ok: false, error: error instanceof SourceError ? error.message : String(error) }
         }
@@ -104,7 +118,9 @@ export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }
       async execute(args, exec) {
         factTurns.note(sessionOf(exec), 'source')
         try {
-          return { ok: true, ...source.read(args) }
+          const result = source.read(args)
+          const note = recipeSourceNote(result)
+          return { ok: true, ...result, ...(note ? { note } : {}) }
         } catch (error) {
           return { ok: false, error: error instanceof SourceError ? error.message : String(error) }
         }
@@ -129,11 +145,11 @@ function renderSearch(value, maxChars) {
   if (!value.ok) return `搜索失败：${value.error}`
   if (value.matches === 0) return '没有命中'
   const head = `${value.matches} 处命中，${value.files} 个文件${value.truncated ? `（已截断：命中太多或超时；缩小 path / glob、改 pattern，或调大 limit）` : ''}`
-  const text = `${head}\n${value.text}`
+  const text = `${value.note ? `${value.note}\n` : ''}${head}\n${value.text}`
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n…（已截断到 ${maxChars} 字符）` : text
 }
 
 function renderRead(value) {
   if (!value.ok) return `读取失败：${value.error}`
-  return `${value.file}（共 ${value.total} 行）第 ${value.start}–${value.end} 行${value.truncated ? '（一次最多 300 行，后面的用 start 接着读）' : ''}\n${value.text}`
+  return `${value.note ? `${value.note}\n` : ''}${value.file}（共 ${value.total} 行）第 ${value.start}–${value.end} 行${value.truncated ? '（一次最多 300 行，后面的用 start 接着读）' : ''}\n${value.text}`
 }

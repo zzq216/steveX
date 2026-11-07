@@ -6,14 +6,14 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 import { normalizeConfig, steveXRoot } from './config.js'
 import { createRuntime } from './runtime.js'
-import { Bridge, REFLECT_ONLY_TOOLS, CURATE_ONLY_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
+import { Bridge, REFLECT_ONLY_TOOLS, CURATE_ONLY_TOOLS, REVIEW_OR_CURATE_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
 import { FactTurns } from './llm/fact_turns.js'
 import { FastBridge, FAST_ONLY_TOOLS, FAST_TOOLS } from './llm/fast_bridge.js'
 import { loadPrompts } from './llm/prompts.js'
 import { createTools } from './tools/index.js'
 import { METHODS, READ_METHODS } from './game/index.js'
 import { NBT_SOURCES } from './capsules/index.js'
-import { Trainer, parseTrainArgs } from './training/trainer.js'
+import { Trainer, parseTrainArgs, sumTurnUsage } from './training/trainer.js'
 
 /**
  * steveX agent 插件（DSH / Cordis 适配层，集成方案 §2.3）。
@@ -64,7 +64,7 @@ const USAGE = [
   '/bt fast reflect           马上把待反思事件打成一批（不等凑够）',
   '/bt fast load <file> [理由] 手动放一版快树（走同样的校验，写进版本链）',
   '/bt capsules              胶囊库条目（内置查询 + 已保存的条件 / Compute / 子树 + 本任务的草稿）',
-  '/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>]  训练场：每轮重置、发材料、发任务、判定，记录写 runtime/training/<场地>.jsonl（需要单人世界）',
+  '/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>] [n=<份数>] [m=<次数>]  训练场：每轮重置、发 n 份材料、要求合成 m 次的产物、判定，记录写 runtime/training/<场地>.jsonl（需要单人世界）。n、m 写 k 或 a-b（1–64），不写时 n 在 1–64 随机；n=1 m=1 是单次模式',
   '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
   '注意：DSH Web 只在会话开过回合后才显示命令结果。新会话里先说一句话（或 /bt task …），再用 status / nodes / capsules 这类查看命令'
@@ -156,6 +156,9 @@ function setupPlanner(ctx, config, runtime) {
     executor, library, sandbox, prompts, registry,
     reflect: config.reflect,
     stats: runtime.stats,
+    history: runtime.history,
+    // 任务历史的回合数与 token（H1）：本任务的规划、展开、修补请求绑定过的回合，按 DSH 的会话事件算
+    taskUsage: (taskId, sessionId) => taskUsage(taskId, sessionId),
     curate: config.curate,
     runtimeDir: config.runtimeDir,
     maxInvalidAttempts: config.maxInvalidAttempts,
@@ -257,9 +260,26 @@ function setupPlanner(ctx, config, runtime) {
     }
   })
 
+  /** 任务的回合与 token：规划 / 展开 / 修补回合一份，复盘回合另一份（reflectTokens） */
+  function taskUsage(taskId, sessionId) {
+    if (!sessionId) return {}
+    const turns = new Set()
+    const reflectTurns = new Set()
+    for (const req of bridge.requests.values()) {
+      if (req.taskId !== taskId || req.type === 'curate') continue
+      for (const bound of req.boundTurns ?? []) if (bound.sessionId === sessionId) (req.type === 'reflect' ? reflectTurns : turns).add(bound.turn)
+    }
+    const list = [...turns].sort((a, b) => a - b)
+    const events = ctx.agents.get(sessionId)?.session?.snapshotEvents?.() ?? null
+    const out = { turns: list.length, tokens: sumTurnUsage(events, list, deriveTurnTokenUsage) }
+    if (reflectTurns.size) out.reflectTokens = sumTurnUsage(events, [...reflectTurns].sort((a, b) => a - b), deriveTurnTokenUsage)
+    return out
+  }
+
   // ── 工具 ──
   const tools = createTools({
     facts: runtime.facts,
+    history: runtime.history,
     factTurns,
     game, registry, library, bridge,
     stats: runtime.stats,
@@ -321,6 +341,7 @@ function setupPlanner(ctx, config, runtime) {
     const turn = turnTools.get(sessionId)
     if (REFLECT_ONLY_TOOLS.includes(exec.name) && !turn?.allowed.has(exec.name)) return `steveX: ${exec.name} is only for answering a task review (reflect) request`
     if (CURATE_ONLY_TOOLS.includes(exec.name) && !turn?.allowed.has(exec.name)) return `steveX: ${exec.name} is only for answering a capsule library curation request (/bt curate)`
+    if (REVIEW_OR_CURATE_TOOLS.includes(exec.name) && !turn?.allowed.has(exec.name)) return `steveX: ${exec.name} is only for answering a task review (reflect) or capsule library curation (/bt curate) request`
     const allowed = turn?.allowed ?? (config.planner.exclusiveTools ? sessionAllowed : null)
     if (!allowed || allowed.has(exec.name)) return undefined
     if (turn && factTurns.isCheck(sessionId, turn.turn) && !bridge.turns.has(`${sessionId}#${turn.turn}`)) {
@@ -399,6 +420,7 @@ function setupPlanner(ctx, config, runtime) {
   // ── 训练场（训练场设计方案）：后台连续跑多轮，每轮一个新会话（T13）；token 用 DSH 的会话事件按回合算 ──
   const trainer = new Trainer({
     bridge, executor, game, prompts,
+    history: runtime.history,
     config: config.training,
     runtimeDir: config.runtimeDir,
     async whenIdle(sessionId) {
@@ -411,6 +433,8 @@ function setupPlanner(ctx, config, runtime) {
     openSession: (consoleSessionId) => createSession({ selection: sessionModel(consoleSessionId) ?? defaultModel() }),
     notify: (sessionId, text) => ctx.agents.get(sessionId)?.inject(toMessage({ text, summary: text, source: { kind: TRAIN_SOURCE_KIND } })),
     sessionExists: (sessionId) => Boolean(ctx.agents.get(sessionId)),
+    // 停止训练时打断复盘 / 整理回合：请求已经先被放弃，回合出错后不会重发
+    cancelTurn: (sessionId, reason) => ctx.agents.get(sessionId)?.cancel({ kind: 'hook', reason }),
     sessionEvents: (sessionId) => ctx.agents.get(sessionId)?.session?.snapshotEvents?.() ?? null,
     deriveUsage: deriveTurnTokenUsage,
     log: (line) => logger?.info?.(line)
@@ -528,7 +552,7 @@ ${USAGE}` }
   }
   const parsed = parseTrainArgs(args)
   if (!parsed.ok) return { kind: 'error', text: parsed.error }
-  const result = trainer.start({ sessionId, arena: parsed.arena, item: parsed.item, runs: parsed.runs, seed: parsed.seed })
+  const result = trainer.start({ sessionId, arena: parsed.arena, item: parsed.item, runs: parsed.runs, seed: parsed.seed, portions: parsed.portions, crafts: parsed.crafts })
   return result.ok ? { kind: 'success', text: result.text } : { kind: 'error', text: result.error }
 }
 

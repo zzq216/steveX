@@ -81,7 +81,7 @@ const quiet = { info() {}, warn() {} }
 test('插件加载：提供 ctx.stevexBt、注册 /bt；卸载时停掉执行器', () => {
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stevex-bt-'))
   const { ctx, commands, dispose } = fakeContext()
-  apply(ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), logger: quiet })
+  apply(ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), historyDir: path.join(runtimeDir, 'history'), logger: quiet })
 
   assert.equal(name, 'stevex-agent')
   assert.deepEqual(inject, ['commands', 'tools', 'agents', 'systemPrompt'])
@@ -99,7 +99,7 @@ test('/bt run 读树文件（带初始黑板）并开始任务；/bt nodes、/bt
   const treeFile = path.join(runtimeDir, 'tree.json')
   fs.writeFileSync(treeFile, JSON.stringify({ goal: '测试', blackboard: { item: 3 }, root: { act: 'key/hotbar', params: { slot: '$item' } } }))
   const { ctx, dispose } = fakeContext()
-  apply(ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), logger: quiet })
+  apply(ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), historyDir: path.join(runtimeDir, 'history'), logger: quiet })
   const { executor } = ctx.stevexBt
 
   const run = runCommand(executor, `run ${treeFile}`)
@@ -120,7 +120,7 @@ test('/bt run：树不合法时返回逐条错误', () => {
   const treeFile = path.join(runtimeDir, 'bad.json')
   fs.writeFileSync(treeFile, JSON.stringify({ act: 'fly' }))
   const { ctx, dispose } = fakeContext()
-  apply(ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), logger: quiet })
+  apply(ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), historyDir: path.join(runtimeDir, 'history'), logger: quiet })
   const res = runCommand(ctx.stevexBt.executor, `run ${treeFile}`)
   assert.equal(res.kind, 'error')
   assert.match(res.text, /unknown command "fly"/)
@@ -130,15 +130,15 @@ test('/bt run：树不合法时返回逐条错误', () => {
 function loadPlugin(extra = {}) {
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stevex-bt-'))
   const fake = fakeContext()
-  apply(fake.ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), logger: quiet, ...extra })
+  apply(fake.ctx, { mod: new FakeMod(), runtimeDir, fastTreeDir: null, capsulesDir: path.join(runtimeDir, 'capsules'), historyDir: path.join(runtimeDir, 'history'), logger: quiet, ...extra })
   return { ...fake, runtimeDir }
 }
 
 const enter = (messages) => async () => ({ kind: 'enter', messages })
 
-test('装载：注册二十五个工具（含三个 fast_*、两个复盘工具、三个整理工具、四个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
+test('装载：注册二十八个工具（含三个 fast_*、三个复盘工具、两个任务历史查询工具、三个整理工具、四个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
   const { tools, sections, dispose } = loadPlugin()
-  assert.equal(tools.size, 25)
+  assert.equal(tools.size, 28)
   assert.ok(tools.get('bt_submit_tree').output.schema, '经过 defineTool')
   assert.deepEqual(sections.map((s) => s.name), ['stevex:identity', 'stevex:authoring'])
   assert.ok(sections.every((s) => s.interpolate === false))
@@ -153,7 +153,7 @@ test('P1 适配层：/bt task → followup → 回合绑定（守卫按请求放
 
   await emit('agent/created', { agent })
   assert.equal(agent.restrictions.length, 1, 'exclusiveTools：会话只看得到 steveX 的工具')
-  assert.equal(agent.restrictions[0].allow.length, 22, '普通会话看不到 fast_*')
+  assert.equal(agent.restrictions[0].allow.length, 25, '普通会话看不到 fast_*')
   assert.equal(agent.restrictions[0].allow.includes('todo_write'), false, '没注册的内置工具不进 allow（restrict 会拒绝未知名字）')
 
   const started = commands[0].handler({ rawInput: 'task 做一把木镐', agent })

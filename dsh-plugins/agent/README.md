@@ -17,7 +17,10 @@ steveX 的行为树执行器、胶囊库与 Compute 沙箱，以及让大模型�
 | **P3** | 快树进化：`player` 补着火 / 岩浆 / 细雪 / 最近受伤字段并一直轮询、没任务时的死亡与重生、快树事件流、批次与限流、快树反思会话、`fast_*` 工具、版本链与回滚、`/bt fast …` | **已实现**，单元测试通过；待游戏内验收（[P3实施细则.md](../../docs/P3实施细则.md) §11） |
 | **P4** | 任务复盘与胶囊：`reflect` 请求、`bt_inspect tree`（树版本链）、`capsule_save`（草稿转正、写死的值检查、同名 `replaces`）、`bt_reflect_done`、`/bt reflect` | **已实现**；第一轮游戏内验收通过（存胶囊、下一次任务引用，[P4实施细则.md](../../docs/P4实施细则.md) §10.3），其余见 [P4待测场景.md](../../docs/P4待测场景.md) |
 | **P5** | 事实库：`fact_search` / `fact_write`、`mc_source_search` / `mc_source_read`（只读源码基准）、`/bt fact` 与路由 `fact` handler、查了源码没写事实的提醒、`/bt facts` | **已实现**，单元测试通过；待 DSH 内验收（[P5实施细则.md](../../docs/P5实施细则.md) §11.2） |
+| **任务历史** | 成本画像（纯执行时间、mod 调用、按胶囊 / 节点分布）进复盘；`task_assess` 评估这次的树；`task_search` / `task_get` 查做过的同类任务，下一次复盘核对上一次记下的问题；胶囊的已知问题；`npm run history-gc` | **已实现**，单元测试通过；待游戏内验收（[任务历史与复盘评估设计方案.md](../../docs/任务历史与复盘评估设计方案.md) §6） |
+| **胶囊版本说明** | 替换同名胶囊时记下改动与"哪一版在什么情况下更好"（`versions.json`）；`capsule_search` / `capsule_get` 显示版本数、未执行、版本链；用到的任务复盘时核对（`task_assess.claims`）；整理清单计数；GC 保留旧版更好的版本 | **已实现**，单元测试通过；待游戏内验收（[胶囊版本说明设计方案.md](../../docs/胶囊版本说明设计方案.md) §6） |
 | **训练场** | `/bt train`：2×2 合成专项训练（每轮重置、随机配方发 1 份材料、发任务、按 `crafted` 统计判定、记回合与 token）；mod 侧 `arena/*`（不给 agent）与游戏内 `/arena`；`npm run training-report` | **已实现**；游戏内验收通过（[训练场设计方案.md](../../docs/训练场设计方案.md) §7） |
+| **工作台训练场** | `/bt train craft3x3`：场内放工作台、准星对准它，只抽 3×3 配方（按形状分组），记打开工作台的时刻与工作台是否被挖；报告按形状汇总、列出引用的旧胶囊 | **已实现**，单元测试通过；待游戏内验收（[工作台训练场设计方案.md](../../docs/工作台训练场设计方案.md) §6） |
 | **整理** | 胶囊库整理：使用统计（`stats.json`，`capsule_search` / `capsule_get` 展示）、`/bt curate` 整理回合（`capsule_retire` / `capsule_describe` / `bt_curate_done`）、`curate.everyTasks` 自动触发（默认 0）、离线 GC 与脚本 | **已实现**，单元测试通过；待 DSH 内验收（[胶囊库整理设计方案.md](../../docs/胶囊库整理设计方案.md) §10.3） |
 
 **没有人写的技能**：读世界的条件、合成 / 挖掘这类高层动作、配方解析，都由 agent 在训练中写成胶囊。
@@ -206,7 +209,7 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 
 | 工具（只在复盘回合） | 作用 |
 |---|---|
-| `capsule_save` | `{ requestId, folder, name, description, from?, signature?, body?, preconditions?, replaces?, keepLiterals? }` |
+| `capsule_save` | `{ requestId, folder, name, description, from?, signature?, body?, preconditions?, replaces?, keepLiterals?, versionNote? }`（带 `replaces` 时 `versionNote` 必填，见 [胶囊版本说明设计方案.md](../../docs/胶囊版本说明设计方案.md)） |
 | `bt_reflect_done` | `{ requestId, summary }` |
 
 - `/bt reflect`：对最近结束、任务对象还在内存里的任务手动复盘
@@ -236,10 +239,13 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 设计见 [训练场设计方案.md](../../docs/训练场设计方案.md)。插件是主控，mod 只提供场地原语；判定只看事实，不靠 agent 自己报告。
 
 1. **开始**：`/bt train craft2x2 [item=stick] [runs=20] [seed=7]`（要在会话里用）。一组在后台跑，同时只有一组；训练进行中 `/bt task` 拒绝。执行命令的会话只当控制台：**每轮新建一个会话**（模型跟随控制台会话当前的模型），本轮的规划、执行、复盘都在那里，轮与轮之间不共享上下文；控制台每轮收到开始、结束两条通知（不开回合）。用完的会话保留，记录里的 `sessionId` 对应它；控制台会话关掉后不再开新的一轮
-2. **每轮**：等会话空闲（复盘、整理结束）→ `arena/prepare`（关界面、清物品栏、传送进场、清场、回满状态、白天晴天、重置配方书、按种子随机槽位发 1 份材料）→ `startPlanning` 发任务（计时起点）→ 每秒查 `arena/status` → 任务结束、规划作废或超时（`training.timeoutSec`，默认 600）→ `arena/finish`（传送出场）→ 等复盘结束 → 记一行
+2. **每轮**：等会话空闲（复盘、整理结束）→ `arena/prepare`（关界面、清物品栏、传送进场、清场、回满状态、白天晴天、重置配方书、按种子随机槽位发 1 份材料）→ `startPlanning` 发任务（计时起点）→ 每秒查 `arena/status` → 任务结束、规划作废或超时（`training.timeoutSec` 默认 600，不算等 LLM 回合的时间；含 LLM 回合的总上限 `training.wallTimeoutSec` 默认 2400；超时时也取消在跑的回合）→ `arena/finish`（传送出场）→ 等复盘结束 → 记一行
 3. **判定**：`success`（任务 done 且目标 `crafted` 增加）、`false_success`（done 但没合成）、`crafted_but_failed`、`failed`、`timeout`、`aborted`。合成成功不打断 agent，只记时刻
 4. **记录**：`runtime/training/<场地>.jsonl`（不进 git）：本轮会话 `sessionId`、目标、配方、材料与槽位、种子、结果、合成 / 任务用时、规划次数、树版本、节点调用次数、用到的胶囊、回合数与 token（DSH `deriveTurnTokenUsage`，算不出记 null）、有没有用 `chat/send`
 5. **mod 侧**：`arena/build | prepare | status | finish` 只给训练器用，`raw_commands.js` 不登记给 agent；需要单人世界。游戏内 `/arena <场地>` 不要求作弊权限，只传送到场外平台，训练进行中拒绝。世界要**关闭作弊**，agent 的 `/give` 才会失败
 
-- 脚本：`npm run training-report -- [场地] [--last N] [--batch <批次>]`
-- 配置：`training.timeoutSec`（600）、`training.pollMs`（1000）、`training.arenas.craft2x2.{origin, mode: named|hidden, exclude}`
+6. **工作台场地 craft3x3**（[工作台训练场设计方案.md](../../docs/工作台训练场设计方案.md)）：`prepare` 在场内正前方补回工作台、把准星对准它（服务器射线自检 `aimOk`，不为真则本轮 `aborted` 并停止整组）；只抽放不进 2×2 的配方，先等概率抽形状再抽配方；超过堆叠上限的材料（如牛奶桶）由 mod 按 seed 拆到空槽；记录多 `shape`、`openedMs`（第一次打开工作台）、`stationIntact`
+7. **多份材料、指定产物个数**（[训练场设计方案.md](../../docs/训练场设计方案.md) T14）：`n=` 发几份材料、`m=` 要合成几次，写 `k` 或 `a-b`（1–64）。文案写产物个数（m × 单次产量）并要求"不要多做"；做多了判 `overshoot`（失败），恰好做够才算 `success`。**不写 n、m 时 n 在 1–64 里随机**、m 在 1…n−1 里随机；要复现旧轮次写 `n=1 m=1`（单次模式：原模板、原随机数序列、原判定）。n 还要满足"材料 + 全部做光的产物 + 合成剩余物 ≤ 36 格"，放不下就在能放下的范围里重抽，固定的 n 放不下直接报错。用到 `data/item-props.json`（堆叠上限与剩余物，随仓库提交；重新生成用 `npm run extract-item-props`，读 `1.21.11_src`）。记录多 `single`、`portions`、`crafts`、`yield`、`wanted`、`made`、`overshoot`、`reachedMs`（做够的时刻，精度同 `pollMs`）、`nMax`
+
+- 脚本：`npm run training-report -- [场地] [--by target|shape|portions] [--last N] [--batch <批次>]`；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"
+- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`

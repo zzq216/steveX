@@ -1,0 +1,3154 @@
+{
+ "source": "1.21.11_src",
+ "items": {
+  "minecraft:acacia_boat": {
+   "maxStack": 1
+  },
+  "minecraft:acacia_button": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:acacia_door": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_fence": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:acacia_log": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_planks": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_sign": {
+   "maxStack": 16
+  },
+  "minecraft:acacia_slab": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:acacia_wood": {
+   "maxStack": 64
+  },
+  "minecraft:activator_rail": {
+   "maxStack": 64
+  },
+  "minecraft:allium": {
+   "maxStack": 64
+  },
+  "minecraft:amethyst_block": {
+   "maxStack": 64
+  },
+  "minecraft:amethyst_shard": {
+   "maxStack": 64
+  },
+  "minecraft:andesite": {
+   "maxStack": 64
+  },
+  "minecraft:andesite_slab": {
+   "maxStack": 64
+  },
+  "minecraft:andesite_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:andesite_wall": {
+   "maxStack": 64
+  },
+  "minecraft:anvil": {
+   "maxStack": 64
+  },
+  "minecraft:apple": {
+   "maxStack": 64
+  },
+  "minecraft:armadillo_scute": {
+   "maxStack": 64
+  },
+  "minecraft:armor_stand": {
+   "maxStack": 16
+  },
+  "minecraft:arrow": {
+   "maxStack": 64
+  },
+  "minecraft:azure_bluet": {
+   "maxStack": 64
+  },
+  "minecraft:baked_potato": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_block": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_button": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_chest_raft": {
+   "maxStack": 1
+  },
+  "minecraft:bamboo_door": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_fence": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:bamboo_mosaic": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_mosaic_slab": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_mosaic_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_planks": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_raft": {
+   "maxStack": 1
+  },
+  "minecraft:bamboo_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_sign": {
+   "maxStack": 16
+  },
+  "minecraft:bamboo_slab": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:bamboo_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:barrel": {
+   "maxStack": 64
+  },
+  "minecraft:basalt": {
+   "maxStack": 64
+  },
+  "minecraft:beacon": {
+   "maxStack": 64
+  },
+  "minecraft:beehive": {
+   "maxStack": 64
+  },
+  "minecraft:beetroot": {
+   "maxStack": 64
+  },
+  "minecraft:beetroot_soup": {
+   "maxStack": 1
+  },
+  "minecraft:birch_boat": {
+   "maxStack": 1
+  },
+  "minecraft:birch_button": {
+   "maxStack": 64
+  },
+  "minecraft:birch_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:birch_door": {
+   "maxStack": 64
+  },
+  "minecraft:birch_fence": {
+   "maxStack": 64
+  },
+  "minecraft:birch_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:birch_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:birch_log": {
+   "maxStack": 64
+  },
+  "minecraft:birch_planks": {
+   "maxStack": 64
+  },
+  "minecraft:birch_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:birch_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:birch_sign": {
+   "maxStack": 16
+  },
+  "minecraft:birch_slab": {
+   "maxStack": 64
+  },
+  "minecraft:birch_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:birch_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:birch_wood": {
+   "maxStack": 64
+  },
+  "minecraft:black_banner": {
+   "maxStack": 16
+  },
+  "minecraft:black_bed": {
+   "maxStack": 1
+  },
+  "minecraft:black_candle": {
+   "maxStack": 64
+  },
+  "minecraft:black_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:black_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:black_dye": {
+   "maxStack": 64
+  },
+  "minecraft:black_harness": {
+   "maxStack": 1
+  },
+  "minecraft:black_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:black_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:black_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:black_wool": {
+   "maxStack": 64
+  },
+  "minecraft:blackstone": {
+   "maxStack": 64
+  },
+  "minecraft:blackstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:blackstone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:blackstone_wall": {
+   "maxStack": 64
+  },
+  "minecraft:blast_furnace": {
+   "maxStack": 64
+  },
+  "minecraft:blaze_powder": {
+   "maxStack": 64
+  },
+  "minecraft:blaze_rod": {
+   "maxStack": 64
+  },
+  "minecraft:blue_banner": {
+   "maxStack": 16
+  },
+  "minecraft:blue_bed": {
+   "maxStack": 1
+  },
+  "minecraft:blue_candle": {
+   "maxStack": 64
+  },
+  "minecraft:blue_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:blue_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:blue_dye": {
+   "maxStack": 64
+  },
+  "minecraft:blue_egg": {
+   "maxStack": 16
+  },
+  "minecraft:blue_harness": {
+   "maxStack": 1
+  },
+  "minecraft:blue_ice": {
+   "maxStack": 64
+  },
+  "minecraft:blue_orchid": {
+   "maxStack": 64
+  },
+  "minecraft:blue_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:blue_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:blue_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:blue_wool": {
+   "maxStack": 64
+  },
+  "minecraft:bolt_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:bone": {
+   "maxStack": 64
+  },
+  "minecraft:bone_block": {
+   "maxStack": 64
+  },
+  "minecraft:bone_meal": {
+   "maxStack": 64
+  },
+  "minecraft:book": {
+   "maxStack": 64
+  },
+  "minecraft:bookshelf": {
+   "maxStack": 64
+  },
+  "minecraft:bordure_indented_banner_pattern": {
+   "maxStack": 1
+  },
+  "minecraft:bow": {
+   "maxStack": 1
+  },
+  "minecraft:bowl": {
+   "maxStack": 64
+  },
+  "minecraft:bread": {
+   "maxStack": 64
+  },
+  "minecraft:breeze_rod": {
+   "maxStack": 64
+  },
+  "minecraft:brewing_stand": {
+   "maxStack": 64
+  },
+  "minecraft:brick": {
+   "maxStack": 64
+  },
+  "minecraft:brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:bricks": {
+   "maxStack": 64
+  },
+  "minecraft:brown_banner": {
+   "maxStack": 16
+  },
+  "minecraft:brown_bed": {
+   "maxStack": 1
+  },
+  "minecraft:brown_candle": {
+   "maxStack": 64
+  },
+  "minecraft:brown_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:brown_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:brown_dye": {
+   "maxStack": 64
+  },
+  "minecraft:brown_egg": {
+   "maxStack": 16
+  },
+  "minecraft:brown_harness": {
+   "maxStack": 1
+  },
+  "minecraft:brown_mushroom": {
+   "maxStack": 64
+  },
+  "minecraft:brown_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:brown_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:brown_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:brown_wool": {
+   "maxStack": 64
+  },
+  "minecraft:brush": {
+   "maxStack": 1
+  },
+  "minecraft:bucket": {
+   "maxStack": 16
+  },
+  "minecraft:bundle": {
+   "maxStack": 1
+  },
+  "minecraft:cactus_flower": {
+   "maxStack": 64
+  },
+  "minecraft:cake": {
+   "maxStack": 1
+  },
+  "minecraft:calibrated_sculk_sensor": {
+   "maxStack": 64
+  },
+  "minecraft:campfire": {
+   "maxStack": 64
+  },
+  "minecraft:candle": {
+   "maxStack": 64
+  },
+  "minecraft:carrot": {
+   "maxStack": 64
+  },
+  "minecraft:carrot_on_a_stick": {
+   "maxStack": 1
+  },
+  "minecraft:cartography_table": {
+   "maxStack": 64
+  },
+  "minecraft:carved_pumpkin": {
+   "maxStack": 64
+  },
+  "minecraft:cauldron": {
+   "maxStack": 64
+  },
+  "minecraft:charcoal": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_boat": {
+   "maxStack": 1
+  },
+  "minecraft:cherry_button": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:cherry_door": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_fence": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:cherry_log": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_planks": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_sign": {
+   "maxStack": 16
+  },
+  "minecraft:cherry_slab": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:cherry_wood": {
+   "maxStack": 64
+  },
+  "minecraft:chest": {
+   "maxStack": 64
+  },
+  "minecraft:chest_minecart": {
+   "maxStack": 1
+  },
+  "minecraft:chiseled_bookshelf": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_deepslate": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_nether_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_polished_blackstone": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_quartz_block": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_red_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_resin_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_stone_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_tuff": {
+   "maxStack": 64
+  },
+  "minecraft:chiseled_tuff_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:clay": {
+   "maxStack": 64
+  },
+  "minecraft:clay_ball": {
+   "maxStack": 64
+  },
+  "minecraft:clock": {
+   "maxStack": 64
+  },
+  "minecraft:closed_eyeblossom": {
+   "maxStack": 64
+  },
+  "minecraft:coal": {
+   "maxStack": 64
+  },
+  "minecraft:coal_block": {
+   "maxStack": 64
+  },
+  "minecraft:coarse_dirt": {
+   "maxStack": 64
+  },
+  "minecraft:coast_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:cobbled_deepslate": {
+   "maxStack": 64
+  },
+  "minecraft:cobbled_deepslate_slab": {
+   "maxStack": 64
+  },
+  "minecraft:cobbled_deepslate_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:cobbled_deepslate_wall": {
+   "maxStack": 64
+  },
+  "minecraft:cobblestone": {
+   "maxStack": 64
+  },
+  "minecraft:cobblestone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:cobblestone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:cobblestone_wall": {
+   "maxStack": 64
+  },
+  "minecraft:cocoa_beans": {
+   "maxStack": 64
+  },
+  "minecraft:comparator": {
+   "maxStack": 64
+  },
+  "minecraft:compass": {
+   "maxStack": 64
+  },
+  "minecraft:composter": {
+   "maxStack": 64
+  },
+  "minecraft:conduit": {
+   "maxStack": 64
+  },
+  "minecraft:cooked_rabbit": {
+   "maxStack": 64
+  },
+  "minecraft:cookie": {
+   "maxStack": 64
+  },
+  "minecraft:copper_axe": {
+   "maxStack": 64
+  },
+  "minecraft:copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:copper_block": {
+   "maxStack": 64
+  },
+  "minecraft:copper_boots": {
+   "maxStack": 1
+  },
+  "minecraft:copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:copper_chestplate": {
+   "maxStack": 1
+  },
+  "minecraft:copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:copper_helmet": {
+   "maxStack": 1
+  },
+  "minecraft:copper_hoe": {
+   "maxStack": 64
+  },
+  "minecraft:copper_ingot": {
+   "maxStack": 64
+  },
+  "minecraft:copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:copper_leggings": {
+   "maxStack": 1
+  },
+  "minecraft:copper_nugget": {
+   "maxStack": 64
+  },
+  "minecraft:copper_pickaxe": {
+   "maxStack": 1
+  },
+  "minecraft:copper_shovel": {
+   "maxStack": 64
+  },
+  "minecraft:copper_spear": {
+   "maxStack": 1
+  },
+  "minecraft:copper_sword": {
+   "maxStack": 1
+  },
+  "minecraft:copper_torch": {
+   "maxStack": 64
+  },
+  "minecraft:copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:cornflower": {
+   "maxStack": 64
+  },
+  "minecraft:crafter": {
+   "maxStack": 64
+  },
+  "minecraft:crafting_table": {
+   "maxStack": 64
+  },
+  "minecraft:creaking_heart": {
+   "maxStack": 64
+  },
+  "minecraft:creeper_banner_pattern": {
+   "maxStack": 1
+  },
+  "minecraft:creeper_head": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_button": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_door": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_fence": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:crimson_hyphae": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_planks": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_sign": {
+   "maxStack": 16
+  },
+  "minecraft:crimson_slab": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_stem": {
+   "maxStack": 64
+  },
+  "minecraft:crimson_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:crossbow": {
+   "maxStack": 1
+  },
+  "minecraft:crying_obsidian": {
+   "maxStack": 64
+  },
+  "minecraft:cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:cut_red_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:cut_red_sandstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:cut_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:cut_sandstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_banner": {
+   "maxStack": 16
+  },
+  "minecraft:cyan_bed": {
+   "maxStack": 1
+  },
+  "minecraft:cyan_candle": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_dye": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_harness": {
+   "maxStack": 1
+  },
+  "minecraft:cyan_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:cyan_wool": {
+   "maxStack": 64
+  },
+  "minecraft:dandelion": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_boat": {
+   "maxStack": 1
+  },
+  "minecraft:dark_oak_button": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:dark_oak_door": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_fence": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:dark_oak_log": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_planks": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_sign": {
+   "maxStack": 16
+  },
+  "minecraft:dark_oak_slab": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:dark_oak_wood": {
+   "maxStack": 64
+  },
+  "minecraft:dark_prismarine": {
+   "maxStack": 64
+  },
+  "minecraft:dark_prismarine_slab": {
+   "maxStack": 64
+  },
+  "minecraft:dark_prismarine_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:daylight_detector": {
+   "maxStack": 64
+  },
+  "minecraft:decorated_pot": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_tile_slab": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_tile_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_tile_wall": {
+   "maxStack": 64
+  },
+  "minecraft:deepslate_tiles": {
+   "maxStack": 64
+  },
+  "minecraft:detector_rail": {
+   "maxStack": 64
+  },
+  "minecraft:diamond": {
+   "maxStack": 64
+  },
+  "minecraft:diamond_axe": {
+   "maxStack": 64
+  },
+  "minecraft:diamond_block": {
+   "maxStack": 64
+  },
+  "minecraft:diamond_boots": {
+   "maxStack": 1
+  },
+  "minecraft:diamond_chestplate": {
+   "maxStack": 1
+  },
+  "minecraft:diamond_helmet": {
+   "maxStack": 1
+  },
+  "minecraft:diamond_hoe": {
+   "maxStack": 64
+  },
+  "minecraft:diamond_leggings": {
+   "maxStack": 1
+  },
+  "minecraft:diamond_pickaxe": {
+   "maxStack": 1
+  },
+  "minecraft:diamond_shovel": {
+   "maxStack": 64
+  },
+  "minecraft:diamond_spear": {
+   "maxStack": 1
+  },
+  "minecraft:diamond_sword": {
+   "maxStack": 1
+  },
+  "minecraft:diorite": {
+   "maxStack": 64
+  },
+  "minecraft:diorite_slab": {
+   "maxStack": 64
+  },
+  "minecraft:diorite_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:diorite_wall": {
+   "maxStack": 64
+  },
+  "minecraft:dirt": {
+   "maxStack": 64
+  },
+  "minecraft:disc_fragment_5": {
+   "maxStack": 64
+  },
+  "minecraft:dispenser": {
+   "maxStack": 64
+  },
+  "minecraft:dried_ghast": {
+   "maxStack": 64
+  },
+  "minecraft:dried_kelp": {
+   "maxStack": 64
+  },
+  "minecraft:dried_kelp_block": {
+   "maxStack": 64
+  },
+  "minecraft:dripstone_block": {
+   "maxStack": 64
+  },
+  "minecraft:dropper": {
+   "maxStack": 64
+  },
+  "minecraft:dune_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:echo_shard": {
+   "maxStack": 64
+  },
+  "minecraft:egg": {
+   "maxStack": 16
+  },
+  "minecraft:emerald": {
+   "maxStack": 64
+  },
+  "minecraft:emerald_block": {
+   "maxStack": 64
+  },
+  "minecraft:enchanted_golden_apple": {
+   "maxStack": 64
+  },
+  "minecraft:enchanting_table": {
+   "maxStack": 64
+  },
+  "minecraft:end_crystal": {
+   "maxStack": 64
+  },
+  "minecraft:end_rod": {
+   "maxStack": 64
+  },
+  "minecraft:end_stone": {
+   "maxStack": 64
+  },
+  "minecraft:end_stone_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:end_stone_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:end_stone_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:end_stone_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:ender_chest": {
+   "maxStack": 64
+  },
+  "minecraft:ender_eye": {
+   "maxStack": 64
+  },
+  "minecraft:ender_pearl": {
+   "maxStack": 16
+  },
+  "minecraft:exposed_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:exposed_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:eye_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:feather": {
+   "maxStack": 64
+  },
+  "minecraft:fermented_spider_eye": {
+   "maxStack": 64
+  },
+  "minecraft:field_masoned_banner_pattern": {
+   "maxStack": 1
+  },
+  "minecraft:fire_charge": {
+   "maxStack": 64
+  },
+  "minecraft:firework_rocket": {
+   "maxStack": 64
+  },
+  "minecraft:fishing_rod": {
+   "maxStack": 1
+  },
+  "minecraft:fletching_table": {
+   "maxStack": 64
+  },
+  "minecraft:flint": {
+   "maxStack": 64
+  },
+  "minecraft:flint_and_steel": {
+   "maxStack": 1
+  },
+  "minecraft:flow_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:flower_banner_pattern": {
+   "maxStack": 1
+  },
+  "minecraft:flower_pot": {
+   "maxStack": 64
+  },
+  "minecraft:furnace": {
+   "maxStack": 64
+  },
+  "minecraft:furnace_minecart": {
+   "maxStack": 1
+  },
+  "minecraft:ghast_tear": {
+   "maxStack": 64
+  },
+  "minecraft:glass": {
+   "maxStack": 64
+  },
+  "minecraft:glass_bottle": {
+   "maxStack": 64
+  },
+  "minecraft:glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:glistering_melon_slice": {
+   "maxStack": 64
+  },
+  "minecraft:glow_ink_sac": {
+   "maxStack": 64
+  },
+  "minecraft:glow_item_frame": {
+   "maxStack": 64
+  },
+  "minecraft:glowstone": {
+   "maxStack": 64
+  },
+  "minecraft:glowstone_dust": {
+   "maxStack": 64
+  },
+  "minecraft:gold_block": {
+   "maxStack": 64
+  },
+  "minecraft:gold_ingot": {
+   "maxStack": 64
+  },
+  "minecraft:gold_nugget": {
+   "maxStack": 64
+  },
+  "minecraft:golden_apple": {
+   "maxStack": 64
+  },
+  "minecraft:golden_axe": {
+   "maxStack": 64
+  },
+  "minecraft:golden_boots": {
+   "maxStack": 1
+  },
+  "minecraft:golden_carrot": {
+   "maxStack": 64
+  },
+  "minecraft:golden_chestplate": {
+   "maxStack": 1
+  },
+  "minecraft:golden_helmet": {
+   "maxStack": 1
+  },
+  "minecraft:golden_hoe": {
+   "maxStack": 64
+  },
+  "minecraft:golden_leggings": {
+   "maxStack": 1
+  },
+  "minecraft:golden_pickaxe": {
+   "maxStack": 1
+  },
+  "minecraft:golden_shovel": {
+   "maxStack": 64
+  },
+  "minecraft:golden_spear": {
+   "maxStack": 1
+  },
+  "minecraft:golden_sword": {
+   "maxStack": 1
+  },
+  "minecraft:granite": {
+   "maxStack": 64
+  },
+  "minecraft:granite_slab": {
+   "maxStack": 64
+  },
+  "minecraft:granite_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:granite_wall": {
+   "maxStack": 64
+  },
+  "minecraft:gravel": {
+   "maxStack": 64
+  },
+  "minecraft:gray_banner": {
+   "maxStack": 16
+  },
+  "minecraft:gray_bed": {
+   "maxStack": 1
+  },
+  "minecraft:gray_candle": {
+   "maxStack": 64
+  },
+  "minecraft:gray_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:gray_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:gray_dye": {
+   "maxStack": 64
+  },
+  "minecraft:gray_harness": {
+   "maxStack": 1
+  },
+  "minecraft:gray_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:gray_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:gray_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:gray_wool": {
+   "maxStack": 64
+  },
+  "minecraft:green_banner": {
+   "maxStack": 16
+  },
+  "minecraft:green_bed": {
+   "maxStack": 1
+  },
+  "minecraft:green_candle": {
+   "maxStack": 64
+  },
+  "minecraft:green_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:green_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:green_dye": {
+   "maxStack": 64
+  },
+  "minecraft:green_harness": {
+   "maxStack": 1
+  },
+  "minecraft:green_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:green_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:green_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:green_wool": {
+   "maxStack": 64
+  },
+  "minecraft:grindstone": {
+   "maxStack": 64
+  },
+  "minecraft:gunpowder": {
+   "maxStack": 64
+  },
+  "minecraft:hay_block": {
+   "maxStack": 64
+  },
+  "minecraft:heart_of_the_sea": {
+   "maxStack": 64
+  },
+  "minecraft:heavy_core": {
+   "maxStack": 64
+  },
+  "minecraft:heavy_weighted_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:honey_block": {
+   "maxStack": 64
+  },
+  "minecraft:honey_bottle": {
+   "maxStack": 16,
+   "remainder": "minecraft:glass_bottle"
+  },
+  "minecraft:honeycomb": {
+   "maxStack": 64
+  },
+  "minecraft:honeycomb_block": {
+   "maxStack": 64
+  },
+  "minecraft:hopper": {
+   "maxStack": 64
+  },
+  "minecraft:hopper_minecart": {
+   "maxStack": 1
+  },
+  "minecraft:host_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:ice": {
+   "maxStack": 64
+  },
+  "minecraft:ink_sac": {
+   "maxStack": 64
+  },
+  "minecraft:iron_axe": {
+   "maxStack": 64
+  },
+  "minecraft:iron_bars": {
+   "maxStack": 64
+  },
+  "minecraft:iron_block": {
+   "maxStack": 64
+  },
+  "minecraft:iron_boots": {
+   "maxStack": 1
+  },
+  "minecraft:iron_chain": {
+   "maxStack": 64
+  },
+  "minecraft:iron_chestplate": {
+   "maxStack": 1
+  },
+  "minecraft:iron_door": {
+   "maxStack": 64
+  },
+  "minecraft:iron_helmet": {
+   "maxStack": 1
+  },
+  "minecraft:iron_hoe": {
+   "maxStack": 64
+  },
+  "minecraft:iron_ingot": {
+   "maxStack": 64
+  },
+  "minecraft:iron_leggings": {
+   "maxStack": 1
+  },
+  "minecraft:iron_nugget": {
+   "maxStack": 64
+  },
+  "minecraft:iron_pickaxe": {
+   "maxStack": 1
+  },
+  "minecraft:iron_shovel": {
+   "maxStack": 64
+  },
+  "minecraft:iron_spear": {
+   "maxStack": 1
+  },
+  "minecraft:iron_sword": {
+   "maxStack": 1
+  },
+  "minecraft:iron_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:item_frame": {
+   "maxStack": 64
+  },
+  "minecraft:jack_o_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:jukebox": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_boat": {
+   "maxStack": 1
+  },
+  "minecraft:jungle_button": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:jungle_door": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_fence": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:jungle_log": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_planks": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_sign": {
+   "maxStack": 16
+  },
+  "minecraft:jungle_slab": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:jungle_wood": {
+   "maxStack": 64
+  },
+  "minecraft:ladder": {
+   "maxStack": 64
+  },
+  "minecraft:lantern": {
+   "maxStack": 64
+  },
+  "minecraft:lapis_block": {
+   "maxStack": 64
+  },
+  "minecraft:lapis_lazuli": {
+   "maxStack": 64
+  },
+  "minecraft:lead": {
+   "maxStack": 64
+  },
+  "minecraft:leather": {
+   "maxStack": 64
+  },
+  "minecraft:leather_boots": {
+   "maxStack": 1
+  },
+  "minecraft:leather_chestplate": {
+   "maxStack": 1
+  },
+  "minecraft:leather_helmet": {
+   "maxStack": 1
+  },
+  "minecraft:leather_horse_armor": {
+   "maxStack": 1
+  },
+  "minecraft:leather_leggings": {
+   "maxStack": 1
+  },
+  "minecraft:lectern": {
+   "maxStack": 64
+  },
+  "minecraft:lever": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_banner": {
+   "maxStack": 16
+  },
+  "minecraft:light_blue_bed": {
+   "maxStack": 1
+  },
+  "minecraft:light_blue_candle": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_dye": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_harness": {
+   "maxStack": 1
+  },
+  "minecraft:light_blue_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:light_blue_wool": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_banner": {
+   "maxStack": 16
+  },
+  "minecraft:light_gray_bed": {
+   "maxStack": 1
+  },
+  "minecraft:light_gray_candle": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_dye": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_harness": {
+   "maxStack": 1
+  },
+  "minecraft:light_gray_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:light_gray_wool": {
+   "maxStack": 64
+  },
+  "minecraft:light_weighted_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:lilac": {
+   "maxStack": 64
+  },
+  "minecraft:lily_of_the_valley": {
+   "maxStack": 64
+  },
+  "minecraft:lime_banner": {
+   "maxStack": 16
+  },
+  "minecraft:lime_bed": {
+   "maxStack": 1
+  },
+  "minecraft:lime_candle": {
+   "maxStack": 64
+  },
+  "minecraft:lime_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:lime_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:lime_dye": {
+   "maxStack": 64
+  },
+  "minecraft:lime_harness": {
+   "maxStack": 1
+  },
+  "minecraft:lime_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:lime_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:lime_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:lime_wool": {
+   "maxStack": 64
+  },
+  "minecraft:lodestone": {
+   "maxStack": 64
+  },
+  "minecraft:loom": {
+   "maxStack": 64
+  },
+  "minecraft:mace": {
+   "maxStack": 1
+  },
+  "minecraft:magenta_banner": {
+   "maxStack": 16
+  },
+  "minecraft:magenta_bed": {
+   "maxStack": 1
+  },
+  "minecraft:magenta_candle": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_dye": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_harness": {
+   "maxStack": 1
+  },
+  "minecraft:magenta_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:magenta_wool": {
+   "maxStack": 64
+  },
+  "minecraft:magma_block": {
+   "maxStack": 64
+  },
+  "minecraft:magma_cream": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_boat": {
+   "maxStack": 1
+  },
+  "minecraft:mangrove_button": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:mangrove_door": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_fence": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:mangrove_log": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_planks": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_roots": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_sign": {
+   "maxStack": 16
+  },
+  "minecraft:mangrove_slab": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:mangrove_wood": {
+   "maxStack": 64
+  },
+  "minecraft:map": {
+   "maxStack": 64
+  },
+  "minecraft:melon": {
+   "maxStack": 64
+  },
+  "minecraft:melon_seeds": {
+   "maxStack": 64
+  },
+  "minecraft:melon_slice": {
+   "maxStack": 64
+  },
+  "minecraft:milk_bucket": {
+   "maxStack": 1,
+   "remainder": "minecraft:bucket"
+  },
+  "minecraft:minecart": {
+   "maxStack": 1
+  },
+  "minecraft:mojang_banner_pattern": {
+   "maxStack": 1
+  },
+  "minecraft:moss_block": {
+   "maxStack": 64
+  },
+  "minecraft:moss_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_cobblestone": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_cobblestone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_cobblestone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_cobblestone_wall": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_stone_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_stone_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_stone_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:mossy_stone_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:mud": {
+   "maxStack": 64
+  },
+  "minecraft:mud_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:mud_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:mud_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:mud_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:muddy_mangrove_roots": {
+   "maxStack": 64
+  },
+  "minecraft:mushroom_stew": {
+   "maxStack": 1
+  },
+  "minecraft:music_disc_5": {
+   "maxStack": 1
+  },
+  "minecraft:nautilus_shell": {
+   "maxStack": 64
+  },
+  "minecraft:nether_brick": {
+   "maxStack": 64
+  },
+  "minecraft:nether_brick_fence": {
+   "maxStack": 64
+  },
+  "minecraft:nether_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:nether_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:nether_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:nether_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:nether_star": {
+   "maxStack": 64
+  },
+  "minecraft:nether_wart": {
+   "maxStack": 64
+  },
+  "minecraft:nether_wart_block": {
+   "maxStack": 64
+  },
+  "minecraft:netherite_block": {
+   "maxStack": 64
+  },
+  "minecraft:netherite_ingot": {
+   "maxStack": 64
+  },
+  "minecraft:netherite_scrap": {
+   "maxStack": 64
+  },
+  "minecraft:netherite_upgrade_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:netherrack": {
+   "maxStack": 64
+  },
+  "minecraft:note_block": {
+   "maxStack": 64
+  },
+  "minecraft:oak_boat": {
+   "maxStack": 1
+  },
+  "minecraft:oak_button": {
+   "maxStack": 64
+  },
+  "minecraft:oak_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:oak_door": {
+   "maxStack": 64
+  },
+  "minecraft:oak_fence": {
+   "maxStack": 64
+  },
+  "minecraft:oak_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:oak_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:oak_log": {
+   "maxStack": 64
+  },
+  "minecraft:oak_planks": {
+   "maxStack": 64
+  },
+  "minecraft:oak_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:oak_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:oak_sign": {
+   "maxStack": 16
+  },
+  "minecraft:oak_slab": {
+   "maxStack": 64
+  },
+  "minecraft:oak_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:oak_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:oak_wood": {
+   "maxStack": 64
+  },
+  "minecraft:observer": {
+   "maxStack": 64
+  },
+  "minecraft:obsidian": {
+   "maxStack": 64
+  },
+  "minecraft:open_eyeblossom": {
+   "maxStack": 64
+  },
+  "minecraft:orange_banner": {
+   "maxStack": 16
+  },
+  "minecraft:orange_bed": {
+   "maxStack": 1
+  },
+  "minecraft:orange_candle": {
+   "maxStack": 64
+  },
+  "minecraft:orange_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:orange_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:orange_dye": {
+   "maxStack": 64
+  },
+  "minecraft:orange_harness": {
+   "maxStack": 1
+  },
+  "minecraft:orange_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:orange_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:orange_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:orange_tulip": {
+   "maxStack": 64
+  },
+  "minecraft:orange_wool": {
+   "maxStack": 64
+  },
+  "minecraft:oxeye_daisy": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:oxidized_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:packed_ice": {
+   "maxStack": 64
+  },
+  "minecraft:packed_mud": {
+   "maxStack": 64
+  },
+  "minecraft:painting": {
+   "maxStack": 64
+  },
+  "minecraft:pale_moss_block": {
+   "maxStack": 64
+  },
+  "minecraft:pale_moss_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_boat": {
+   "maxStack": 1
+  },
+  "minecraft:pale_oak_button": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:pale_oak_door": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_fence": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:pale_oak_log": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_planks": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_sign": {
+   "maxStack": 16
+  },
+  "minecraft:pale_oak_slab": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:pale_oak_wood": {
+   "maxStack": 64
+  },
+  "minecraft:paper": {
+   "maxStack": 64
+  },
+  "minecraft:peony": {
+   "maxStack": 64
+  },
+  "minecraft:pink_banner": {
+   "maxStack": 16
+  },
+  "minecraft:pink_bed": {
+   "maxStack": 1
+  },
+  "minecraft:pink_candle": {
+   "maxStack": 64
+  },
+  "minecraft:pink_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:pink_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:pink_dye": {
+   "maxStack": 64
+  },
+  "minecraft:pink_harness": {
+   "maxStack": 1
+  },
+  "minecraft:pink_petals": {
+   "maxStack": 64
+  },
+  "minecraft:pink_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:pink_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:pink_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:pink_tulip": {
+   "maxStack": 64
+  },
+  "minecraft:pink_wool": {
+   "maxStack": 64
+  },
+  "minecraft:piston": {
+   "maxStack": 64
+  },
+  "minecraft:pitcher_plant": {
+   "maxStack": 64
+  },
+  "minecraft:pointed_dripstone": {
+   "maxStack": 64
+  },
+  "minecraft:polished_andesite": {
+   "maxStack": 64
+  },
+  "minecraft:polished_andesite_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_andesite_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_basalt": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_button": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_blackstone_wall": {
+   "maxStack": 64
+  },
+  "minecraft:polished_deepslate": {
+   "maxStack": 64
+  },
+  "minecraft:polished_deepslate_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_deepslate_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_deepslate_wall": {
+   "maxStack": 64
+  },
+  "minecraft:polished_diorite": {
+   "maxStack": 64
+  },
+  "minecraft:polished_diorite_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_diorite_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_granite": {
+   "maxStack": 64
+  },
+  "minecraft:polished_granite_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_granite_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_tuff": {
+   "maxStack": 64
+  },
+  "minecraft:polished_tuff_slab": {
+   "maxStack": 64
+  },
+  "minecraft:polished_tuff_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:polished_tuff_wall": {
+   "maxStack": 64
+  },
+  "minecraft:popped_chorus_fruit": {
+   "maxStack": 64
+  },
+  "minecraft:poppy": {
+   "maxStack": 64
+  },
+  "minecraft:powered_rail": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_crystals": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_shard": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_slab": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:prismarine_wall": {
+   "maxStack": 64
+  },
+  "minecraft:pumpkin": {
+   "maxStack": 64
+  },
+  "minecraft:pumpkin_pie": {
+   "maxStack": 64
+  },
+  "minecraft:pumpkin_seeds": {
+   "maxStack": 64
+  },
+  "minecraft:purple_banner": {
+   "maxStack": 16
+  },
+  "minecraft:purple_bed": {
+   "maxStack": 1
+  },
+  "minecraft:purple_candle": {
+   "maxStack": 64
+  },
+  "minecraft:purple_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:purple_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:purple_dye": {
+   "maxStack": 64
+  },
+  "minecraft:purple_harness": {
+   "maxStack": 1
+  },
+  "minecraft:purple_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:purple_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:purple_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:purple_wool": {
+   "maxStack": 64
+  },
+  "minecraft:purpur_block": {
+   "maxStack": 64
+  },
+  "minecraft:purpur_pillar": {
+   "maxStack": 64
+  },
+  "minecraft:purpur_slab": {
+   "maxStack": 64
+  },
+  "minecraft:purpur_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:quartz": {
+   "maxStack": 64
+  },
+  "minecraft:quartz_block": {
+   "maxStack": 64
+  },
+  "minecraft:quartz_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:quartz_pillar": {
+   "maxStack": 64
+  },
+  "minecraft:quartz_slab": {
+   "maxStack": 64
+  },
+  "minecraft:quartz_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:rabbit_hide": {
+   "maxStack": 64
+  },
+  "minecraft:rabbit_stew": {
+   "maxStack": 1
+  },
+  "minecraft:rail": {
+   "maxStack": 64
+  },
+  "minecraft:raiser_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:raw_copper": {
+   "maxStack": 64
+  },
+  "minecraft:raw_copper_block": {
+   "maxStack": 64
+  },
+  "minecraft:raw_gold": {
+   "maxStack": 64
+  },
+  "minecraft:raw_gold_block": {
+   "maxStack": 64
+  },
+  "minecraft:raw_iron": {
+   "maxStack": 64
+  },
+  "minecraft:raw_iron_block": {
+   "maxStack": 64
+  },
+  "minecraft:recovery_compass": {
+   "maxStack": 64
+  },
+  "minecraft:red_banner": {
+   "maxStack": 16
+  },
+  "minecraft:red_bed": {
+   "maxStack": 1
+  },
+  "minecraft:red_candle": {
+   "maxStack": 64
+  },
+  "minecraft:red_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:red_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:red_dye": {
+   "maxStack": 64
+  },
+  "minecraft:red_harness": {
+   "maxStack": 1
+  },
+  "minecraft:red_mushroom": {
+   "maxStack": 64
+  },
+  "minecraft:red_nether_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:red_nether_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:red_nether_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:red_nether_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:red_sand": {
+   "maxStack": 64
+  },
+  "minecraft:red_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:red_sandstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:red_sandstone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:red_sandstone_wall": {
+   "maxStack": 64
+  },
+  "minecraft:red_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:red_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:red_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:red_tulip": {
+   "maxStack": 64
+  },
+  "minecraft:red_wool": {
+   "maxStack": 64
+  },
+  "minecraft:redstone": {
+   "maxStack": 64
+  },
+  "minecraft:redstone_block": {
+   "maxStack": 64
+  },
+  "minecraft:redstone_lamp": {
+   "maxStack": 64
+  },
+  "minecraft:redstone_torch": {
+   "maxStack": 64
+  },
+  "minecraft:repeater": {
+   "maxStack": 64
+  },
+  "minecraft:resin_block": {
+   "maxStack": 64
+  },
+  "minecraft:resin_brick": {
+   "maxStack": 64
+  },
+  "minecraft:resin_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:resin_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:resin_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:resin_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:resin_clump": {
+   "maxStack": 64
+  },
+  "minecraft:respawn_anchor": {
+   "maxStack": 64
+  },
+  "minecraft:rib_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:rose_bush": {
+   "maxStack": 64
+  },
+  "minecraft:saddle": {
+   "maxStack": 1
+  },
+  "minecraft:sand": {
+   "maxStack": 64
+  },
+  "minecraft:sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:sandstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:sandstone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:sandstone_wall": {
+   "maxStack": 64
+  },
+  "minecraft:scaffolding": {
+   "maxStack": 64
+  },
+  "minecraft:sculk_sensor": {
+   "maxStack": 64
+  },
+  "minecraft:sea_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:sentry_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:shaper_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:shears": {
+   "maxStack": 1
+  },
+  "minecraft:shield": {
+   "maxStack": 1
+  },
+  "minecraft:shulker_box": {
+   "maxStack": 1
+  },
+  "minecraft:shulker_shell": {
+   "maxStack": 64
+  },
+  "minecraft:silence_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:skull_banner_pattern": {
+   "maxStack": 1
+  },
+  "minecraft:slime_ball": {
+   "maxStack": 64
+  },
+  "minecraft:slime_block": {
+   "maxStack": 64
+  },
+  "minecraft:smithing_table": {
+   "maxStack": 64
+  },
+  "minecraft:smoker": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_quartz": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_quartz_slab": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_quartz_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_red_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_red_sandstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_red_sandstone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_sandstone": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_sandstone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_sandstone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_stone": {
+   "maxStack": 64
+  },
+  "minecraft:smooth_stone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:snout_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:snow": {
+   "maxStack": 64
+  },
+  "minecraft:snow_block": {
+   "maxStack": 64
+  },
+  "minecraft:snowball": {
+   "maxStack": 16
+  },
+  "minecraft:soul_campfire": {
+   "maxStack": 64
+  },
+  "minecraft:soul_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:soul_sand": {
+   "maxStack": 64
+  },
+  "minecraft:soul_soil": {
+   "maxStack": 64
+  },
+  "minecraft:soul_torch": {
+   "maxStack": 64
+  },
+  "minecraft:spectral_arrow": {
+   "maxStack": 64
+  },
+  "minecraft:spider_eye": {
+   "maxStack": 64
+  },
+  "minecraft:spire_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_boat": {
+   "maxStack": 1
+  },
+  "minecraft:spruce_button": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_chest_boat": {
+   "maxStack": 1
+  },
+  "minecraft:spruce_door": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_fence": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:spruce_log": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_planks": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_sign": {
+   "maxStack": 16
+  },
+  "minecraft:spruce_slab": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:spruce_wood": {
+   "maxStack": 64
+  },
+  "minecraft:spyglass": {
+   "maxStack": 1
+  },
+  "minecraft:stick": {
+   "maxStack": 64
+  },
+  "minecraft:sticky_piston": {
+   "maxStack": 64
+  },
+  "minecraft:stone": {
+   "maxStack": 64
+  },
+  "minecraft:stone_axe": {
+   "maxStack": 64
+  },
+  "minecraft:stone_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:stone_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:stone_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:stone_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:stone_button": {
+   "maxStack": 64
+  },
+  "minecraft:stone_hoe": {
+   "maxStack": 64
+  },
+  "minecraft:stone_pickaxe": {
+   "maxStack": 1
+  },
+  "minecraft:stone_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:stone_shovel": {
+   "maxStack": 64
+  },
+  "minecraft:stone_slab": {
+   "maxStack": 64
+  },
+  "minecraft:stone_spear": {
+   "maxStack": 1
+  },
+  "minecraft:stone_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:stone_sword": {
+   "maxStack": 1
+  },
+  "minecraft:stonecutter": {
+   "maxStack": 64
+  },
+  "minecraft:string": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_acacia_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_acacia_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_bamboo_block": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_birch_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_birch_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_cherry_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_cherry_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_crimson_hyphae": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_crimson_stem": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_dark_oak_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_dark_oak_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_jungle_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_jungle_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_mangrove_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_mangrove_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_oak_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_oak_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_pale_oak_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_pale_oak_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_spruce_log": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_spruce_wood": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_warped_hyphae": {
+   "maxStack": 64
+  },
+  "minecraft:stripped_warped_stem": {
+   "maxStack": 64
+  },
+  "minecraft:sugar": {
+   "maxStack": 64
+  },
+  "minecraft:sugar_cane": {
+   "maxStack": 64
+  },
+  "minecraft:sunflower": {
+   "maxStack": 64
+  },
+  "minecraft:suspicious_stew": {
+   "maxStack": 1
+  },
+  "minecraft:target": {
+   "maxStack": 64
+  },
+  "minecraft:terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:tide_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:tinted_glass": {
+   "maxStack": 64
+  },
+  "minecraft:tnt": {
+   "maxStack": 64
+  },
+  "minecraft:tnt_minecart": {
+   "maxStack": 1
+  },
+  "minecraft:torch": {
+   "maxStack": 64
+  },
+  "minecraft:torchflower": {
+   "maxStack": 64
+  },
+  "minecraft:trapped_chest": {
+   "maxStack": 64
+  },
+  "minecraft:tripwire_hook": {
+   "maxStack": 64
+  },
+  "minecraft:tuff": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_brick_slab": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_brick_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_brick_wall": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_bricks": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_slab": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:tuff_wall": {
+   "maxStack": 64
+  },
+  "minecraft:turtle_helmet": {
+   "maxStack": 1
+  },
+  "minecraft:turtle_scute": {
+   "maxStack": 64
+  },
+  "minecraft:vex_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:vine": {
+   "maxStack": 64
+  },
+  "minecraft:ward_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:warped_button": {
+   "maxStack": 64
+  },
+  "minecraft:warped_door": {
+   "maxStack": 64
+  },
+  "minecraft:warped_fence": {
+   "maxStack": 64
+  },
+  "minecraft:warped_fence_gate": {
+   "maxStack": 64
+  },
+  "minecraft:warped_fungus": {
+   "maxStack": 64
+  },
+  "minecraft:warped_fungus_on_a_stick": {
+   "maxStack": 1
+  },
+  "minecraft:warped_hanging_sign": {
+   "maxStack": 16
+  },
+  "minecraft:warped_hyphae": {
+   "maxStack": 64
+  },
+  "minecraft:warped_planks": {
+   "maxStack": 64
+  },
+  "minecraft:warped_pressure_plate": {
+   "maxStack": 64
+  },
+  "minecraft:warped_shelf": {
+   "maxStack": 64
+  },
+  "minecraft:warped_sign": {
+   "maxStack": 16
+  },
+  "minecraft:warped_slab": {
+   "maxStack": 64
+  },
+  "minecraft:warped_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:warped_stem": {
+   "maxStack": 64
+  },
+  "minecraft:warped_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_block": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_exposed_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_oxidized_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:waxed_weathered_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:wayfinder_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_chiseled_copper": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_bars": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_bulb": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_chain": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_chest": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_door": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_golem_statue": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_grate": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_lantern": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_copper_trapdoor": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_cut_copper": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_cut_copper_slab": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_cut_copper_stairs": {
+   "maxStack": 64
+  },
+  "minecraft:weathered_lightning_rod": {
+   "maxStack": 64
+  },
+  "minecraft:wheat": {
+   "maxStack": 64
+  },
+  "minecraft:white_banner": {
+   "maxStack": 16
+  },
+  "minecraft:white_bed": {
+   "maxStack": 1
+  },
+  "minecraft:white_candle": {
+   "maxStack": 64
+  },
+  "minecraft:white_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:white_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:white_dye": {
+   "maxStack": 64
+  },
+  "minecraft:white_harness": {
+   "maxStack": 1
+  },
+  "minecraft:white_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:white_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:white_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:white_tulip": {
+   "maxStack": 64
+  },
+  "minecraft:white_wool": {
+   "maxStack": 64
+  },
+  "minecraft:wild_armor_trim_smithing_template": {
+   "maxStack": 64
+  },
+  "minecraft:wildflowers": {
+   "maxStack": 64
+  },
+  "minecraft:wind_charge": {
+   "maxStack": 64
+  },
+  "minecraft:wither_rose": {
+   "maxStack": 64
+  },
+  "minecraft:wither_skeleton_skull": {
+   "maxStack": 64
+  },
+  "minecraft:wolf_armor": {
+   "maxStack": 1
+  },
+  "minecraft:wooden_axe": {
+   "maxStack": 64
+  },
+  "minecraft:wooden_hoe": {
+   "maxStack": 64
+  },
+  "minecraft:wooden_pickaxe": {
+   "maxStack": 1
+  },
+  "minecraft:wooden_shovel": {
+   "maxStack": 64
+  },
+  "minecraft:wooden_spear": {
+   "maxStack": 1
+  },
+  "minecraft:wooden_sword": {
+   "maxStack": 1
+  },
+  "minecraft:writable_book": {
+   "maxStack": 1
+  },
+  "minecraft:yellow_banner": {
+   "maxStack": 16
+  },
+  "minecraft:yellow_bed": {
+   "maxStack": 1
+  },
+  "minecraft:yellow_candle": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_carpet": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_concrete_powder": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_dye": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_harness": {
+   "maxStack": 1
+  },
+  "minecraft:yellow_stained_glass": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_stained_glass_pane": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_terracotta": {
+   "maxStack": 64
+  },
+  "minecraft:yellow_wool": {
+   "maxStack": 64
+  }
+ }
+}

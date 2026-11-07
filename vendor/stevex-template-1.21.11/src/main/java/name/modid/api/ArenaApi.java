@@ -27,17 +27,20 @@ public class ArenaApi {
         handlers.put("arena/build", params -> {
             String arena = arena(params);
             BlockPos origin = origin(params, arena);
-            return onServer(15_000, server -> Map.of("arena", arena, "placed", ArenaManager.build(server, arena, origin)));
+            String station = station(params, arena);
+            return onServer(15_000, server -> Map.of("arena", arena, "placed", ArenaManager.build(server, arena, origin, station)));
         });
         handlers.put("arena/prepare", params -> {
             String arena = arena(params);
             BlockPos origin = origin(params, arena);
+            String station = station(params, arena);
             List<ArenaManager.Give> items = gives(params.get("items"));
             List<String> watch = strings(params.get("watch"), "watch");
             if (watch.isEmpty()) throw new IllegalArgumentException("watch must list at least one item id");
             long dayTime = AgentWebSocketServer.num(params, "dayTime", 1000);
+            long seed = params.get("seed") instanceof Number n ? n.longValue() : 0L;
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, items, watch, dayTime));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, seed, watch, dayTime));
         });
         handlers.put("arena/status", params -> onServer(5_000, ArenaManager::status));
         handlers.put("arena/finish", params -> {
@@ -86,9 +89,9 @@ public class ArenaApi {
     private static BlockPos origin(Map<String, Object> params, String arena) {
         Object v = params.get("origin");
         if (v == null) {
-            BlockPos known = ArenaManager.known().get(arena);
+            ArenaManager.Site known = ArenaManager.known().get(arena);
             if (known == null) throw new IllegalArgumentException("unknown arena " + arena + ": origin [x, y, z] required");
-            return known;
+            return known.origin();
         }
         if (!(v instanceof List<?> list) || list.size() != 3 || !list.stream().allMatch(n -> n instanceof Number)) {
             throw new IllegalArgumentException("origin must be [x, y, z]");
@@ -96,6 +99,18 @@ public class ArenaApi {
         int y = ((Number) list.get(1)).intValue();
         if (y < -60 || y > 300) throw new IllegalArgumentException("origin y out of range [-60, 300]: " + y);
         return new BlockPos(((Number) list.get(0)).intValue(), y, ((Number) list.get(2)).intValue());
+    }
+
+    /** station 缺省时用已登记场地的工作站（未登记 = 没有）；显式 null = 没有工作站。 */
+    private static String station(Map<String, Object> params, String arena) {
+        if (!params.containsKey("station")) {
+            ArenaManager.Site known = ArenaManager.known().get(arena);
+            return known != null ? known.station() : null;
+        }
+        Object v = params.get("station");
+        if (v != null && !(v instanceof String)) throw new IllegalArgumentException("station must be a string or null");
+        ArenaManager.station((String) v); // 未知名字在这里就报错
+        return (String) v;
     }
 
     private static List<ArenaManager.Give> gives(Object v) {

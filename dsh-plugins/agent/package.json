@@ -23,11 +23,14 @@
   "scripts": {
     "test": "node --test",
     "extract-recipes": "node scripts/extract-recipes.js",
+    "extract-item-props": "node scripts/extract-item-props.js",
     "bt-run": "node scripts/bt-run.js",
     "capsule-save": "node scripts/capsule-save.js",
     "capsule-stats": "node scripts/capsule-stats.js",
     "capsule-gc": "node scripts/capsule-gc.js",
     "capsule-retire": "node scripts/capsule-retire.js",
+    "history-gc": "node scripts/history-gc.js",
+    "fact-merge": "node scripts/fact-merge.js",
     "training-report": "node scripts/training-report.js"
   }
 }

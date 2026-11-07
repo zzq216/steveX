@@ -140,8 +140,16 @@ test('capsule_save：草稿转正；子树里的 task/ 引用自动改写；写�
   const stale = save({ folder: 'trees', name: 'calc.answer', description: '另一个', replaces: 'deadbeef', signature: CAPSULE_SIGNATURE, body: CAPSULE_BODY })
   assert.match(stale.errors.join('\n'), /not the latest version/)
   const hash = kept.ref.split('@')[1]
-  const replaced = save({ folder: 'trees', name: 'calc.answer', description: '算两倍并确认（改进）', replaces: hash, signature: CAPSULE_SIGNATURE, body: { ...CAPSULE_BODY, seq: '算两倍' }, keepLiterals: { 'c.2.params.value': '目标值' } })
+  const improved = { folder: 'trees', name: 'calc.answer', description: '算两倍并确认（改进）', replaces: hash, signature: CAPSULE_SIGNATURE, body: { ...CAPSULE_BODY, seq: '算两倍' }, keepLiterals: { 'c.2.params.value': '目标值' } }
+  assert.match(save(improved).errors.join('\n'), /versionNote is required when replacing/)
+  const badNote = save({ ...improved, versionNote: { change: '改名', claims: [{ better: 'new', when: '任何时候', basis: 'measured' }], none: 'x' } }).errors.join('\n')
+  assert.match(badNote, /claims 和 none 只能写一个/)
+  assert.match(badNote, /evidence 必填（basis 是 measured）/)
+  const replaced = save({ ...improved, versionNote: { change: '序列改名', claims: [{ better: 'new', when: '看日志时', basis: 'inferred' }, { better: 'old', when: '按旧名检索时', basis: 'measured', evidence: '这次任务' }] } })
   assert.equal(replaced.ok, true, JSON.stringify(replaced))
+  const note = library.versions.get('trees/calc.answer', replaced.ref.split('@')[1])
+  assert.deepEqual([note.parent, note.change, note.claims.map((c) => [c.better, c.status])], [hash, '序列改名', [['new', 'open'], ['old', 'open']]])
+  assert.deepEqual([...library.versions.protectedVersions().keys()], [kept.ref], '旧版更好那一侧的版本受 GC 保护')
   assert.notEqual(replaced.ref, kept.ref)
   assert.equal(library.tryGet(kept.ref)?.name, 'calc.answer', '老版本原样留着')
 
@@ -150,8 +158,32 @@ test('capsule_save：草稿转正；子树里的 task/ 引用自动改写；写�
   const done = bridge.reflectDone({ sessionId: 's1', requestId: 'c1', summary: '存了乘 2 和算两倍' })
   assert.deepEqual(done.saved, [code.ref, kept.ref, replaced.ref])
   assert.ok(events.some((e) => e.event === 'reflect/done' && e.saved.length === 3))
-  assert.match(save({ folder: 'code', name: 'y', description: 'y', from: 'task/double' }).error, /已经回答过或已关闭/)
+  assert.match(save({ folder: 'code', name: 'y', description: 'y', from: 'task/double' }).error, /已经回答过|已关闭/)
   assert.equal(bridge.reflectDraft('s1', 'task/double'), null, '复盘结束，证据释放')
+})
+
+test('capsule_describe 在复盘回合：只能改这次用到的 / 本次存下的条目，不换哈希，记进事件；复盘结束就不能再改', async () => {
+  const { bridge, library, events, claim } = await finished()
+  assert.ok(REQUEST_TOOLS.reflect.includes('capsule_describe'))
+  claim(3)
+  const describe = (args) => bridge.describeCapsule({ sessionId: 's1', requestId: 'c1', ...args })
+  const code = bridge.saveCapsule({ sessionId: 's1', requestId: 'c1', folder: 'code', name: 'math.double', description: '乘 2', from: 'task/double' })
+  assert.equal(code.ok, true, JSON.stringify(code))
+
+  const other = describe({ ref: 'code/core.nbt.query', description: 'x' })
+  assert.equal(other.ok, false)
+  assert.match(other.error, /复盘时只能改这次任务用到的或本次复盘存下的条目的说明；code\/core\.nbt\.query 不在其中（这次能改：[^）]*code\/math\.double/)
+
+  const hash = library.readManifest()['code/math.double'].hash
+  const changed = describe({ ref: 'code/math.double', description: '乘 2（实测：一次调用 0 次 mod 调用）' })
+  assert.equal(changed.ok, true, JSON.stringify(changed))
+  assert.deepEqual([changed.before, changed.after], ['乘 2', '乘 2（实测：一次调用 0 次 mod 调用）'])
+  assert.equal(library.readManifest()['code/math.double'].hash, hash, '说明不在哈希里')
+  assert.ok(events.some((e) => e.event === 'reflect/describe' && e.key === 'code/math.double'))
+
+  assert.equal(bridge.reflectDone({ sessionId: 's1', requestId: 'c1', summary: '存了乘 2 并改了说明' }).ok, true)
+  assert.ok(events.some((e) => e.event === 'reflect/done' && e.described?.[0] === 'code/math.double'))
+  assert.match(describe({ ref: 'code/math.double', description: 'y' }).error, /已经回答过|已关闭/)
 })
 
 test('哪些结局复盘：人 /bt abort 只通知（可以手动 /bt reflect）；bt_abort_task 复盘；reflect.enabled = false 只通知', async () => {
@@ -261,4 +293,14 @@ test('diffSpecs：按 id 对齐，字段级差异；孩子顺序变了也算改�
   assert.deepEqual(diff.added.map((n) => n.id), ['n1.3'])
   assert.deepEqual(diff.removed.map((n) => n.id), ['n1.1'])
   assert.deepEqual(diff.changed.map((n) => [n.id, Object.keys(n.fields)]), [['n1', ['children']]])
+})
+
+test('abandonReviews（/bt train stop）：关掉在飞的复盘、返回它所在的会话；关了之后回合出错也不会重发', async () => {
+  const { bridge } = await finished()
+  assert.equal(bridge.reflecting().length, 1)
+  assert.deepEqual(bridge.abandonReviews('training stopped'), ['s1'])
+  assert.equal(bridge.reflecting().length, 0)
+  assert.equal(bridge.busyReason(), null)
+  assert.equal(bridge.onTurnError({ sessionId: 's1', turn: 3, error: new Error('cancelled') }), null)
+  assert.deepEqual(bridge.abandonReviews('again'), [], 'nothing left to abandon')
 })

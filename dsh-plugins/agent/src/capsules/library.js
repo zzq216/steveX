@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { validateSignature } from './signature.js'
+import { CapsuleVersions } from './versions.js'
 
 /**
  * 胶囊库（算法层 §8）：技能库与子树模板是同一个库，按 kind 分文件夹。
@@ -61,6 +62,8 @@ export class CapsuleLibrary {
       this.builtinLatest.set(`${folder}/${entry.name}`, hash)
     }
     this.cache = new Map()
+    // 版本说明（胶囊版本说明设计方案）：同名替换时记下的区别与判断，在条目之外
+    this.versions = new CapsuleVersions({ dir })
     this.drafts = null // { taskId, dir, entries: Map<"task/name@hash", entry>, latest: Map<name, hash> }
     this.staged = null // { entries: Map<"code/name@hash", entry>, latest: Map<"code/name", hash>, raw: entry[] }
   }
@@ -185,6 +188,19 @@ export class CapsuleLibrary {
 
   tryGet(ref) {
     try { return this.get(ref) } catch { return null }
+  }
+
+  /** 一个名字（"folder/name"）在库目录里还在的版本哈希（不含已归档的），按文件修改时间从旧到新。 */
+  versionHashes(key) {
+    const { folder, name } = parseRef(key)
+    if (!this.dir || (folder !== 'code' && folder !== 'trees')) return []
+    const sub = path.join(this.dir, folder)
+    if (!fs.existsSync(sub)) return []
+    return fs.readdirSync(sub)
+      .filter((f) => f.startsWith(`${name}@`) && f.endsWith('.json'))
+      .map((f) => ({ hash: f.slice(name.length + 1, -5), at: fs.statSync(path.join(sub, f)).mtimeMs }))
+      .sort((a, b) => a.at - b.at)
+      .map((v) => v.hash)
   }
 
   /** 内置条目的宿主实现；普通条目返回 null。 */

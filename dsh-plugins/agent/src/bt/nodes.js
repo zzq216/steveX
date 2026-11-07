@@ -30,6 +30,7 @@ export class Node {
     if (this.done) this.reset()
     if (!this.started) {
       this.started = true
+      if (this.calls) this.calls = { actions: 0, reads: 0 }
       ctx.onNode?.(this, 'enter')
     }
     const status = this.onTick(ctx)
@@ -558,6 +559,39 @@ class AsyncLeaf extends Node {
   constructor(spec) {
     super(spec)
     this.op = null
+    // 本次执行发出的 mod 调用（任务历史方案 H1）：进入节点时清零，退出事件里记下
+    this.calls = { actions: 0, reads: 0 }
+  }
+
+  /** 计数版的游戏接口：本节点经它发出的动作与读取都记进 this.calls（一次读取 N 个来源 = N 次调用） */
+  game(ctx) {
+    const game = ctx.game
+    const calls = this.calls
+    return {
+      cached: (sources) => game.cached(sources),
+      read(sources, signal) {
+        calls.reads += sources.length
+        return game.read(sources, signal)
+      },
+      env(signal) {
+        const env = game.env(signal)
+        return {
+          ...env,
+          async call(method, params) {
+            calls.actions++
+            return env.call(method, params)
+          },
+          async must(method, params) {
+            calls.actions++
+            return env.must(method, params)
+          },
+          read(sources) {
+            calls.reads += sources.length
+            return env.read(sources)
+          }
+        }
+      }
+    }
   }
 
   onReset() {
@@ -612,7 +646,7 @@ class WorldLeaf extends AsyncLeaf {
   async observed(ctx, signal, run) {
     const observeSources = ctx.observe?.sources ?? []
     const sources = [...new Set([...observeSources, ...(this.expect?.command.sources ?? [])])]
-    const before = observeSources.length ? await ctx.game.read(observeSources, signal) : null
+    const before = observeSources.length ? await this.game(ctx).read(observeSources, signal) : null
     // 前后快照留给修复请求按需查看（P2 §4.3）
     if (before) ctx.onSnapshot?.(this, 'before', before)
     let result
@@ -620,14 +654,14 @@ class WorldLeaf extends AsyncLeaf {
       result = await run()
     } catch (error) {
       if (signal.aborted || !before) throw error
-      const after = await ctx.game.read(observeSources).catch(() => null)
+      const after = await this.game(ctx).read(observeSources).catch(() => null)
       if (after) ctx.onSnapshot?.(this, 'after', after)
       const diff = diffState(before, after)
       ctx.onObserve?.(this, diff)
       throw new Error(`${error.message}（失败前已发生：${summarizeDiff(diff)}）`)
     }
     if (sources.length === 0) return result
-    const after = await ctx.game.read(sources, signal)
+    const after = await this.game(ctx).read(sources, signal)
     if (before) ctx.onSnapshot?.(this, 'after', after)
     const diff = before ? diffState(before, after) : null
     if (before) ctx.onObserve?.(this, diff)
@@ -679,7 +713,7 @@ export class Condition extends AsyncLeaf {
       }
     }
     if (sources.length === 0) return judge({})
-    return this.pump((signal) => ctx.game.read(sources, signal), judge)
+    return this.pump((signal) => this.game(ctx).read(sources, signal), judge)
   }
 }
 
@@ -694,7 +728,7 @@ export class Action extends WorldLeaf {
     return this.pump(
       (signal) => this.observed(ctx, signal, () => {
         const params = resolveParams(this.spec.params ?? {}, ctx.blackboard)
-        return this.command.run(params, ctx.game.env(signal))
+        return this.command.run(params, this.game(ctx).env(signal))
       }),
       (result) => {
         try {
@@ -720,7 +754,7 @@ export class Steps extends WorldLeaf {
   onTick(ctx) {
     return this.pump(
       (signal) => this.observed(ctx, signal, async () => {
-        const env = ctx.game.env(signal)
+        const env = this.game(ctx).env(signal)
         for (let i = 0; i < this.spec.do.length; i++) {
           if (signal.aborted) throw new Error('aborted')
           this.stepIndex = i
@@ -762,7 +796,7 @@ export class Compute extends AsyncLeaf {
       async (signal) => {
         const params = resolveParams(this.spec.params ?? {}, ctx.blackboard)
         const read = this.spec.read ?? []
-        const state = read.length ? await ctx.game.read(read, signal) : undefined
+        const state = read.length ? await this.game(ctx).read(read, signal) : undefined
         return this.capsule.invoke(params, ctx, state)
       },
       (output) => {

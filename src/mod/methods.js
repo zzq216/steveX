@@ -129,11 +129,11 @@ const METHODS = [
   { method: 'container/get', category: 'container', description: 'Get open container contents',
     zh: '读取当前打开的容器：类型/槽位物品/携带物品，及熔炉/附魔台/切石机/织布机/信标/酿造台/箱子等专用字段，无参数。**附魔台**额外给 costs/enchantClue/enchantName/levelClue/goldCount/bookshelves，三个选项按同一套下标对齐（enchantName 是附魔注册名如 "minecraft:sharpness"，选项不可用时为 null；enchantClue 是原始注册表数字 id，仅供排查）；bookshelves=有效书架数，是**世界状态**——靠准星所指方块定位附魔台，界面开着时用 camera/turn 转视角会让它失效，该键**缺席＝未知**（不是 0），且给的是原始计数（vanilla 算附魔等级时会 clamp 到 15）。**切石机**额外给 selectedRecipe/visibleRecipes/recipes——recipes 是方案列表的具体内容（每项是该方案在 GUI 上显示的图标物品，**下标与 container/button 的 button 号一一对应**，条目数应恒等于 visibleRecipes；输入物不是合法切割材料时为空数组）。**织布机**额外给 selectedPattern/patterns——patterns 是全部织布方案（**下标与 container/button 的 button 号一一对应**，1.21.11 图案槽为空时有 32 项）；每项是一面"选它就会得到"的旗（旗帜槽的旗＋该图案＋染料槽的颜色，与产物格算式一致），图案本身读该项的 bannerPatterns 字段（[{pattern:"minecraft:border",color:"red"}]），**不是**界面上那面灰底预览旗；旗帜或染料缺一时为空数组。**注意织布机的按钮号是全局下标**——界面 4×4 一次只显示 16 个、要滚动才看得全，但 patterns[] 给的是全量，点按钮**不需要先滚动**。织布机菜单的格子编号与切石机不同：4–30 = 背包 9–35、31–39 = 快捷栏 0–8（换算 s≤8 ? 31+s : s-5），且 0=旗帜 1=染料 2=图案 3=产物。**信标**额外给 levels/effects/primaryEffect/secondaryEffect——effects 是**全部可选效果**（不是"当前等级能选的"，而是界面上存在的那 6 个），每项 {effect,tier,canBePrimary,canBeSecondary}：effect 是效果注册名，tier 0–3 对应 speed,haste / resistance,jump_boost / strength / regeneration；canBePrimary 复刻主效果列的可点状态（tier < levels），canBeSecondary 复刻副效果列（**界面副效果列只放 regeneration**，且 levels ≥ 4 才有这一列）。primaryEffect/secondaryEffect 是**当前选中**，没选时是 **null**（不是缺席：vanilla 用 0 编码"没选效果"，那是"已知为空"）。**注意 tier 只是界面门禁、服务端不过滤**——container/beacon 能设出界面上点不到的效果，判断"界面允不允许"只能看这两个布尔。effects 是静态常量（每个信标、每个存档都一样），**不依赖 mc.level、不需要服务端回读**（与切石机的 recipes、织布机的 patterns 不同）。**酿造台**额外给 fuel/maxFuel/brewingTicks——**fuel 是"剩余可酿造次数"（0–20，maxFuel=20 是它的分母），不是燃料槽里烈焰粉的个数**；两者是两件事：fuel 归零时才会从燃料槽消耗 1 个烈焰粉并补满 20，烈焰粉本身的数量读 slots[] 里的 slot 4。brewingTicks 是**剩余**酿造 tick 数，从 **400**（＝20 秒）递减到 0，0=当前没在酿（400 在 vanilla 是字面量、无公开常量，故不作字段发出）。酿造台菜单格：0/1/2=三个药水格、3=原料格、4=燃料格、5–31=背包 9–35、32–40=快捷栏 0–8。**药水格（以及任何位置的药水）要读 id 之外的"这是哪瓶药"，看该物品的 potionContents 字段**：potion 是药水注册名（如 minecraft:strength），effects 是这瓶药**实际会给**的效果 [{effect,level,duration,visible}]——level 与 `player` 的 effects[].level 同为 1 起（"力量 II"＝level 2），duration 单位是 tick 且**已按 durationScale 折算**（滞留药水的该组件是 0.25，故会多一个 durationScale:0.25；不折算会把时长夸大 4 倍——酿造台的药水格是接受滞留药水的）。没有该组件的物品（玻璃瓶、绝大多数物品）不带此键。另：bannerPatterns 字段对任何位置的旗帜都生效（inventory 也读得到）；**potionContents 同理，对任何位置的药水生效**（背包里的药水也读得到）。**合成器**额外给 disabledSlots/powered/result——disabledSlots 是**被禁用**的合成格下标数组（合成格＝菜单下标 0–8，行优先即界面上第 1–9 格；禁用位来自菜单数据槽 0–8，开界面时服务端**全量**下发，故客户端持有权威副本、空数组是断言"当前没有禁用格"而非未知）；**禁用/解禁某格用 container/slot 对该格做一次 PICKUP 点击**（细节见 container/slot）。powered＝合成器是否被红石触发（界面右上那枚红石图标读的就是它）——合成器**只在被触发时才真的合成并吐料**。result＝合成预期产物（**配方不匹配时为 null＝"已知为无"**，不是缺席）；产物格不可交互（拿不走也放不进），它只是预览。合成器菜单格：0–8＝合成格、9–35＝背包 9–35、**36–44＝快捷栏 0–8**，产物格在 36 格玩家槽**之后**（当前下标 45，按类型定位、不写死）。注意 slots[] 只列非空格', paramDefs: [] },
   { method: 'container/slot', category: 'container', description: 'Interact with a container slot',
-    zh: '点击容器格；params 填 { slot, button?, clickType? }：slot=格下标（先 container/get 看布局），button=0左键/1右键，clickType=0拾取 1快捷移动 2交换 4丢弃…。**合成器专属**：对合成格（下标 0–8）里的**空格**做一次 PICKUP 点击＝切换该格的"禁用"开关（被禁用的格子收不了料；当前禁用位读 container/get 的 disabledSlots）。vanilla 在这里**不看左右键**（左键右键都切），真正的门禁是**光标必须为空**——所以**禁用必须排在拿起任何物品之前**，一旦光标上拿着物品，右键就退化成"放 1 个"。服务端对**非空格**的禁用请求静默忽略（不报错）',
+    zh: '点击容器格；params 填 { slot, button?, clickType? }：slot=格下标（先 container/get 看布局），button=0左键/1右键，clickType 与 vanilla ClickType 一一对应、全部可用：0=PICKUP 拾取/放下（左右键）、1=QUICK_MOVE 快捷移动（Shift 点击）、2=SWAP 与快捷栏交换（button=快捷栏 0–8，40=副手）、3=CLONE 克隆（创造模式）、4=THROW 丢出（button 0=1 个 / 1=整叠）、5=QUICK_CRAFT 拖拽的单个相位（用 container/drag 发）、6=PICKUP_ALL 双击收拢（光标有物品时对格子发，button=0）；每种点击在服务端的效果见 vanilla AbstractContainerMenu.clicked。**合成器专属**：对合成格（下标 0–8）里的**空格**做一次 PICKUP 点击＝切换该格的"禁用"开关（被禁用的格子收不了料；当前禁用位读 container/get 的 disabledSlots）。vanilla 在这里**不看左右键**（左键右键都切），真正的门禁是**光标必须为空**——所以**禁用必须排在拿起任何物品之前**，一旦光标上拿着物品，右键就退化成"放 1 个"。服务端对**非空格**的禁用请求静默忽略（不报错）',
     paramDefs: [
       { name: 'slot', type: 'int', def: 0, hint: '容器格下标（先 container/get 查看布局）', sample: 1 },
       { name: 'button', type: 'int', def: 0, hint: '0=左键 / 1=右键', sample: 0 },
-      { name: 'clickType', type: 'int', def: 0, hint: '0=拾取 1=快捷移动 2=交换 4=丢弃 5=合成…', sample: 0 }
+      { name: 'clickType', type: 'int', def: 0, hint: '0=PICKUP 1=QUICK_MOVE 2=SWAP 3=CLONE 4=THROW 5=QUICK_CRAFT 6=PICKUP_ALL', sample: 0 }
     ] },
   { method: 'container/button', category: 'container', description: 'Click a container button',
     zh: '点击容器界面按钮（如附魔台的第 N 个附魔选项、切石机/织布机的第 N 个方案，N 从 0 起）；params 填 { button }：按钮序号。返回 {status, accepted}——accepted 只表示本地预检通过且已发包，**不是执行结果**（服务端无论成功失败都不回包），是否真的生效须用 container/get 观察（附魔台看附魔位物品是否长出 enchantments、青金石是否被扣；切石机/织布机看 selectedRecipe/selectedPattern 是否变成该下标，注意它只能证明"选中了几号"，不能证明"几号是什么"——后者要读 recipes[]/patterns[]）。**织布机**的按钮号是**全局下标**（与 patterns[] 下标同一套）：界面 4×4 一次只显示 16 个、要滚动才看得全 32 个，但**点按钮不需要先滚动**；原因为 vanilla 已把滚动偏移 startRow 折进 index（LoomScreen:193-194）。越界（button ≥ 方案数）时预检不过，accepted:false 且不发包',
@@ -211,22 +211,25 @@ const METHODS = [
 
   // ── 训练场（4，docs/训练场设计方案.md）：只供 DSH 训练器调用，不登记给 agent（raw_commands.js 跳过）；需要单人世界 ──
   { method: 'arena/build', category: 'arena', description: 'Build a training arena (idempotent)',
-    zh: '幂等搭建训练场（场内地板 + 屏障墙、场外平台 + 按钮 + 告示牌）并登记位置；params 填 { arena, origin? }：arena=场地名，origin=[x,y,z] 场内地板中心（已登记的场地可省略）',
+    zh: '幂等搭建训练场（场内地板 + 屏障墙、可选的工作站、场外平台 + 告示牌）并登记位置；params 填 { arena, origin?, station? }：arena=场地名，origin=[x,y,z] 场内地板中心（已登记的场地可省略），station=工作站（"crafting_table" 或 null；省略时用已登记的）',
     paramDefs: [
       { name: 'arena', type: 'string', required: true, hint: '场地名（[a-z0-9_]）', sample: 'craft2x2' },
-      { name: 'origin', type: 'json', hint: '[x, y, z]，场内地板中心方块', sample: [10000, 120, 10000] }
+      { name: 'origin', type: 'json', hint: '[x, y, z]，场内地板中心方块', sample: [10000, 120, 10000] },
+      { name: 'station', type: 'string', hint: '工作站：crafting_table（放在 origin 前方 +z 两格）；省略 = 已登记的', sample: 'crafting_table' }
     ] },
   { method: 'arena/prepare', category: 'arena', description: 'Reset the player and start a training run',
-    zh: '开始一轮：关界面、清空物品栏与光标、传送进场、清场内掉落物与敌对生物、回满状态、白天晴天、重置配方书、发放材料，并开始监测 watch 中物品的 crafted 统计；已有进行中的一轮时报错；params 填 { arena, origin?, items, watch, dayTime? }',
+    zh: '开始一轮：关界面、清空物品栏与光标、补回工作站、传送进场（有工作站时俯角对准它）、清场内掉落物与敌对生物、回满状态、白天晴天、重置配方书、发放材料（超过堆叠上限的堆按 seed 拆到空槽），并开始监测 watch 中物品的 crafted 统计；已有进行中的一轮时报错；params 填 { arena, origin?, station?, items, seed?, watch, dayTime? }。返回 { arena, startedAtMs, baseline, given[{slot,id,count}]＝实际发放, inventory }，有工作站时另有 { station, pitch, aimOk }（aimOk＝服务器射线检测准星命中工作站）',
     paramDefs: [
       { name: 'arena', type: 'string', required: true, hint: '场地名', sample: 'craft2x2' },
       { name: 'origin', type: 'json', hint: '[x, y, z]（已登记的场地可省略）', sample: [10000, 120, 10000] },
+      { name: 'station', type: 'string', hint: '工作站：crafting_table；省略 = 已登记的', sample: 'crafting_table' },
       { name: 'items', type: 'json', required: true, hint: '[{ slot: 0-35, id, count }]', sample: [{ slot: 4, id: 'minecraft:oak_planks', count: 2 }] },
+      { name: 'seed', type: 'int', def: 0, hint: '兜底拆堆选空槽用的种子', sample: 81723 },
       { name: 'watch', type: 'json', required: true, hint: '要监测 crafted 统计的物品 id 列表', sample: ['minecraft:stick'] },
       { name: 'dayTime', type: 'int', def: 1000, hint: '本轮开始时设置的时间（tick）', sample: 1000 }
     ] },
   { method: 'arena/status', category: 'arena', description: 'Current training run state',
-    zh: '当前一轮的状态：{ active, arena, startedAtMs, craftedAtMs, craftedItem, craftedDelta{id:n}, inventory{id:n}, insideArena, playerOnline }；没有进行中的一轮时只有 active:false，无参数',
+    zh: '当前一轮的状态：{ active, arena, startedAtMs, craftedAtMs, craftedItem, craftedDelta{id:n}, inventory{id:n}, insideArena, playerOnline }，有工作站时另有 { openedAtMs（第一次打开工作台的时刻，没打开过为 null）, stationIntact }；没有进行中的一轮时只有 active:false，无参数',
     paramDefs: [] },
   { method: 'arena/finish', category: 'arena', description: 'End the training run and teleport outside',
     zh: '结束本轮：返回与 arena/status 相同的最终状态后关界面、传送到场外平台；没有进行中的一轮时只传送；params 填 { arena, origin? }',

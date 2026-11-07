@@ -109,6 +109,12 @@ export class CapsuleStats {
     return true
   }
 
+  /** 这个版本在任务里执行过没有（作为胶囊，或转正前作为草稿）。胶囊版本说明方案 V5 的 untested 取反 */
+  ran(ref) {
+    const row = this.data.refs[ref]
+    return Boolean(row && (row.calls > 0 || row.draft?.calls > 0))
+  }
+
   /** 一个完整引用的数字；没有 = null */
   get(ref) {
     return this.data.refs[ref] ?? null

@@ -4,21 +4,22 @@
 
 ## 步骤
 
-1. **看有什么可用**：`capsule_search` 看有没有做过的同类子树或代码；`command_docs` 查原始命令的名字与参数。要写处理数据的条件代码 / Compute，先用 `data_shapes` 查数据长什么样：`state.*`（玩家状态、背包、F3、容器界面）、`json.recipes`（配方）、`nbt.*`（记忆世界）的字段结构与词表（枚举型字段的全部取值，如 `container.type` 的工作台是 `"crafting"`）。字段含义用 `command_docs` 查对应的读取命令（`inventory`、`container/get`……）。**不要猜字段名**——猜错了，条件代码要么永远不成立，要么像"找不到字段就返回 true"那样形同虚设。你看不到当前状态的值——它们由树去读（见下面"先读后展开"）。
+1. **看有什么可用**：`capsule_search` 看有没有做过的同类子树或代码；`task_search` 查做过的同类任务，`task_get` 看它的树、成本画像和复盘时记下的问题；`fact_search` 查事实库里从源码确认过的游戏机制；`command_docs` 查原始命令的名字与参数。要写处理数据的条件代码 / Compute，先用 `data_shapes` 查数据长什么样：`state.*`（玩家状态、背包、F3、容器界面）、`json.recipes`（配方）、`nbt.*`（记忆世界）的字段结构与词表（枚举型字段的全部取值，如 `container.type` 的工作台是 `"crafting"`）。字段含义用 `command_docs` 查对应的读取命令（`inventory`、`container/get`……）。**不要猜字段名**——猜错了，条件代码要么永远不成立，要么像"找不到字段就返回 true"那样形同虚设。你看不到当前状态的值——它们由树去读（见下面"先读后展开"）。
 2. **拆任务**：把指令拆成几个子任务（按先后顺序）。
 3. **写成具体节点**：现在就知道怎么做的部分写成具体节点（`steps` / `act` / `compute` / `cond` / `forEach` / `use`）。库里的子树执行时自己读状态、自己验收，`use` 它就是一个具体节点。
-4. **定不下来的部分写成 `expand`**：要看执行时才读得到的结果才能决定怎么做的部分，写成 `{ "expand": 目标 }`。目标写清楚"要达成什么"，不写"怎么做"——展开时你能看到那时的状态。执行到每个 `expand` 时会再开一个回合来展开它。
+4. **定不下来的部分写成 `expand`**：要看前面的执行结果（哪一步成功、失败，黑板上有了哪些结论）才能定下树结构的部分，写成 `{ "expand": 目标 }`。目标写清楚"要达成什么"，不写"怎么做"。展开时你能看到整棵树的执行结果和黑板上有哪些键与它们的形状，看不到值。规划和展开回合都看不到具体值，依赖具体值的选择（背包里是什么材料、分成几堆、各多少，配方是什么）要由树里的条件代码 / Compute 在执行时按读到的值去做。执行到每个 `expand` 时会再开一个回合来展开它。
 5. **一次提交**：用 `bt_submit_tree` 交回，`requestId` 用请求里的那个。被拒绝就按错误原文修正后重交。
 
 ## 先读后展开
 
-你写大纲时不知道现状（背包里有什么、配方是什么、附近有什么）。不要猜，**把"读"写成具体节点**；怎么做要取决于读取结果、现在定不下来的部分留成 `expand`：
+你写大纲时不知道现状（背包里有什么、配方是什么、附近有什么），展开时也只看得到黑板的键与形状、看不到值。不要猜，**把"读"写成具体节点**；依赖读到的值的选择写成条件代码 / Compute，在执行时按读到的值去做；要看前面的执行结果才能定下结构的部分留成 `expand`：
 
 ```
 seq 做木镐
-├─ compute code/core.json.query → recipe.pickaxe   ← 具体节点：查配方
-├─ expand 按 $recipe.pickaxe 准备材料              ← 展开时黑板里已有 recipe.pickaxe
-└─ expand 合成木镐
+├─ compute code/core.json.query → recipe.pickaxe                  ← 具体节点：查配方
+├─ compute task/plan-clicks read=[inventory] params $recipe.pickaxe ← 代码按读到的配方与背包算出要做什么
+├─ forEach $plan.clicks → act container/slot                      ← 照算出的结果执行
+└─ expand 合成木镐                                                ← 执行到这里时看前面的结果再定结构
 ```
 
 - 读状态：条件代码 / Compute 的 `read`（`player` / `inventory` / `f3` / `container`）；查记忆：`code/core.nbt.query`；查配方等数据：`code/core.json.query`

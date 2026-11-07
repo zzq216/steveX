@@ -1,7 +1,8 @@
 import { JSON_OUTPUT, textBlocks, sessionOf } from './shared.js'
 
 /**
- * 胶囊库整理（整理方案 §5.4）：capsule_retire、capsule_describe、bt_curate_done。只在整理回合可用（guard，CURATE_ONLY_TOOLS）。
+ * 胶囊库整理（整理方案 §5.4）：capsule_retire、capsule_describe、bt_curate_done。只在整理回合可用（guard，CURATE_ONLY_TOOLS）；
+ * capsule_describe 复盘回合也能用，但只能改这次任务用到的 / 本次复盘存下的条目（REVIEW_OR_CURATE_TOOLS）。
  *
  * 改不动不是工具错误：返回 { ok: false, error }，大模型按原文改了重交，不计次数。
  *
@@ -32,9 +33,9 @@ export function curateTools({ bridge }) {
     },
     {
       name: 'capsule_describe',
-      description: '整理时改一个条目的说明（规划时在 capsule_search 里看到的那一行）。说明不在哈希里：不产生新版本，引用它的树不受影响。内置条目不能改。',
+      description: '改一个条目的说明（规划时在 capsule_search 里看到的那一行）。说明不在哈希里：不产生新版本，引用它的树不受影响。内置条目不能改。整理回合能改库里任何条目；复盘回合只能改这次任务用到的、或本次复盘存下的条目（比如把这次的实测成本、适用前提写进说明）。',
       parameters: {
-        requestId: { type: 'string', required: true, description: '整理请求 id，如 "k1"' },
+        requestId: { type: 'string', required: true, description: '整理请求 id（如 "k1"）或复盘请求 id（如 "c1"）' },
         ref: { type: 'string', required: true, description: '"code/<名字>" 或 "trees/<名字>"，可带 @hash' },
         description: { type: 'string', required: true, description: '新的说明：一句话，做什么、在什么前提下用' }
       },

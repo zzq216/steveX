@@ -27,8 +27,10 @@ import { structureOf } from '../llm/structure.js'
  * @param {object} [services.bridge]  复盘回合里 capsule_get task/… 从复盘请求持有的草稿拷贝取（P4 §2.4）
  * @param {number} services.maxOutputChars
  */
-export function knowledgeTools({ registry, library, stats = null, game, json = null, jsonSources = [], nbt = null, nbtSources = [], taskId = () => null, bridge = null, maxOutputChars }) {
+export function knowledgeTools({ registry, library, stats = null, history = null, game, json = null, jsonSources = [], nbt = null, nbtSources = [], taskId = () => null, bridge = null, maxOutputChars }) {
   const render = (_args, value) => textBlocks(jsonText(value, maxOutputChars))
+  // 胶囊的已知问题（任务历史方案 H8）：复盘时记下、还待验证的
+  const notesOf = (ref) => history?.notesFor(ref) ?? []
   // 使用统计（整理方案 §4）：只展示，不参与排序；没有数据写"尚无记录"（没用过 ≠ 没用）
   const keyOf = (ref) => ref.slice(0, ref.lastIndexOf('@'))
   const usageOf = (ref, kind) => stats ? usageSummary(stats.byName(keyOf(ref))?.total ?? null, kind, keyOf(ref)) : '（没有统计）'
@@ -45,12 +47,68 @@ export function knowledgeTools({ registry, library, stats = null, game, json = n
       ...(row?.errors?.length ? { recentErrors: row.errors } : {})
     }
   }
+  // 版本说明（胶囊版本说明设计方案 V5、V6）：版本数、最新版跑没跑过、旧版在什么情况下更好、版本链
+  const versions = library.versions ?? null
+  const untested = (ref) => (stats ? !stats.ran(ref) : undefined)
+  const archived = (ref) => !library.tryGet(ref)
+  const olderBetterWhen = (key) => {
+    if (!versions) return []
+    const out = []
+    for (const record of Object.values(versions.all(key))) {
+      if (!record.parent || archived(`${key}@${record.parent}`)) continue
+      for (const claim of record.claims ?? []) {
+        if (claim.better !== 'old' || claim.status === 'refuted') continue
+        out.push(`@${record.parent}：${claim.when}（${claim.basis === 'measured' ? '实测' : '推测'}，${claim.status}）`)
+      }
+    }
+    return out.slice(0, 2)
+  }
+  const versionInfo = (ref) => {
+    const key = keyOf(ref)
+    const count = library.versionHashes(key).length
+    const older = olderBetterWhen(key)
+    return {
+      ...(count >= 2 ? { versions: count } : {}),
+      ...(untested(ref) ? { untested: true } : {}),
+      ...(older.length ? { olderBetterWhen: older } : {})
+    }
+  }
+  const versionUsage = (ref, kind) => {
+    if (archived(ref)) return '已归档'
+    if (!stats) return '（没有统计）'
+    return stats.ran(ref) ? usageSummary(stats.get(ref), kind, keyOf(ref)) : '未执行'
+  }
+  const versionChain = (key, latestHash, kind) => {
+    if (!versions) return null
+    const chain = versions.chain(key, latestHash, 5)
+    const rows = chain.map(({ hash, record }) => ({
+      ref: `${key}@${hash}`,
+      parent: record?.parent ?? null,
+      ...(record?.at ? { at: record.at } : {}),
+      change: record?.change ?? '（没有记录）',
+      ...(record?.none ? { none: record.none } : {}),
+      ...(record?.claims?.length ? { claims: record.claims.map((c) => ({ better: c.better === 'new' ? `这一版（@${hash}）` : `旧版（@${record.parent}）`, when: c.when, basis: c.basis, ...(c.evidence ? { evidence: c.evidence } : {}), status: c.status, ...(c.reviews?.length ? { reviews: c.reviews } : {}) })) } : {}),
+      usage: versionUsage(`${key}@${hash}`, kind),
+      knownIssues: notesOf(key).filter((n) => n.hash === hash).length
+    }))
+    const inChain = new Set(chain.map((c) => c.hash))
+    const others = library.versionHashes(key).filter((h) => !inChain.has(h)).map((h) => ({ ref: `${key}@${h}`, usage: versionUsage(`${key}@${h}`, kind) }))
+    return { rows, others }
+  }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),
     ...(json ? jsonSources.map((s) => `json.${s}`) : []),
     ...(nbt ? nbtSources.map((s) => `nbt.${s}`) : [])
   ]
   const defaults = sourceNames.filter((s) => !s.startsWith('nbt.'))
+
+  function chainFields(key, latestHash, entry) {
+    if (library.versionHashes(key).length < 2 && !versions?.get(key, latestHash)) return {}
+    const kind = entry.signature.returns === 'bool' ? 'condition' : 'compute'
+    const chain = versionChain(key, latestHash, kind)
+    if (!chain) return {}
+    return { versionChain: chain.rows, ...(chain.others.length ? { otherVersions: chain.others } : {}) }
+  }
 
   async function describe(name, signal) {
     const [kind, id] = [name.slice(0, name.indexOf('.')), name.slice(name.indexOf('.') + 1)]
@@ -128,7 +186,9 @@ export function knowledgeTools({ registry, library, stats = null, game, json = n
       description: [
         '查胶囊库：可复用的条件代码（cond）、Compute 代码（compute）、子树（use），以及本任务的代码草稿（task/）。',
         '给 query = 按空白拆成几个词，引用名或说明里含任一词就返回，含的词越多越靠前；不给 = 全部。返回每条的引用、种类、说明、输入 / 输出名与使用统计（usage，同名各版本加总；只是记录，不影响排序）；要看完整契约、正文与统计明细用 capsule_get。',
-        '已下架的条目默认不返回；includeRetired = true 时一起返回，并带 retired（下架理由与取代者）。'
+        '已下架的条目默认不返回；includeRetired = true 时一起返回，并带 retired（下架理由与取代者）。',
+        'knownIssues = 以往任务复盘时记下、还待验证（open）或受现有能力限制（blocked）的问题条数（内容用 capsule_get 看）。',
+        'versions = 同名版本数（≥2 才有）；untested = 列出的这一版还没在任务里执行过；olderBetterWhen = 替换时记下的"旧版在什么情况下更好"的判断（最多 2 条，带旧版哈希、实测 / 推测与核对状态；要用旧版就写带 @hash 的引用）。版本链用 capsule_get 看'
       ].join('\n'),
       parameters: {
         query: { type: 'string', description: '一个或几个词（空白分隔），不区分大小写' },
@@ -151,6 +211,8 @@ export function knowledgeTools({ registry, library, stats = null, game, json = n
               inputs: Object.keys(entry?.signature.inputs ?? {}),
               ...(entry?.signature.outputs ? { outputs: Object.keys(entry.signature.outputs) } : {}),
               ...(row.draft ? {} : { usage: usageOf(row.ref, row.kind) }),
+              ...(!row.draft && notesOf(row.ref).length ? { knownIssues: notesOf(row.ref).length } : {}),
+              ...(!row.draft && !row.builtin ? versionInfo(row.ref) : {}),
               ...(row.locked ? { locked: true } : {}),
               ...(row.draft ? { draft: true } : {}),
               ...(row.retired ? { retired: row.retired } : {})
@@ -160,7 +222,7 @@ export function knowledgeTools({ registry, library, stats = null, game, json = n
     },
     {
       name: 'capsule_get',
-      description: '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字）。ref 可以省略 @hash，取最新版。',
+      description: '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions。',
       parameters: {
         ref: { type: 'string', required: true, description: '如 "code/core.json.query"、"trees/x@1a2b3c4d"、"task/plan-grid"' }
       },
@@ -182,6 +244,8 @@ export function knowledgeTools({ registry, library, stats = null, game, json = n
           ...(info?.retired ? { retired: info.retired } : {}),
           ...(info && info.hash !== entry.hash ? { latest: `${key}@${info.hash}` } : {}),
           ...(stats ? { usage: usageDetail(ref, entry) } : {}),
+          ...(notesOf(ref).length ? { knownIssues: notesOf(ref).map((n) => ({ ...n, version: n.hash === entry.hash ? '这个版本' : n.hash ? `针对 @${n.hash}` : '版本未知' })) } : {}),
+          ...(!host && info ? chainFields(key, info.hash, entry) : {}),
           ...(host ? { host: true, note: '宿主实现的内置查询：参数只许字面量' } : { body: entry.body })
         }
       }

@@ -31,14 +31,14 @@ public final class ArenaCommand {
                                 source.sendFailure(Component.literal("训练进行中，结束前不能用 /arena"));
                                 return 0;
                             }
-                            BlockPos origin = ArenaManager.known().get(name);
-                            if (origin == null) {
+                            ArenaManager.Site site = ArenaManager.known().get(name);
+                            if (site == null) {
                                 source.sendFailure(Component.literal("未知场地 " + name + "（已有："
                                         + String.join(", ", ArenaManager.known().keySet()) + "）"));
                                 return 0;
                             }
-                            ArenaManager.build(source.getServer(), name, origin);
-                            ArenaManager.teleportOutside(source.getServer(), player, origin);
+                            ArenaManager.build(source.getServer(), name, site.origin(), site.station());
+                            ArenaManager.teleportOutside(source.getServer(), player, site.origin());
                             source.sendSuccess(() -> Component.literal("训练场 " + name + "：在 DSH 输入 /bt train " + name + " 开始训练"), false);
                             return 1;
                         })));

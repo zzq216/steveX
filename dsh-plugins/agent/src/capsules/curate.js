@@ -12,13 +12,16 @@ import { usageSummary } from './stats.js'
 export const RETIRE_REASON_MAX = 500
 
 /** 库里的条目（不含任务草稿），按引用排序；带同名旧版本数与统计。 */
-export function libraryRows(library, stats) {
+export function libraryRows(library, stats, history = null) {
   const versions = countVersions(library.dir)
   return library.list()
     .filter((row) => !row.draft)
     .map((row) => {
       const key = row.ref.slice(0, row.ref.lastIndexOf('@'))
-      return { ...row, key, olderVersions: Math.max(0, (versions.get(key) ?? 1) - 1), stat: stats?.byName(key)?.total ?? null }
+      // 版本说明（胶囊版本说明方案 V10）：最新版跑没跑过、版本判断的状态计数——只是证据
+      const untested = !row.builtin && stats ? !stats.ran(row.ref) : false
+      const claims = library.versions?.claimCounts(key) ?? null
+      return { ...row, key, olderVersions: Math.max(0, (versions.get(key) ?? 1) - 1), stat: stats?.byName(key)?.total ?? null, issues: history?.notesFor(key).length ?? 0, untested, claims }
     })
     .sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0))
 }
@@ -52,7 +55,9 @@ function renderRow(row) {
   const flags = [row.builtin ? '内置' : null, row.locked && !row.builtin ? 'locked' : null].filter(Boolean)
   const tail = [
     usageSummary(row.stat, row.kind, row.key),
-    `同名旧版本 ${row.olderVersions}`,
+    `同名旧版本 ${row.olderVersions}${row.untested && row.olderVersions > 0 ? '，最新版未执行' : ''}`,
+    row.claims && row.claims.open + row.claims.confirmed + row.claims.refuted > 0 ? `版本判断 open ${row.claims.open} / 成立 ${row.claims.confirmed} / 不成立 ${row.claims.refuted}（capsule_get 看版本链）` : null,
+    row.issues ? `已知问题 ${row.issues} 条（待验证，capsule_get 看）` : null,
     row.retired ? `已下架：${row.retired.reason}${row.retired.supersededBy ? `，取代者 ${row.retired.supersededBy}` : ''}` : null,
     row.description || '（无说明）'
   ].filter(Boolean)

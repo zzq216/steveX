@@ -4,6 +4,7 @@ import { CapsuleLibrary, CapsuleStats, Sandbox, createBuiltins } from './capsule
 import { createDefaultRegistry } from './commands.js'
 import { FastMonitor, FastVersions, FastReflector, EMPTY_FAST_TREE } from './fast/index.js'
 import { FactStore, SourceTree } from './facts/index.js'
+import { TaskHistory } from './history/store.js'
 
 /**
  * 组装一套运行时：mod 连接 → 游戏状态 → 命令注册表 → 胶囊库与沙箱 → 执行器（+ P0 本地应答器）。
@@ -49,6 +50,18 @@ export function createRuntime(config, deps = {}) {
     }
   })
 
+  // 任务历史（任务历史方案 H1、H4）：缓存每个任务的事件，任务结束时算成本画像、写记录
+  const history = config.historyDir ? new TaskHistory({ dir: config.historyDir, capsulesDir: config.capsulesDir, config: config.history }) : null
+  if (history) {
+    executor.on('event', (record) => {
+      try {
+        history.observe(record)
+      } catch (error) {
+        logger?.warn?.(`[bt] task history: ${error.message}`)
+      }
+    })
+  }
+
   // 任务结束：通知查询 API（缓存已改为按版本，不再按任务钉住；保留这个钩子以兼容）
   executor.on('task', (summary) => {
     if (summary.state === 'done' || summary.state === 'failed') capsules.releaseTask(summary.taskId)
@@ -58,7 +71,7 @@ export function createRuntime(config, deps = {}) {
   // 用 /bt fast rollback 回到一版能用的
   const versions = new FastVersions({
     dir: config.fastTreeDir, executor, library: capsules.library, sandbox: capsules.sandbox,
-    config: { maxArms: config.fast.maxArms, maxNodesPerArm: config.maxExpansionNodes, maxEpisodeMs: config.fast.maxEpisodeMs }
+    config: { maxArms: config.fast.maxArms, maxNodesPerArm: config.fast.maxNodesPerArm, maxEpisodeMs: config.fast.maxEpisodeMs }
   })
   try {
     versions.loadLatest()
@@ -86,6 +99,7 @@ export function createRuntime(config, deps = {}) {
     mod, game, registry, executor,
     fast: { monitor, versions, reflector },
     facts,
+    history,
     library: capsules.library,
     stats: capsules.stats,
     sandbox: capsules.sandbox,

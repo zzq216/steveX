@@ -19,6 +19,8 @@ export function reflectTools({ bridge }) {
         '- 子树里引用的 task/ 草稿：本次复盘里已经转正过的会自动换成 code/ 引用；没转正的要先转正',
         '- 子树里调用代码的节点要带上它在任务树里的 read（代码读 state.<来源> 靠它）：给了 from 时会对照原节点检查，少了会被拒绝',
         '- 库里已有同名条目时必须写 replaces（它最新版的 hash），表示有意替换；否则换个名字',
+        '- 写 replaces 时 versionNote 必填：change = 相对旧版改了什么；claims = 1–3 条 { better: new | old, when, basis: measured | inferred, evidence? }，各写一种情况下哪一版更好（新版更好的情况、旧版更好的情况都可以写）；旧版没有更好的情况（如纯修错）就不写 claims、写 none 说明为什么。when 写执行前或执行时能观察到的条件（材料分几堆、产量、界面开没开、2x2 / 3x3……）；比较成本以 mod 调用次数为准，执行时间受服务端与网络影响，不能单独作为依据。basis = measured 时 evidence 写哪个任务、什么数字；inferred = 推测（包括还没跑过的代码的预期）。这些判断以后用到相关版本的任务会核对',
+        '- description 写"做什么、什么前提下用"；相对旧版的改动与各次实测写在 versionNote 里，不写进 description',
         '- 字面量和这次任务里观察到的值相同（快照里的格子号、坐标、物品 id，查询 / 初始黑板里的值）会被拒绝：改成参数或读取；确实是常量就写进 keepLiterals，每条带理由（键照抄被拒时给的位置）。代码只比字符串'
       ].join('\n'),
       parameters: {
@@ -31,7 +33,8 @@ export function reflectTools({ bridge }) {
         body: { type: 'json', description: 'trees：编写格式的子树；code：TS / JS 源码（定义 main(params, state)）。code 转正时可省略' },
         preconditions: { type: 'array', items: { type: 'string' }, description: '可选：适用条件' },
         replaces: { type: 'string', description: '替换库里已有的同名条目时：它当前最新版的 hash' },
-        keepLiterals: { type: 'object', additionalProperties: true, description: '确认保留的字面量 { "<被拒时给出的位置>": "为什么是常量" }' }
+        keepLiterals: { type: 'object', additionalProperties: true, description: '确认保留的字面量 { "<被拒时给出的位置>": "为什么是常量" }' },
+        versionNote: { type: 'json', description: '写 replaces 时必填：{ change, claims: [{ better: "new"|"old", when, basis: "measured"|"inferred", evidence? }] } 或 { change, none }' }
       },
       output: { schema: JSON_OUTPUT, render: (_args, value) => textBlocks(renderSave(value)) },
       async execute(args, exec) {

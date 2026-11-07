@@ -132,7 +132,7 @@ test('I5：没提交就结束回合 → 提醒并计一次；用完 3 次 → �
   assert.equal(invalid.attemptsLeft, 1, '提醒与不合法提交共用 3 次')
   assert.deepEqual(bridge.onTurnStopping({ sessionId: 's1', turn: 1 }), { failed: true })
   assert.equal(bridge.planning, null)
-  assert.match(bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree: OUTLINE }).error, /已经回答过或已关闭/)
+  assert.match(bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree: OUTLINE }).error, /已经回答过|已关闭/)
 
   // expand 请求同理，用完 → 任务失败
   const plan2 = bridge.startPlanning({ sessionId: 's1', instruction: '再来' })

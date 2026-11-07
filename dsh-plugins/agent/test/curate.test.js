@@ -165,7 +165,7 @@ test('capsule_describe：不换哈希、文件与 manifest 一起改；内置不
   const [row] = fs.readFileSync(path.join(library.dir, 'curate.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
   assert.deepEqual([row.requestId, row.trigger, row.outcome, row.sinceLast, row.reason], ['k1', 'manual', 'done', 1, '补了一条说明'])
   assert.deepEqual(row.described.map((c) => [c.key, c.before]), [['code/test.air-below', '氧气低于 value']])
-  assert.match((await call('capsule_describe', { requestId: 'k1', ref: 'code/test.air-below', description: 'x' })).error, /已经回答过或已关闭/)
+  assert.match((await call('capsule_describe', { requestId: 'k1', ref: 'code/test.air-below', description: 'x' })).error, /已经回答过|已关闭/)
 })
 
 test('自动整理（C1 / C2）：everyTasks = 0 从不自动发；= 2 时第二个任务结束、空闲才发（经 deliverIdle）；复盘没结束就等复盘', async () => {

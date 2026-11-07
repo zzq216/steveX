@@ -12,11 +12,16 @@ export const DEFAULTS = Object.freeze({
   fastTreeDir: path.join(steveXRoot, 'src', 'bt', 'trees', 'fast'),
   /** 胶囊库目录（code/ + trees/ + manifest.json）；null = 只有内置条目 */
   capsulesDir: path.join(steveXRoot, 'src', 'capsules'),
+  /** 任务历史目录（任务历史与复盘评估设计方案 H4）：一个任务一条记录 + index.json + archive/；null = 不记。只留本地 */
+  historyDir: path.join(steveXRoot, 'src', 'history'),
+  /** 任务历史的上限与淘汰阈值（H1、H9、H11） */
+  history: { profileTop: 10, repeatMin: 3, reviewMax: 10, issuesMax: 5, treeChars: 8000, archiveUnseenDays: 30, maxActive: 500 },
   /** core.json.query 能读的数据源：标识 → 文件或目录（相对 steveX/）。不在这里的文件读不到 */
   jsonSources: { recipes: 'dsh-plugins/agent/data/recipes.json' },
   /** core.nbt.query 读的采集端落盘目录（相对 steveX/） */
   visionRoot: 'vendor/stevex-template-1.21.11/run/stevex/vision',
-  maxExpansionNodes: 15,
+  /** 单次提交（大纲 / 展开 / 补丁）编译后的节点上限；2026-11-07 从 15 调到 25（第一次写批量合成时 15 太紧） */
+  maxExpansionNodes: 25,
   maxInvalidAttempts: 3,
   maxValueBytes: 16384,
   /** 修复请求的快照缓冲保留最近多少个叶子的前后快照（P2 §4.3） */
@@ -41,6 +46,8 @@ export const DEFAULTS = Object.freeze({
     snapshotKeep: 200,
     /** 快树最多几个真实 arm（§7.3） */
     maxArms: 30,
+    /** 快树每个 arm 的 then 节点上限：快树要短小，不跟 maxExpansionNodes 一起调 */
+    maxNodesPerArm: 15,
     /** 一个情节最长多久，超时按 FAILURE 收场（§7.3） */
     maxEpisodeMs: 30000,
     /** false = 只记事件、不开反思会话 */
@@ -90,15 +97,28 @@ export const DEFAULTS = Object.freeze({
   },
   /** 训练场（训练场设计方案 §5）：/bt train 每轮"给材料 → 发任务 → 判定 → 记录"，记录写 runtime/training/<场地>.jsonl */
   training: {
-    /** 从发任务起算的时间上限（秒，T6）；到时中止任务、记 timeout */
+    /**
+     * 时间上限（秒，T6）；到时中止任务、取消在跑的回合、记 timeout。
+     * timeoutSec 从发任务起算、但不算等本任务 LLM 回合（规划 / 展开 / 修补）的时间；
+     * wallTimeoutSec 是含 LLM 回合的总上限（2026-11-07 拆开：第一次想新做法的规划回合可能要十几分钟）
+     */
     timeoutSec: 600,
+    wallTimeoutSec: 2400,
     /** 一轮进行中查 arena/status 的间隔（毫秒） */
     pollMs: 1000,
     /** 配方表（抽样用，T7），相对 steveX/ */
     recipes: 'dsh-plugins/agent/data/recipes.json',
-    /** 场地：名字 → { origin: 场内地板中心 [x,y,z], mode: named | hidden（T5）, exclude: 不抽的配方名 } */
+    /** 物品的堆叠上限与合成剩余物（多份模式算格子用，T14；npm run extract-item-props 生成），相对 steveX/ */
+    itemProps: 'dsh-plugins/agent/data/item-props.json',
+    /**
+     * 场地：名字 → { origin: 场内地板中心 [x,y,z], mode: named | hidden（T5）, exclude: 不抽的配方名,
+     *   grid: 合成格边长 2 | 3（缺省 2）, station: 场内工作站 'crafting_table' | null（缺省 null）,
+     *   timeoutSec? / wallTimeoutSec?: 覆盖全局的时间上限, portions? / crafts?: n、m 的默认值 "k" | "a-b"（T14，命令行优先；不写 = n 在 1–64 随机） }。
+     * 工作台训练场见 docs/工作台训练场设计方案.md
+     */
     arenas: {
-      craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] }
+      craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
+      craft3x3: { origin: [10000, 120, 10030], mode: 'named', grid: 3, station: 'crafting_table', exclude: [], timeoutSec: 900 }
     }
   },
   planner: {
@@ -126,18 +146,19 @@ export function normalizeConfig(raw = {}) {
     fast: { ...DEFAULTS.fast, ...(raw.fast ?? {}) },
     reflect: { ...DEFAULTS.reflect, ...(raw.reflect ?? {}) },
     curate: { ...DEFAULTS.curate, ...(raw.curate ?? {}) },
+    history: { ...DEFAULTS.history, ...(raw.history ?? {}) },
     facts: { ...DEFAULTS.facts, ...(raw.facts ?? {}) },
     training: normalizeTraining(raw.training)
   }
   for (const key of ['tickMs', 'statePollMs', 'maxExpansionNodes', 'maxInvalidAttempts', 'maxValueBytes', 'maxCapsuleDepth', 'snapshotKeep', 'reactiveEveryMs', 'respawnTimeoutMs']) {
     if (!(Number.isInteger(config[key]) && config[key] > 0)) throw new Error(`stevex-agent config: ${key} must be a positive integer`)
   }
-  for (const key of ['batchSize', 'batchMaxEvents', 'reflectMaxParallel', 'incidentQuietMs', 'episodeMergeMs', 'snapshotKeep', 'maxArms', 'maxEpisodeMs']) {
+  for (const key of ['batchSize', 'batchMaxEvents', 'reflectMaxParallel', 'incidentQuietMs', 'episodeMergeMs', 'snapshotKeep', 'maxArms', 'maxNodesPerArm', 'maxEpisodeMs']) {
     if (!(Number.isInteger(config.fast[key]) && config.fast[key] > 0)) throw new Error(`stevex-agent config: fast.${key} must be a positive integer`)
   }
   if (!(Number.isInteger(config.curate.everyTasks) && config.curate.everyTasks >= 0)) throw new Error('stevex-agent config: curate.everyTasks must be a non-negative integer (0 = manual only)')
   if (!(Number.isInteger(config.curate.listLimit) && config.curate.listLimit > 0)) throw new Error('stevex-agent config: curate.listLimit must be a positive integer')
-  for (const key of ['timeoutSec', 'pollMs']) {
+  for (const key of ['timeoutSec', 'wallTimeoutSec', 'pollMs']) {
     if (!(Number.isInteger(config.training[key]) && config.training[key] > 0)) throw new Error(`stevex-agent config: training.${key} must be a positive integer`)
   }
   for (const [name, arena] of Object.entries(config.training.arenas)) {
@@ -149,12 +170,26 @@ export function normalizeConfig(raw = {}) {
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
       throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of recipe names`)
     }
+    if (![2, 3].includes(arena.grid)) throw new Error(`stevex-agent config: training.arenas.${name}.grid must be 2 or 3`)
+    if (![null, 'crafting_table'].includes(arena.station)) throw new Error(`stevex-agent config: training.arenas.${name}.station must be "crafting_table" or null`)
+    for (const key of ['timeoutSec', 'wallTimeoutSec']) if (arena[key] !== undefined && !(Number.isInteger(arena[key]) && arena[key] > 0)) {
+      throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
+    }
+    for (const key of ['portions', 'crafts']) {
+      const value = arena[key]
+      if (value === undefined || value === null) continue
+      const match = /^(\d+)(?:-(\d+))?$/.exec(String(value))
+      if (!match || !(Number(match[1]) >= 1 && Number(match[2] ?? match[1]) <= 64 && Number(match[1]) <= Number(match[2] ?? match[1]))) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be "k" or "a-b" within 1-64`)
+      }
+    }
   }
   config.training.recipes = path.resolve(steveXRoot, config.training.recipes)
+  config.training.itemProps = path.resolve(steveXRoot, config.training.itemProps)
   for (const key of ['maxOutputChars', 'inspectMaxBytes']) {
     if (!(Number.isInteger(config.planner[key]) && config.planner[key] > 0)) throw new Error(`stevex-agent config: planner.${key} must be a positive integer`)
   }
-  for (const key of ['runtimeDir', 'fastTreeDir', 'capsulesDir', 'visionRoot', 'promptsDir']) {
+  for (const key of ['runtimeDir', 'fastTreeDir', 'capsulesDir', 'historyDir', 'visionRoot', 'promptsDir']) {
     if (config[key] !== null) config[key] = path.resolve(steveXRoot, config[key])
   }
   config.jsonSources = Object.fromEntries(
@@ -167,7 +202,7 @@ export function normalizeConfig(raw = {}) {
 function normalizeTraining(raw = {}) {
   const arenas = {}
   for (const [name, arena] of Object.entries({ ...DEFAULTS.training.arenas, ...(raw.arenas ?? {}) })) {
-    arenas[name] = { ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
+    arenas[name] = { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }
 }

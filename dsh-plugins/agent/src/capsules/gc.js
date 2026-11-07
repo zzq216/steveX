@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseRef } from './library.js'
+import { CapsuleVersions } from './versions.js'
 
 /**
  * 胶囊库 GC（胶囊库整理设计方案 §6，算法层 §8.6）：离线、由人跑（scripts/capsule-gc.js），默认只演练。
@@ -42,6 +43,9 @@ export function planGc({ dir, runtimeDir = null, fastTreeDir = null, stats = nul
   for (const [ref, row] of Object.entries(stats?.data.refs ?? {})) {
     if (row.lastUsed && row.lastUsed >= cutoff) mark(ref, `used within ${keepDays} days`)
   }
+
+  // 版本说明（胶囊版本说明方案 V11）："旧版更好"一侧、判断没被否定的版本是备选，不收
+  for (const [ref, reason] of new CapsuleVersions({ dir }).protectedVersions()) mark(ref, reason)
 
   // 传递闭包：保留下来的子树胶囊里再引用的版本
   const byRef = new Map(entries.map((e) => [e.ref, e]))

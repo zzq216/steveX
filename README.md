@@ -75,7 +75,7 @@ npm run extract-recipes    # 从 loom 缓存里的 MC jar 提取 → dsh-plugins
 cd ../..
 ```
 
-`recipes.json` 是 Mojang 数据，不进 git，每台机器自己生成。缺了它 agent 查不到配方。
+`recipes.json` 和 `item-props.json`（物品堆叠上限与合成剩余物，训练场多份模式用）已随仓库提交，clone 下来就能用。换 MC 版本或想重新生成时：`npm run extract-recipes`（读 loom 缓存里的 jar）、`npm run extract-item-props`（读下面的 `1.21.11_src/`）。
 
 ### 4. 准备源码基准 `1.21.11_src/`（可选）
 
@@ -195,7 +195,7 @@ npm run start:all
 | `/bt fact <陈述>` | 让 agent 查 MC 源码核实一句话，并写进事实库 |
 | `/bt facts [词]` / `/bt facts check` | 查事实库 / 重算引用、列出失效的事实 |
 | `/bt fast status \| log \| rollback <版本> \| reflect \| load <file>` | 快树（反射层）的状态、日志、回滚、反思 |
-| `/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>]` | 训练场：每轮新建一个会话（执行命令的会话只收进度通知）、重置 agent、发 1 份材料、发任务、按 `crafted` 统计判定，记录写 `runtime/training/<场地>.jsonl`；`/bt train status` 看进度，`/bt train stop` 中止。需要关闭作弊的单人世界，游戏内 `/arena craft2x2` 传送到场外平台（[训练场设计方案](docs/训练场设计方案.md)） |
+| `/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>] [n=<份数>] [m=<次数>]` | 训练场：每轮新建一个会话（执行命令的会话只收进度通知）、重置 agent、发 n 份材料、要求合成 m 次的产物（不写时 n 在 1–64 随机，`n=1 m=1` 是单次模式；做多了判失败）、发任务、按 `crafted` 统计判定，记录写 `runtime/training/<场地>.jsonl`；`/bt train status` 看进度，`/bt train stop` 中止。需要关闭作弊的单人世界，游戏内 `/arena craft2x2` 传送到场外平台（[训练场设计方案](docs/训练场设计方案.md)）。场地 `craft3x3` 是工作台 3×3 合成（[工作台训练场设计方案](docs/工作台训练场设计方案.md)） |
 
 不启动 DSH 也能跑手写树：`cd dsh-plugins/agent && node scripts/bt-run.js examples/recipe_query.json`。
 
