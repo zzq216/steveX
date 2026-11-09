@@ -462,7 +462,7 @@ export class Executor extends EventEmitter {
         // 调用胶囊的节点（Compute / 条件代码 / SubTree）退出时记下钉过哈希的引用：胶囊使用统计据此累计（整理方案 D1）
         ref: phase === 'exit' ? node.spec.ref ?? undefined : undefined,
         // 叶子本次发出的 mod 调用（任务历史方案 H1）：成本画像据此按节点 / 胶囊汇总
-        calls: phase === 'exit' && node.calls && (node.calls.actions || node.calls.reads) ? { ...node.calls } : undefined
+        calls: phase === 'exit' && node.calls && (node.calls.actions || node.calls.reads || node.calls.settle) ? { ...node.calls } : undefined
       }) : undefined
     }
   }

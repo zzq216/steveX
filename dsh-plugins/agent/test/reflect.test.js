@@ -44,12 +44,12 @@ const CAPSULE_BODY = {
 }
 const CAPSULE_SIGNATURE = { inputs: { n: { type: 'int', required: true } } }
 
-function setup({ reflect = {}, openReviewSession = null } = {}) {
+function setup({ reflect = {}, openReviewSession = null, notifyIdle = null } = {}) {
   const rt = makeRuntime()
   const delivered = []
   const notified = []
   const bridge = new Bridge({
-    executor: rt.executor, library: rt.library, sandbox: rt.sandbox, registry: rt.registry, prompts, reflect, openReviewSession,
+    executor: rt.executor, library: rt.library, sandbox: rt.sandbox, registry: rt.registry, prompts, reflect, openReviewSession, notifyIdle,
     deliver: (sessionId, message) => { delivered.push({ sessionId, ...message }); return true },
     notify: (sessionId, message) => notified.push({ sessionId, ...message })
   })
@@ -318,6 +318,7 @@ test('自动复盘另开会话：请求发到新会话、任务会话留一条�
   assert.equal(review.sessionId, 'r1')
   assert.match(review.text, /# 复盘请求 c1/)
   assert.match(ctx.notified.at(-1).text, /复盘 c1 在新会话 r1 里进行/)
+  assert.match(ctx.notified.at(-1).text, /^（仅通知，不需要处理）/)
   assert.equal(ctx.notified.at(-1).sessionId, 's1')
   assert.deepEqual(ctx.bridge.reviewSessions(req.taskId), ['r1'])
   ctx.bridge.onPreStep({ sessionId: 'r1', turn: 1, step: 1, messages: [{ source: review.source }] })
@@ -356,4 +357,16 @@ test('自动复盘另开会话：请求发到新会话、任务会话留一条�
   await runUntil(same.executor, () => same.executor.task.state === 'done')
   assert.equal(same.delivered.at(-1).sessionId, 's1')
   assert.match(same.delivered.at(-1).text, /# 复盘请求/)
+})
+
+test('复盘另开会话的通知走 notifyIdle（等任务会话空闲再插），不走 notify', async () => {
+  const idle = []
+  const ctx = setup({ openReviewSession: async () => 'r1', notifyIdle: (sessionId, message) => idle.push({ sessionId, ...message }) })
+  await planAndExpand(ctx)
+  await runUntil(ctx.executor, () => ctx.executor.task.state === 'done')
+  await [...ctx.bridge.requests.values()].find((r) => r.type === 'reflect').opening
+  assert.equal(idle.length, 1)
+  assert.equal(idle[0].sessionId, 's1')
+  assert.match(idle[0].text, /复盘 c1 在新会话 r1/)
+  assert.ok(!ctx.notified.some((m) => /在新会话/.test(m.text)), '不直接插进可能还在跑的回合')
 })

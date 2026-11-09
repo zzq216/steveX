@@ -41,6 +41,16 @@ const IN_TREE = {
   mod_query: ' Read state inside the tree: condition code { "cond": "code/…", "read": ["inventory"] } or { "compute": "code/…", "read": [...] } (state arrives as main(params, state)). To learn field names and enum values first, call data_shapes with sources ["state.<source>"].'
 }
 
+/**
+ * 复盘回合里被拒的查询工具 → 复盘能看到同样内容的地方（2026-11-09）。IN_TREE 的"写进树里"对复盘没用：复盘不交树。
+ * 任务已经结束，树读过的数据在黑板和快照里，bt_inspect 能看到值。
+ */
+const IN_REVIEW = {
+  json_query: ' In a review, the data that the tree of this task read is already on the blackboard with its values (e.g. the recipes its code/core.json.query wrote): bt_inspect { what: "blackboard", keys: ["<key>"] } — the directory in the review request lists the blackboard keys. To learn the record format only, call data_shapes with sources ["json.<source>"].',
+  nbt_query: ' In a review, look at what the tree read: bt_inspect { what: "blackboard", keys: [...] } for its query results, or the snapshots (bt_inspect what: "snapshot").',
+  mod_query: ' In a review the task has ended and the live state has moved on; look at the state the task saw: bt_inspect { what: "snapshot", name: "before@<node>" / "after@<node>" } (names are in the review directory) or the blackboard.'
+}
+
 /** 训练器发到控制台会话的通知的消息来源（T13 N2） */
 const TRAIN_SOURCE_KIND = 'stevex-train'
 
@@ -178,6 +188,14 @@ function setupPlanner(ctx, config, runtime) {
     },
     // 自动复盘另开会话（2026-11-07）：模型跟随任务会话当前的模型
     openReviewSession: (taskSessionId) => createSession({ selection: sessionModel(taskSessionId) ?? defaultModel() }),
+    // 复盘另开会话的通知：任务会话的规划回合可能还没结束，等它空闲再插（2026-11-09）
+    notifyIdle(sessionId, message) {
+      const agent = ctx.agents.get(sessionId)
+      if (!agent) return
+      Promise.resolve(agent.whenIdle?.())
+        .then(() => ctx.agents.get(sessionId)?.inject(toMessage(message)))
+        .catch((e) => logger?.warn?.(`[bt] notice delivery failed: ${e?.message ?? e}`))
+    },
     // 自动整理可能在复盘回合中途（bt_reflect_done 里）触发：回合还在 running 时 followup 叫不醒驱动器，等 idle 再发
     deliverIdle(sessionId, message) {
       const agent = ctx.agents.get(sessionId)
@@ -367,8 +385,10 @@ function setupPlanner(ctx, config, runtime) {
     if (turn && factTurns.isCheck(sessionId, turn.turn) && !bridge.turns.has(`${sessionId}#${turn.turn}`)) {
       return `steveX: ${exec.name} is not available while confirming an MC fact (allowed now: ${[...turn.allowed].join(', ')})`
     }
+    const reqType = turn && bridge.requests.get(bridge.turns.get(`${sessionId}#${turn.turn}`))?.type
+    const hint = reqType === 'reflect' ? (IN_REVIEW[exec.name] ?? IN_TREE[exec.name] ?? '') : (IN_TREE[exec.name] ?? '')
     return turn
-      ? `steveX: ${exec.name} is not available while answering an executor request (allowed now: ${[...turn.allowed].join(', ')}); the tree must read the data itself (I13).${IN_TREE[exec.name] ?? ''}`
+      ? `steveX: ${exec.name} is not available while answering an executor request (allowed now: ${[...turn.allowed].join(', ')}); the tree must read the data itself (I13).${hint}`
       : `steveX: ${exec.name} is not available in a steveX session`
   }))
 

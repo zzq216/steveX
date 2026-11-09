@@ -188,6 +188,16 @@ test('P1 适配层：/bt task → followup → 回合绑定（守卫按请求放
   assert.equal(agent.steers.length, 1)
   assert.equal(guardReason('mod_query', agent), undefined, '回合结束，回到会话名单')
 
+  // 复盘回合（2026-11-09）：被拒的查询给"复盘能看到同样内容的地方"，而不是"写进树里"
+  const { bridge } = ctx.stevexBt
+  bridge.requests.set('cR', { requestId: 'cR', type: 'reflect', taskId: 't-x', sessionId: 's1', answered: false, closed: false })
+  await emit('agent/pre-step', { agent, turn: 7, step: 1 }, enter([{ role: 'user', source: { kind: 'stevex-bt', requestId: 'cR' } }]))
+  assert.match(guardReason('json_query', agent), /bt_inspect \{ what: "blackboard"/)
+  assert.doesNotMatch(guardReason('json_query', agent), /Put the same params into the tree/)
+  assert.match(guardReason('mod_query', agent), /what: "snapshot"/)
+  bridge.turns.delete('s1#7')
+  bridge.requests.delete('cR')
+
   const { executor } = ctx.stevexBt
   executor.stop()
   for (let i = 0; i < 200 && executor.task.state !== 'suspended'; i++) {

@@ -59,7 +59,8 @@ export const DEFAULTS = Object.freeze({
   sandbox: { timeoutMs: 1000, conditionTimeoutMs: 50, maxOutputBytes: 65536 },
   maxCapsuleDepth: 8,
   /** 每个 Steps / Action 前后读哪些状态来源报告差异（可观测性） */
-  observe: { enabled: true, sources: ['inventory', 'container', 'f3'] },
+  /** settle：动作后隔 intervalMs 再读 inventory / container，连续两次一样才拍"执行后"快照，最多 maxReads 次；maxReads 0 = 不等（2026-11-09） */
+  observe: { enabled: true, sources: ['inventory', 'container', 'f3'], settle: { intervalMs: 50, maxReads: 4 } },
   timing: { clickWaitMs: 80, lookWaitMs: 150, pollMs: 100 },
   /** 本地应答器（没有大模型时回答请求）。DSH 里属于会话的任务的请求都交给大模型，它只回答 /bt run 的手写树 */
   localResponder: true,
@@ -143,7 +144,7 @@ export function normalizeConfig(raw = {}) {
     ...raw,
     timing: { ...DEFAULTS.timing, ...(raw.timing ?? {}) },
     sandbox: { ...DEFAULTS.sandbox, ...(raw.sandbox ?? {}) },
-    observe: { ...DEFAULTS.observe, ...(raw.observe ?? {}) },
+    observe: { ...DEFAULTS.observe, ...(raw.observe ?? {}), settle: { ...DEFAULTS.observe.settle, ...(raw.observe?.settle ?? {}) } },
     planner: { ...DEFAULTS.planner, ...(raw.planner ?? {}) },
     fast: { ...DEFAULTS.fast, ...(raw.fast ?? {}) },
     reflect: { ...DEFAULTS.reflect, ...(raw.reflect ?? {}) },

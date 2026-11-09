@@ -654,14 +654,15 @@ class WorldLeaf extends AsyncLeaf {
       result = await run()
     } catch (error) {
       if (signal.aborted || !before) throw error
-      const after = await this.game(ctx).read(observeSources).catch(() => null)
+      let after = await this.game(ctx).read(observeSources).catch(() => null)
+      if (after) after = await this.settle(ctx, signal, after).catch(() => after)
       if (after) ctx.onSnapshot?.(this, 'after', after)
       const diff = diffState(before, after)
       ctx.onObserve?.(this, diff)
       throw new Error(`${error.message}（失败前已发生：${summarizeDiff(diff)}）`)
     }
     if (sources.length === 0) return result
-    const after = await this.game(ctx).read(sources, signal)
+    const after = await this.settle(ctx, signal, await this.game(ctx).read(sources, signal))
     if (before) ctx.onSnapshot?.(this, 'after', after)
     const diff = before ? diffState(before, after) : null
     if (before) ctx.onObserve?.(this, diff)
@@ -670,7 +671,33 @@ class WorldLeaf extends AsyncLeaf {
     }
     return result
   }
+
+  /**
+   * 等状态稳定再定"执行后"（2026-11-09）：动作发出后立刻读到的可能是客户端还没收到服务端结果的中间状态
+   * （产物格 Shift 点击一次合成 32 次，紧接着的快照只显示 1 次），复盘拿它当证据会花几分钟对账，expect 也会误判。
+   * 隔 settle.intervalMs（约一个 tick）再读 inventory / container，连续两次一样就算稳定，最多 settle.maxReads 次。
+   * 这些读取记在 calls.settle，不算进节点的 reads（mod 调用的成本口径与以前的任务保持可比）。
+   */
+  async settle(ctx, signal, after) {
+    const { intervalMs = 50, maxReads = 0 } = ctx.observe?.settle ?? {}
+    const keys = SETTLE_SOURCES.filter((key) => after && key in after)
+    if (!maxReads || !keys.length) return after
+    const env = ctx.game.env(signal)
+    let last = after
+    for (let i = 0; i < maxReads; i++) {
+      await env.sleep(intervalMs)
+      this.calls.settle = (this.calls.settle ?? 0) + keys.length
+      const next = await ctx.game.read(keys, signal)
+      const stable = keys.every((key) => JSON.stringify(last[key]) === JSON.stringify(next[key]))
+      last = { ...last, ...next }
+      if (stable) break
+    }
+    return last
+  }
 }
+
+/** 等稳定时比较的状态来源（f3 里有时间、坐标等一直在变的字段，不参与） */
+const SETTLE_SOURCES = ['inventory', 'container']
 
 /**
  * Condition（§4.1）。只读、无副作用。条件来自两处，节点本身一样：

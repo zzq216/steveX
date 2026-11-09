@@ -255,3 +255,37 @@ test('端到端：查配方（json 查询）→ 算点击计划（Compute 读界
     assert.equal(mod.count('oak_planks'), 4, '合成格里放了 1 个原木 → 4 块木板')
     assert.equal(mod.count('oak_log'), 1, '另一个原木放回了原处')
   })
+
+test('快照等状态稳定（observe.settle）：动作后服务端结果晚到，"执行后"快照、差异与 expect 都看到稳定后的状态；等待的读取记在 calls.settle', async () => {
+  /** 产物格 Shift 点击那种：动作发出后，背包里的变化要再读两次才出现 */
+  class LaggyMod extends FakeMod {
+    handle(method, p) {
+      if (method === 'key/hotbar') {
+        this.lag = { readsLeft: 2, apply: () => { this.inv[5] = { id: 'minecraft:stick', count: 32 } } }
+        return {}
+      }
+      if (method === 'inventory' && this.lag && --this.lag.readsLeft <= 0) {
+        this.lag.apply()
+        this.lag = null
+      }
+      return super.handle(method, p)
+    }
+  }
+  const tree = { seq: 's', do: [{ act: 'key/hotbar', params: { slot: 1 }, expect: { cond: 'code/test.has-item', read: ['inventory'], params: { item: 'stick', count: 32 } } }] }
+
+  const settled = makeRuntime({ mod: new LaggyMod(), config: { observe: { enabled: true, sources: ['inventory', 'container', 'f3'], settle: { intervalMs: 1, maxReads: 4 } } } })
+  settled.executor.startTask({ tree })
+  await runUntil(settled.executor, () => settled.executor.task.state === 'done')
+  const diff = settled.events.find((e) => e.event === 'observe' && e.id === 'n1.1').diff
+  assert.deepEqual(diff.inventory, [{ slot: 5, before: '空', after: 'stick×32' }])
+  const exit = settled.events.find((e) => e.event === 'node' && e.id === 'n1.1' && e.phase === 'exit')
+  assert.equal(exit.calls.reads, 6, '前后各读 3 个来源，口径不变')
+  assert.ok(exit.calls.settle >= 4, '等稳定的读取单独记')
+
+  // 不等（maxReads 0，以前的行为）：expect 读到的是中间状态
+  const raw = makeRuntime({ mod: new LaggyMod(), config: { observe: { enabled: true, sources: ['inventory', 'container', 'f3'], settle: { maxReads: 0 } } } })
+  raw.executor.startTask({ tree })
+  await runUntil(raw.executor, () => raw.executor.task.state !== 'running')
+  const first = raw.events.find((e) => e.event === 'node' && e.id === 'n1.1' && e.status === 'FAILURE')
+  assert.match(first.error, /expect 不成立/)
+})

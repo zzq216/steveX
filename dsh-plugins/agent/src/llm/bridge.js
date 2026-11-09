@@ -94,6 +94,7 @@ export class Bridge {
    * @param {object} options.prompts  loadPrompts() 的结果
    * @param {(sessionId: string, message: OutgoingMessage) => boolean} options.deliver  叫醒会话（followup）；找不到会话返回 false
    * @param {(sessionId: string, message: OutgoingMessage) => void} [options.notify]    不叫醒地告知（任务结束）
+   * @param {(sessionId: string, message: OutgoingMessage) => void} [options.notifyIdle]  等会话空闲再不叫醒地告知（复盘另开会话的通知）；缺省 = notify
    * @param {string|null} [options.runtimeDir]  代码草稿落在 <runtimeDir>/tasks/<taskId>/code/
    * @param {number} [options.maxInvalidAttempts=3]
    * @param {(taskId: string) => void} [options.releaseTask]  规划作废时释放查询 API 按任务钉住的快照
@@ -104,7 +105,7 @@ export class Bridge {
    * @param {object} [options.curate]    { everyTasks, listLimit }（整理方案 §5.2 / §5.3）
    * @param {(sessionId, message) => boolean} [options.deliverIdle]  等会话空闲再 followup（自动整理可能在别的回合中途触发）；缺省 = deliver
    */
-  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null, openReviewSession = null }) {
+  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null, openReviewSession = null, notifyIdle = null }) {
     this.executor = executor
     this.library = library
     this.sandbox = sandbox
@@ -126,6 +127,7 @@ export class Bridge {
     this.deliver = deliver
     this.deliverIdle = deliverIdle ?? deliver
     this.notify = notify
+    this.notifyIdle = notifyIdle ?? notify
     this.runtimeDir = runtimeDir
     this.maxInvalidAttempts = maxInvalidAttempts
     this.releaseTask = releaseTask
@@ -372,8 +374,10 @@ export class Bridge {
     req.sessionId = target
     if (this.curateSession === taskSession) this.curateSession = target
     if (target !== taskSession) {
-      const text = `任务 ${req.taskId} 的复盘 ${req.requestId} 在新会话 ${target} 里进行。`
-      this.notify(taskSession, { text, summary: text, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId: req.requestId, reason: 'reflect-session' } })
+      // 等任务会话空闲再插：任务可能比规划回合的最后一步结束得还早（task-20261109120252-4 只执行 6 s），
+      // 插进还在跑的规划回合，模型会当成要它复盘，用规划回合的工具去做（2026-11-09）
+      const text = `（仅通知，不需要处理）任务 ${req.taskId} 的复盘 ${req.requestId} 在新会话 ${target} 里进行。`
+      this.notifyIdle(taskSession, { text, summary: text, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId: req.requestId, reason: 'reflect-session' } })
     }
     if (!this.deliver(target, message)) {
       this.closeReflect(req, 'abandoned', `session ${target} not found`)

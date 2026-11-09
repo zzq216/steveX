@@ -94,7 +94,7 @@ node scripts/bt-run.js examples/walk_loop.json --fast examples/fast_drowning.jso
 
 DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt status`、`/bt nodes`、`/bt pause | resume`、`/bt abort`、`/bt fast status | log | rollback <版本> | reflect | load <file>`、`/bt capsules`。
 
-事件日志与树版本写在 `steveX/runtime/tasks/<taskId>/`：`node` 事件是节点进出，`observe` 事件是每个 `Steps` / `Action` 前后的状态差异。
+事件日志与树版本写在 `steveX/runtime/tasks/<taskId>/`：`node` 事件是节点进出，`observe` 事件是每个 `Steps` / `Action` 前后的状态差异。"执行后"要等状态稳定再读（`observe.settle`：隔 `intervalMs` 再读 inventory / container，连续两次一样为止，最多 `maxReads` 次，`maxReads: 0` = 不等），这些读取记在 `calls.settle`，不算进成本画像的 mod 调用。
 
 ## 树文件格式
 
