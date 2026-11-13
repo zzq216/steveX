@@ -95,6 +95,14 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     const others = library.versionHashes(key).filter((h) => !inChain.has(h)).map((h) => ({ ref: `${key}@${h}`, usage: versionUsage(`${key}@${h}`, kind) }))
     return { rows, others }
   }
+  /**
+   * 数据源本身的事实（2026-11-13）：结构与词表看不出来、模型会去猜的性质。只描述数据，不说该怎么用。
+   * 起因：盾牌任务猜"配方里的木板是 #minecraft:planks 标签"，写了用不上的标签解析器还存进了库；
+   * 雕纹铜任务的 2x2 规划器把 [" M ", " M "] 当成 3 列宽。
+   */
+  const JSON_NOTES = {
+    recipes: 'key / ingredients 里的标签已经展开成具体物品 id（数据里没有 #minecraft:… 形式的标签）；shaped 的 pattern 按配方生成器里的写法原样保留，可能带空格组成的空列或空行（如 [" M ", " M "]）。'
+  }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),
     ...(json ? jsonSources.map((s) => `json.${s}`) : []),
@@ -119,7 +127,8 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     }
     if (kind === 'json') {
       const { doc } = await json.loadDocument(id, { taskId: taskId() })
-      return `json.${id}（树里：{ "compute": "code/core.json.query", "params": { "path": "${id}", "records": <记录数组的路径>, … } }）: ${structureOf(doc, { vocab: true })}`
+      const note = JSON_NOTES[id] ? `\n说明：${JSON_NOTES[id]}` : ''
+      return `json.${id}（树里：{ "compute": "code/core.json.query", "params": { "path": "${id}", "records": <记录数组的路径>, … } }）: ${structureOf(doc, { vocab: true })}${note}`
     }
     const { records } = await nbt.loadRecords(id, { taskId: taskId() })
     return `nbt.${id}（树里：{ "compute": "code/core.nbt.query", "params": { "path": "${id}", … } }）: ${structureOf(records)}`

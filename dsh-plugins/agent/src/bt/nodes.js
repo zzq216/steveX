@@ -429,7 +429,8 @@ export class ForEach extends Node {
  *
  * - 胶囊体在装载时实例化（build.js），内部节点 id = `<调用点 id>/<胶囊内 id>`
  * - 进入时创建实例帧：形参（params，`$` 在调用方解析）拷进去；胶囊里的读先查实例帧、再查任务帧；写只写实例帧
- * - 退出（SUCCESS / FAILURE 都算）时把 signature.outputs 声明的键拷回调用方，然后丢弃实例帧
+ * - 退出（SUCCESS / FAILURE 都算）时把 signature.outputs 声明的键拷回调用方，然后丢弃实例帧；
+ *   丢弃前把实例帧的值交给 ctx.onFrameExit 留一份（2026-11-13：树只有一个 use 时，复盘否则看不到配方、摆料计划这些中间值）
  * - 被中止时实例帧**冻结保留**（恢复时"这个胶囊走到哪了"是证据之一）
  */
 export class SubTree extends Node {
@@ -463,6 +464,7 @@ export class SubTree extends Node {
       return FAILURE
     }
     if (status === FAILURE) this.lastError = this.child.lastError
+    ctx.onFrameExit?.(this, this.frame.snapshot(), status)
     this.frame = null
     return status
   }

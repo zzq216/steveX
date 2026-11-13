@@ -46,7 +46,7 @@ const IN_TREE = {
  * 任务已经结束，树读过的数据在黑板和快照里，bt_inspect 能看到值。
  */
 const IN_REVIEW = {
-  json_query: ' In a review, the data that the tree of this task read is already on the blackboard with its values (e.g. the recipes its code/core.json.query wrote): bt_inspect { what: "blackboard", keys: ["<key>"] } — the directory in the review request lists the blackboard keys. To learn the record format only, call data_shapes with sources ["json.<source>"].',
+  json_query: ' In a review, the data that the tree of this task read is already on the blackboard with its values (e.g. the recipes its code/core.json.query wrote): bt_inspect { what: "blackboard", keys: ["<key>"] }; if it was written inside a use subtree, add id: "<use node id>" — the directory in the review request lists the blackboard keys and the subtree blackboards. To learn the record format only, call data_shapes with sources ["json.<source>"].',
   nbt_query: ' In a review, look at what the tree read: bt_inspect { what: "blackboard", keys: [...] } for its query results, or the snapshots (bt_inspect what: "snapshot").',
   mod_query: ' In a review the task has ended and the live state has moved on; look at the state the task saw: bt_inspect { what: "snapshot", name: "before@<node>" / "after@<node>" } (names are in the review directory) or the blackboard.'
 }

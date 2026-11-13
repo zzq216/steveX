@@ -201,13 +201,21 @@ export async function inspect(task, args, deps) {
       }
     }
     case 'blackboard': {
-      const all = task.blackboard.snapshot()
+      // id = 一个 use 节点：看那棵子树最近一次退出时的实例帧（2026-11-13）；不给 = 任务帧
+      const frames = task.frames ?? new Map()
+      const frameList = () => [...frames].map(([id, f]) => `${id} (${f.ref ?? '?'}: ${Object.keys(f.values).join(', ') || 'empty'})`).join('; ') || '(none)'
+      const frame = args.id ? frames.get(args.id) : null
+      if (args.id && !frame) return { ok: false, error: `no subtree frame for "${args.id}" (only use nodes that have exited keep one); kept: ${frameList()}` }
+      const all = frame ? frame.values : task.blackboard.snapshot()
       const keys = Array.isArray(args.keys) && args.keys.length ? args.keys : null
-      if (!keys) return { ok: false, error: `keys must be a non-empty list; the blackboard has: ${Object.keys(all).join(', ') || '(empty)'}` }
+      if (!keys) return { ok: false, error: `keys must be a non-empty list; ${frame ? `the frame of ${args.id} has` : 'the blackboard has'}: ${Object.keys(all).join(', ') || '(empty)'}${!frame && frames.size ? `; subtree frames (pass id): ${frameList()}` : ''}` }
       const values = {}
       const missing = []
       for (const key of keys) (key in all ? (values[key] = all[key]) : missing.push(key))
-      return { ok: true, what, value: missing.length ? { values, missing } : { values } }
+      const value = missing.length ? { values, missing } : { values }
+      if (frame) Object.assign(value, { frame: { id: args.id, ref: frame.ref, status: frame.status } })
+      else if (missing.length && frames.size) value.subtreeFrames = frameList()
+      return { ok: true, what, value }
     }
     case 'live': {
       const sources = Array.isArray(args.sources) && args.sources.length ? args.sources : ALL_STATE_SOURCES
@@ -282,6 +290,7 @@ export function buildReflectDirectory(task, { drafts = [] } = {}) {
     snapshots: task.snapshots.names(),
     events: { total: task.events.length, kinds: eventKinds },
     blackboard: Object.keys(task.blackboard.snapshot()),
+    frames: [...(task.frames ?? new Map())].map(([id, f]) => ({ id, ref: f.ref, keys: Object.keys(f.values) })),
     drafts: draftRows
   }
 }
@@ -298,6 +307,7 @@ export function renderReflectDirectory(dir) {
   lines.push(`快照（bt_inspect what=snapshot）：${snaps.length ? `${snaps.slice(0, 12).join(', ')}${snaps.length > 12 ? `, …（共 ${snaps.length} 份）` : `（共 ${snaps.length} 份）`}` : '（无）'}`)
   lines.push(`事件（bt_inspect what=events）：${dir.events.total} 条（${Object.entries(dir.events.kinds).map(([k, n]) => `${k} ${n}`).join(' · ')}）`)
   lines.push(`黑板键（bt_inspect what=blackboard）：${dir.blackboard.length ? dir.blackboard.join(' · ') : '（空）'}`)
+  if (dir.frames?.length) lines.push(`子树黑板（退出时的值，bt_inspect what=blackboard 加 id=<节点>）：${dir.frames.map((f) => `${f.id}（${f.ref ?? '?'}）：${f.keys.join(' · ') || '（空）'}`).join('；')}`)
   lines.push(`代码草稿：${dir.drafts.length ? dir.drafts.map((d) => `${d.ref}（${d.usedBy.length ? `被 ${d.usedBy.join('、')} 引用，执行 ${d.runs} 次、成功 ${d.successes} 次` : '没有节点引用'}）`).join('；') : '（无）'}`)
   return lines.join('\n')
 }

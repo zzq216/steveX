@@ -29,6 +29,9 @@ import { SnapshotBuffer, ALL_STATE_SOURCES, buildDirectory, inspect } from './ev
  * 没有大模型的场合（scripts/bt-run.js）用一个本地应答器顶上（恢复 = 空补丁）。
  * 一个任务同时至多一个在飞请求（I4）：在飞期间的新事件把它标成 stale，回答时被拒并附上新证据。
  */
+/** 每个任务最多留几棵子树的实例帧（同一个 use 节点只留最近一次退出的） */
+const MAX_FRAMES = 50
+
 export class Executor extends EventEmitter {
   /**
    * @param {object} options
@@ -129,6 +132,7 @@ export class Executor extends EventEmitter {
       expansionNode: null,
       lastObservation: null,
       snapshots: new SnapshotBuffer({ keep: this.config.snapshotKeep }),
+      frames: new Map(),   // use 节点 id → 子树最近一次退出时的实例帧 { ref, status, at, values }（复盘用 bt_inspect blackboard id 看）
       events: [],
       queries: new Map(),  // 查询节点 id → 最近一次读到的数据源版本（P2-D17）
       versionRows: [],     // 最近一次比较的结果（过期被拒时的目录用）
@@ -446,6 +450,11 @@ export class Executor extends EventEmitter {
       onSnapshot: task ? (node, phase, state) => {
         if (phase === 'before') task.snapshots.leafBefore(node.id, state, this.now())
         else task.snapshots.leafAfter(node.id, state, this.now())
+      } : undefined,
+      onFrameExit: task ? (node, values, status) => {
+        task.frames.delete(node.id)
+        task.frames.set(node.id, { ref: node.spec.ref ?? null, status, at: this.now(), values })
+        while (task.frames.size > MAX_FRAMES) task.frames.delete(task.frames.keys().next().value)
       } : undefined,
       onObserve: task ? (node, diff) => {
         task.lastObservation = { nodeId: node.id, diff }

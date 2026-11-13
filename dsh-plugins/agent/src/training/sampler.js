@@ -19,9 +19,25 @@ export function loadRecipes(file) {
 }
 
 export function fitsGrid(recipe, grid = 2) {
-  if (recipe.type === 'shaped') return recipe.pattern.length <= grid && recipe.pattern.every((row) => row.length <= grid)
+  if (recipe.type === 'shaped') {
+    const { rows, cols } = patternSize(recipe.pattern)
+    return rows <= grid && cols <= grid
+  }
   if (recipe.type === 'shapeless') return recipe.ingredients.length <= grid * grid
   return false
+}
+
+/**
+ * 有序配方图案实际占的行列数（2026-11-13）：配方数据里的 pattern 按生成器原样保留，可能带空格组成的空行空列
+ * （雕纹铜 [" M ", " M "]、重锤 [" # ", " I "]）；游戏匹配时会去掉它们（ShapedRecipePattern 收缩），
+ * 只按原样量宽度会把放得进 2x2 的配方算成 3x3、混进 craft3x3 的候选。
+ */
+export function patternSize(pattern) {
+  const rows = pattern.filter((row) => row.trim() !== '')
+  if (!rows.length) return { rows: 0, cols: 0 }
+  const left = Math.min(...rows.map((row) => row.search(/\S/)))
+  const right = Math.max(...rows.map((row) => row.trimEnd().length))
+  return { rows: rows.length, cols: right - left }
 }
 
 /**

@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { candidates, craftableResults, fitsGrid, maxPortions, parseCountSpec, sample, shapeOf, slotsNeeded } from '../src/training/sampler.js'
+import { candidates, craftableResults, fitsGrid, maxPortions, parseCountSpec, patternSize, sample, shapeOf, slotsNeeded } from '../src/training/sampler.js'
 import { Trainer, judge, parseTrainArgs, resolveCounts, sliceTurns, sumTurnUsage } from '../src/training/trainer.js'
 import { CommandRegistry } from '../src/game/registry.js'
 import { registerRawCommands, isAgentMethod } from '../src/game/raw_commands.js'
@@ -27,6 +27,13 @@ const prompts = loadPrompts(fileURLToPath(new URL('../prompts', import.meta.url)
 
 test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable results', () => {
   assert.equal(fitsGrid(RECIPES[4]), false, 'a 3-wide pattern does not fit')
+  // 空行空列不算（2026-11-13）：游戏匹配时会去掉；只按原样量宽度会把它们算成 3x3
+  const padded = { name: 'chiseled', result: 'minecraft:chiseled_copper', count: 1, type: 'shaped', pattern: [' M ', ' M '], key: { M: ['minecraft:cut_copper_slab'] } }
+  assert.equal(fitsGrid(padded), true, 'padded columns are trimmed')
+  assert.deepEqual(patternSize(['   ', ' # ', ' I ']), { rows: 2, cols: 1 })
+  assert.deepEqual(patternSize(['#  ', '## ', '###']), { rows: 3, cols: 3 }, 'stairs stay 3x3')
+  assert.deepEqual(candidates([padded], [], 3), [], 'not a 3x3 candidate')
+  assert.deepEqual(candidates([padded], [], 2).map((r) => r.name), ['chiseled'])
   const pool = candidates(RECIPES, ['crafting_table'])
   assert.deepEqual(pool.map((r) => r.name), ['stick', 'oak_button', 'shears'])
 

@@ -37,7 +37,7 @@ export function treeTools({ bridge, maxOutputChars, inspectMaxBytes = 8000 }) {
         '- snapshot：一份快照（name 取自目录，如 before@n1.3.2、episode-end）；sources 只取部分来源；against 给另一份快照名 → 返回两份之间的差异',
         '- node：一个节点的定义、状态、错误、执行次数、补丁来源',
         '- eval：用现在（或 at 指定的快照里）的状态和当前黑板对一个 cond 节点求值',
-        '- blackboard：黑板里 keys 这些键的值',
+        '- blackboard：黑板里 keys 这些键的值；给 id（一个 use 节点）= 那棵子树最近一次退出时它自己黑板里的值（子树里写的中间结果只留在那里）',
         '- live：现在读一次 sources（player / inventory / container / f3，缺省全读），同时存成 live#n 快照供之后对比',
         '- versions：本任务读过的记忆数据源的版本',
         '- tree：树的版本链。不给 version = 版本表（每一版从哪来：大纲 / 展开 / 修复）；给 version = 那一版的树；再给 against（另一个版本号）= 两版之差',
@@ -53,7 +53,7 @@ export function treeTools({ bridge, maxOutputChars, inspectMaxBytes = 8000 }) {
         against: { type: 'string', description: 'snapshot：另一份快照名，给了就返回差异（from = against，to = name）；tree：另一个版本号（如 "3"）' },
         version: { type: 'integer', description: 'tree：版本号' },
         sources: { type: 'array', items: { type: 'string', enum: [...ALL_STATE_SOURCES] }, description: 'snapshot / live：只要这些来源' },
-        id: { type: 'string', description: 'node / eval：节点 id' },
+        id: { type: 'string', description: 'node / eval：节点 id；blackboard：use 节点 id（看子树的黑板）' },
         at: { type: 'string', description: 'eval：用这份快照求值（缺省 = 现在读）' },
         keys: { type: 'array', items: { type: 'string' }, description: 'blackboard：要看的键' }
       },

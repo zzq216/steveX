@@ -137,6 +137,7 @@ test('data_shapes：白名单 JSON 给全量记录的结构与词表；默认不
   assert.match(out, /result: string（\d+\+? 种）/, '取值多的字段（物品 id）只给种数')
   assert.match(out, /key\?: map<"#" \| .*, list\(.*\) of string（\d+\+? 种）>/, '键是数据的对象显示成 map')
   assert.doesNotMatch(out, /wooden_pickaxe|oak_planks/, '具体物品 id 不出现')
+  assert.match(out, /说明：key \/ ingredients 里的标签已经展开成具体物品 id.*可能带空格组成的空列或空行/, '数据源本身的性质写明，免得猜')
   const all = await call('data_shapes', {})
   assert.deepEqual(Object.keys(all), ['state.player', 'state.inventory', 'state.f3', 'state.container', 'json.recipes'])
 })

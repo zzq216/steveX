@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { FakeMod, allRecipes } from './fake_mod.js'
+import { buildReflectDirectory, renderReflectDirectory } from '../src/bt/evidence.js'
 import { makeRuntime, runUntil } from './helpers.js'
 
 // ── ForEach ─────────────────────────────────────────────────────────────────
@@ -181,6 +182,24 @@ test('SubTree：实例帧装形参与内部变量，退出时只把 outputs 拷�
   assert.deepEqual(executor.task.blackboard.snapshot(), { target: 6, pressed: 2 }, 'scratch / slot 留在实例帧里，没有漏出来')
   assert.ok(executor.task.byId.has('n1.1/c.1'))
   assert.match(executor.task.spec.children[0].ref, /^trees\/test\.press-twice@/)
+})
+
+test('SubTree：退出时实例帧留一份在任务上，bt_inspect blackboard 给 id 能看到子树里的中间值；复盘目录列出子树黑板', async () => {
+  const { executor } = makeRuntime({ capsules: [pressTwice] })
+  executor.startTask({ blackboard: { target: 6 }, tree: { seq: 's', do: [{ use: 'trees/test.press-twice', params: { slot: '$target' } }] } })
+  await runUntil(executor, () => executor.task.state === 'done')
+  const task = executor.task
+  const top = await executor.inspect({ what: 'blackboard', keys: ['scratch'] }, { reflect: true })
+  assert.deepEqual(top.value.missing, ['scratch'])
+  assert.match(top.value.subtreeFrames, /n1\.1 \(trees\/test\.press-twice@\w+: slot, pressed, scratch\)/, '任务帧里没有时指向子树黑板')
+  const inner = await executor.inspect({ what: 'blackboard', id: 'n1.1', keys: ['scratch', 'slot', 'pressed'] }, { reflect: true })
+  assert.equal(inner.ok, true, JSON.stringify(inner))
+  assert.deepEqual(inner.value.values, { scratch: { status: 'ok' }, slot: 6, pressed: 2 }, 'scratch = 第二次按键的返回值')
+  assert.equal(inner.value.frame.status, 'SUCCESS')
+  assert.match((await executor.inspect({ what: 'blackboard', id: 'n9' }, { reflect: true })).error, /no subtree frame for "n9".*kept: n1\.1/)
+  const dir = renderReflectDirectory(buildReflectDirectory(task))
+  assert.match(dir, /子树黑板（退出时的值，bt_inspect what=blackboard 加 id=<节点>）：n1\.1（trees\/test\.press-twice@\w+）：slot · pressed · scratch/)
+  assert.deepEqual(task.blackboard.snapshot(), { target: 6, pressed: 2 }, '任务帧照旧只拿到 outputs')
 })
 
 test('SubTree：调用点参数按 signature 校验', () => {
