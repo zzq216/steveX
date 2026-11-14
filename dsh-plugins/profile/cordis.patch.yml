@@ -74,7 +74,7 @@
         modUrl: ws://127.0.0.1:25550
         tickMs: 50
         statePollMs: 200
-        maxExpansionNodes: 15
+        maxExpansionNodes: 100
         maxInvalidAttempts: 3
         capsulesDir: src/capsules
         jsonSources:

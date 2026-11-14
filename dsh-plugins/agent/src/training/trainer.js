@@ -1,33 +1,32 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { renderTemplate } from '../llm/prompts.js'
-import { candidates, craftableResults, fitsGrid, loadItemProps, loadRecipes, parseCountSpec, sample } from './sampler.js'
+import { loadItemProps, loadRecipes, parseCountSpec } from './sampler.js'
+import { craft, judge, resolveCounts } from './craft.js'
+import { STORAGE_CHOICES, parseTypesSpec, storage } from './storage.js'
+
+export { judge, resolveCounts }
 
 /**
- * 训练器（训练场设计方案 §3）：/bt train 每轮"给材料 → 发任务 → 判定 → 记录"，可连续多轮。
+ * 训练器（训练场设计方案 §3）：/bt train 每轮"出题 → 发任务 → 判定 → 记录"，可连续多轮。
  *
  * 每轮一个新会话（T13）：执行 /bt train 的会话只当控制台，每轮开始、结束各插一条通知；
  * 本轮的规划、执行、复盘都在本轮自己的会话里，轮与轮之间不共享上下文。
  *
  * 一轮：
- *   等空闲（上一轮的复盘 / 整理结束，T11）→ 新建本轮会话 → arena/prepare（重置 + 发材料）→ startPlanning（计时起点 t0）
+ *   等空闲（上一轮的复盘 / 整理结束，T11）→ 新建本轮会话 → arena/prepare（重置 + 布置）→ startPlanning（计时起点 t0）
  *   → 每 pollMs 查 arena/status，等任务 done / failed、规划作废或超时（超时中止任务，T6）
- *   → arena/finish（读最终状态、传送出场）→ 等本轮会话空闲（复盘结束）→ 统计回合与 token → 追加一行 jsonl
+ *   → arena/finish（读最终状态、传送出场）→ 判定 → 等本轮会话空闲（复盘结束）→ 统计回合与 token → 追加一行 jsonl
  *
- * 判定只看事实（T4）：crafted 统计有没有增加 + 任务怎么结束的。合成成功不打断 agent，只记时刻。
- *
- * 多份材料、指定产物个数（T14）：每轮发 n 份材料，要求合成 want = m × 单次产量 个；做出的个数 made 由
- * crafted 统计的差值给出（取出几个计几个）。made > want 判 overshoot（失败）。n、m 不写时在默认范围里随机；
- * 显式 n=1 m=1 是单次模式，与 T14 之前完全一样（原模板、原随机数序列、原判定）。
- *
- * 工作台场地（工作台训练场设计方案）：grid=3 的候选按形状分组抽（W4）；prepare 补回工作台并把准星对准它，
- * 服务器射线自检 aimOk=false 时本轮记 aborted 并停止整组（W2）；记录多 openedMs、stationIntact（W8、W9）。
+ * 题型（箱子训练场设计方案 C11）：场地配置的 type 选题型模块——craft（craft.js，合成，缺省）、storage（storage.js，
+ * 箱子存取）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
+ * 有工作站的场地：prepare 的服务器射线自检不过（题型的 afterPrepare 报错）时本轮记 aborted 并停止整组（W2）；
+ * 记录里有 openedMs、stationIntact（W8、W9）。
  */
 
-/** 场地名就是类型名；每类要有 prompts/training/<类型>_<模式>.md。 */
-const KINDS = ['craft2x2', 'craft3x3']
-/** prepare 之后等客户端更新准星目标（W2）：客户端要过 1 个 tick 才知道准星指着工作台 */
+/** 场地配置的 type → 题型模块 */
+const TASK_TYPES = { craft, storage }
+/** prepare 之后等客户端更新准星目标（W2）：客户端要过 1 个 tick 才知道准星指着工作站 */
 const AIM_SETTLE_MS = 100
 /** 中止之后等任务真正停下的上限 */
 const SETTLE_TIMEOUT_MS = 30000
@@ -39,28 +38,34 @@ const AFTER_TASK_REQUESTS = ['reflect', 'curate']
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const seconds = (label, ms) => (ms === null || ms === undefined ? '' : `，${label} ${(ms / 1000).toFixed(1)} 秒`)
 
-/** 不写 n 时的默认范围（T14） */
-const DEFAULT_PORTIONS = '1-64'
+/** 题型选项的命令行名 → start() 的参数名（n、m 是合成题的份数与次数） */
+const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', types: 'types' }
 
 /**
- * `/bt train` 的参数：`<场地> [item=…] [runs=…] [seed=…] [n=…] [m=…]`。n、m 原样留成字符串（"4" / "2-5"），start 里解析。
- * @returns {{ ok: true, arena, item, runs, seed, portions, crafts } | { ok: false, error }}
+ * `/bt train` 的参数：`<场地> [item=…] [runs=…] [seed=…]`，合成题另有 `[n=…] [m=…]`，箱子题另有
+ * `[kind=…] [rel=…] [chest=…] [stack=…] [types=…]`。这里只查写法；哪个场地认哪些选项由 start 按题型查。
+ * n、m、types 原样留成字符串（"4" / "2-5"），start 里解析。
+ * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, types } | { ok: false, error }}
  */
 export function parseTrainArgs(words) {
   const [arena, ...options] = words
   if (!arena) return { ok: false, error: '缺场地名，例如 /bt train craft2x2' }
-  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null }
+  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, types: null }
   for (const option of options) {
-    const match = /^(item|runs|seed|n|m)=(.+)$/.exec(option)
-    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed= / n= / m=）` }
+    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|types)=(.+)$/.exec(option)
+    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / types=）` }
     const [, key, value] = match
-    if (key === 'n' || key === 'm') {
+    if (key === 'n' || key === 'm' || key === 'types') {
       try {
-        parseCountSpec(value, key)
+        if (key === 'types') parseTypesSpec(value)
+        else parseCountSpec(value, key)
       } catch (error) {
         return { ok: false, error: error.message }
       }
-      out[key === 'n' ? 'portions' : 'crafts'] = value
+      out[OPTION_NAMES[key]] = value
+    } else if (STORAGE_CHOICES[key]) {
+      if (!STORAGE_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${STORAGE_CHOICES[key].join(' / ')}` }
+      out[key] = value
     } else if (key === 'item') {
       if (!/^([a-z0-9_.-]+:)?[a-z0-9_/.-]+$/.test(value)) return { ok: false, error: `item 不像物品 id：${value}` }
       out.item = value
@@ -116,41 +121,6 @@ export function sumTurnUsage(events, turns, deriveUsage) {
   return sum
 }
 
-/**
- * 判定（T4；给了 wanted 时按 T14 的个数判定：做多了 overshoot，恰好做够才算做成）。
- * @returns {'success'|'crafted_but_failed'|'false_success'|'failed'|'timeout'|'aborted'|'overshoot'}
- */
-export function judge({ stopped, timedOut, setupError, taskState, crafted, made = null, wanted = null }) {
-  if (stopped || setupError) return 'aborted'
-  if (timedOut) return 'timeout'
-  if (wanted !== null) {
-    if (made > wanted) return 'overshoot'
-    crafted = made === wanted
-  }
-  if (taskState === 'done') return crafted ? 'success' : 'false_success'
-  return crafted ? 'crafted_but_failed' : 'failed'
-}
-
-/**
- * 本组的 n、m（T14）：命令行 > 场地配置 > 缺省。显式 n=1 m=1 = 单次模式；hidden 场地缺省就是单次模式。
- * @returns {{ single: true } | { single: false, portions: {lo,hi}, crafts: {lo,hi}|null }}  不合法抛错
- */
-export function resolveCounts({ portions, crafts }, arenaConfig) {
-  const nText = portions ?? arenaConfig.portions ?? null
-  const mText = crafts ?? arenaConfig.crafts ?? null
-  const n = nText !== null ? parseCountSpec(nText, 'n') : null
-  const m = mText !== null ? parseCountSpec(mText, 'm') : null
-  const one = (spec) => spec && spec.lo === 1 && spec.hi === 1
-  if (one(n) && one(m)) return { single: true }
-  if (arenaConfig.mode === 'hidden') {
-    if (n === null && m === null) return { single: true }
-    throw new Error('hidden 模式不说出目标，没法要求个数：只能用单次模式（n=1 m=1 或不写）')
-  }
-  const range = n ?? parseCountSpec(DEFAULT_PORTIONS, 'n')
-  if (m && m.lo > range.hi) throw new Error(`m 不能大于 n（m=${mText}，n=${nText ?? DEFAULT_PORTIONS}）`)
-  return { single: false, portions: range, crafts: m }
-}
-
 export class Trainer {
   /**
    * @param {object} options
@@ -202,28 +172,26 @@ export class Trainer {
    * 开始一组训练（后台跑，立即返回）。
    * @returns {{ ok: true, text } | { ok: false, error }}
    */
-  start({ sessionId, arena, item = null, runs = 1, seed = null, portions = null, crafts = null }) {
+  start({ sessionId, arena, item = null, runs = 1, seed = null, ...options }) {
     if (this.batch) return { ok: false, error: `训练 ${this.batch.id} 还在进行（第 ${this.batch.run}/${this.batch.runs} 轮）；先 /bt train stop` }
     if (!sessionId) return { ok: false, error: '/bt train 只能在会话里用' }
-    if (!KINDS.includes(arena)) return { ok: false, error: `未知场地 ${arena}（目前只有 ${KINDS.join(', ')}）` }
-    if (!this.config.arenas[arena]) return { ok: false, error: `配置里没有场地 ${arena}（training.arenas）` }
-    const arenaConfig = { grid: 2, station: null, ...this.config.arenas[arena] }
-    let pool
-    let reach
-    let counts
+    if (!this.config.arenas[arena]) return { ok: false, error: `未知场地 ${arena}（配置 training.arenas 里有 ${Object.keys(this.config.arenas).join(', ')}）` }
+    const type = this.config.arenas[arena].type ?? 'craft'
+    const task = TASK_TYPES[type]
+    if (!task) return { ok: false, error: `场地 ${arena} 的题型 ${type} 不认识（只有 ${Object.keys(TASK_TYPES).join(', ')}）` }
+    const arenaConfig = type === 'craft' ? { grid: 2, station: null, ...this.config.arenas[arena] } : { ...this.config.arenas[arena] }
+    const args = { item, ...options }
+    const foreign = Object.entries(OPTION_NAMES).filter(([, name]) => args[name] !== null && args[name] !== undefined && !task.options.includes(name))
+    if (foreign.length) return { ok: false, error: `场地 ${arena}（${type}）不认这些选项：${foreign.map(([flag]) => flag).join('、')}` }
+    let ctx
     try {
-      counts = resolveCounts({ portions, crafts }, arenaConfig)
-      if (!counts.single && !this.itemProps()) throw new Error(`多份模式需要 ${this.config.itemProps}（在 dsh-plugins/agent 里运行 npm run extract-item-props）；只练单次合成用 n=1 m=1`)
-      pool = this.candidates(arenaConfig)
-      reach = this.recipes().filter((r) => fitsGrid(r, arenaConfig.grid))
-      // 目标没有配方、或这个目标的材料怎么都放不下，就当场报错，不等到第一轮
-      if (item) sample(pool, 0, item, this.sampleOptions(arenaConfig, counts))
+      ctx = task.setup(this, arena, arenaConfig, args)
     } catch (error) {
       return { ok: false, error: error.message }
     }
     const batch = {
       id: `b${new Date(this.now()).toISOString().replace(/[-:T]/g, '').slice(0, 14)}`,
-      arena, arenaConfig, pool, reach, counts, sessionId, item, runs, seed,
+      arena, arenaConfig, task, ctx, sessionId, item, runs, seed,
       run: 0, outcomes: {}, current: null, stopping: false
     }
     this.batch = batch
@@ -233,9 +201,7 @@ export class Trainer {
         if (this.batch === batch) this.batch = null
         this.last = batch
       })
-    const what = item ? `目标 ${item}` : '每轮随机目标'
-    const how = counts.single ? '单次模式' : `n=${specText(counts.portions)}，m=${counts.crafts ? specText(counts.crafts) : '随 n'}`
-    return { ok: true, text: `训练 ${batch.id} 开始：场地 ${arena}，${runs} 轮，${what}，${how}${seed !== null ? `，seed=${seed}` : ''}。进度用 /bt train status 看` }
+    return { ok: true, text: `训练 ${batch.id} 开始：场地 ${arena}，${runs} 轮，${task.startText(ctx)}${seed !== null ? `，seed=${seed}` : ''}。进度用 /bt train status 看` }
   }
 
   /**
@@ -274,7 +240,7 @@ export class Trainer {
     const current = batch.current
     if (this.batch && current) {
       const elapsed = current.t0 ? `${Math.round((this.now() - current.t0) / 1000)}s` : '未开始'
-      lines.push(`本轮：${current.target}${current.amount}（配方 ${current.recipe}，seed=${current.seed}），${current.phase}，已用 ${elapsed}${current.sessionId ? `，会话 ${current.sessionId}` : ''}${current.taskId ? `，任务 ${current.taskId}` : ''}`)
+      lines.push(`本轮：${current.label}，${current.phase}，已用 ${elapsed}${current.sessionId ? `，会话 ${current.sessionId}` : ''}${current.taskId ? `，任务 ${current.taskId}` : ''}`)
     }
     const outcomes = Object.entries(batch.outcomes).map(([k, v]) => `${k} ${v}`).join('，')
     lines.push(`结果：${outcomes || '（还没有）'}`)
@@ -287,24 +253,16 @@ export class Trainer {
     this.batch.stoppingAt ??= this.now()
   }
 
+  /** 配方表（合成题出题用），读一次 */
   recipes() {
     this.pool ??= loadRecipes(this.config.recipes)
     return this.pool
   }
 
-  candidates(arenaConfig) {
-    return candidates(this.recipes(), arenaConfig.exclude, arenaConfig.grid)
-  }
-
-  /** data/item-props.json（只有多份模式要用）；文件不在 → null */
+  /** data/item-props.json（合成题的多份模式、箱子题要用）；文件不在 → null */
   itemProps() {
     if (this.props === undefined) this.props = loadItemProps(this.config.itemProps)
     return this.props
-  }
-
-  sampleOptions(arenaConfig, counts) {
-    const options = { grid: arenaConfig.grid, byShape: arenaConfig.grid >= 3 }
-    return counts.single ? options : { ...options, portions: counts.portions, crafts: counts.crafts, props: this.itemProps() }
   }
 
   async runBatch(batch) {
@@ -320,8 +278,9 @@ export class Trainer {
       const record = await this.runOne(batch, i, seed)
       batch.outcomes[record.outcome] = (batch.outcomes[record.outcome] ?? 0) + 1
       this.write(batch.arena, record)
-      this.log(`[train] ${batch.id} #${i} ${record.target}: ${record.outcome}${record.craftedMs !== null ? ` (${record.craftedMs} ms)` : ''}${record.error ? ` — ${record.error}` : ''}`)
-      this.tellConsole(batch, `第 ${i}/${batch.runs} 轮结果 ${record.outcome}${seconds('合成用时', record.craftedMs)}${seconds('任务用时', record.taskMs)}${record.error ? `（${record.error}）` : ''}`)
+      const timings = batch.task.timings(record)
+      this.log(`[train] ${batch.id} #${i} ${record.target}: ${record.outcome}${timings.map(([label, ms]) => (ms === null || ms === undefined ? '' : ` (${label} ${ms} ms)`)).join('')}${record.error ? ` — ${record.error}` : ''}`)
+      this.tellConsole(batch, `第 ${i}/${batch.runs} 轮结果 ${record.outcome}${timings.map(([label, ms]) => seconds(label, ms)).join('')}${seconds('任务用时', record.taskMs)}${record.error ? `（${record.error}）` : ''}`)
       if (record.setupFailed) break
     }
     batch.current = null
@@ -340,29 +299,22 @@ export class Trainer {
   }
 
   async runOne(batch, run, seed) {
-    const { arena, arenaConfig } = batch
-    const { grid, station } = arenaConfig
+    const { arena, arenaConfig, task, ctx } = batch
     const timeoutSec = arenaConfig.timeoutSec ?? this.config.timeoutSec
     const wallTimeoutSec = arenaConfig.wallTimeoutSec ?? this.config.wallTimeoutSec
-    const mode = arenaConfig.mode
-    const single = batch.counts.single
     let picked
     try {
-      picked = sample(batch.pool, seed, batch.item, this.sampleOptions(arenaConfig, batch.counts))
+      picked = task.sample(ctx, seed)
     } catch (error) {
-      // 换了几次配方都放不下（T14）：本轮记 aborted 并停止整组
-      return { arena, run, batch: batch.id, seed, grid, mode, single, outcome: 'aborted', error: `sample: ${error.message}`, setupFailed: true }
+      // 出不了题（合成题换了几次配方都放不下，T14）：本轮记 aborted 并停止整组
+      return { arena, run, batch: batch.id, seed, ...task.batchFields(ctx), outcome: 'aborted', error: `sample: ${error.message}`, setupFailed: true }
     }
-    const watch = craftableResults(batch.reach, picked.materials, picked.target)
-    const amount = single ? '' : ` ×${picked.wanted}（${picked.portions} 份材料）`
-    const current = { run, seed, recipe: picked.recipe, target: picked.target, amount, phase: '等空闲', t0: null, sessionId: null, taskId: null }
+    const label = task.label(ctx, picked, seed)
+    const current = { run, seed, label, phase: '等空闲', t0: null, sessionId: null, taskId: null }
     batch.current = current
     const record = {
-      arena, run, batch: batch.id, seed, grid, recipe: picked.recipe, shape: picked.shape, target: picked.target, mode,
-      single, portions: picked.portions, crafts: picked.crafts, yield: picked.yield, wanted: picked.wanted, nMax: picked.nMax,
-      items: picked.materials, slots: picked.slots, watch,
-      sessionId: null, taskId: null, outcome: null, t0: null, llmWaitMs: 0, craftedMs: null, reachedMs: null, openedMs: null, taskMs: null,
-      craftedDelta: 0, made: 0, overshoot: 0, craftedItem: null, inventoryHasTarget: false, insideArena: null, stationIntact: null,
+      arena, run, batch: batch.id, seed, ...task.record(ctx, picked),
+      sessionId: null, taskId: null, outcome: null, t0: null, llmWaitMs: 0, openedMs: null, taskMs: null, insideArena: null, stationIntact: null,
       planAttempts: 0, treeVersions: null, nodeCalls: 0, capsules: [], turns: 0, tokens: null,
       usedChatSend: false, chatSends: [], error: null
     }
@@ -379,23 +331,23 @@ export class Trainer {
     }
     current.sessionId = sessionId
     finishRecord({ sessionId })
-    this.tellConsole(batch, `第 ${run}/${batch.runs} 轮：会话 ${sessionId}，目标 ${picked.target}${amount}（配方 ${picked.recipe}，seed=${seed}）`)
+    this.tellConsole(batch, `第 ${run}/${batch.runs} 轮：会话 ${sessionId}，${label}`)
 
     current.phase = '准备场地'
     const origin = arenaConfig.origin
-    const prepared = await this.game.mod.call('arena/prepare', { arena, origin, station, items: picked.slots, seed, watch, dayTime: 1000 })
+    const params = task.prepareParams(ctx, picked, seed)
+    const prepared = await this.game.mod.call('arena/prepare', { arena, origin, ...params })
     if (!prepared?.ok) {
       return finishRecord({ outcome: 'aborted', error: `arena/prepare: ${prepared?.error ?? 'no response'}`, setupFailed: true })
     }
-    // 超过堆叠上限的堆由 mod 拆开（W5）：记实际发放的槽位
-    if (Array.isArray(prepared.data?.given)) record.slots = prepared.data.given
-    if (station) {
-      if (prepared.data?.aimOk !== true) {
-        await this.game.mod.call('arena/finish', { arena, origin })
-        return finishRecord({ outcome: 'aborted', error: `arena/prepare: crosshair is not on the ${station} (aimOk=${prepared.data?.aimOk}); check the arena origin`, setupFailed: true })
-      }
-      await this.sleep(AIM_SETTLE_MS)
+    const checked = task.afterPrepare(ctx, picked, prepared.data)
+    finishRecord(checked.fields ?? {})
+    if (checked.error) {
+      // 场地自检不过（准星没对准、大箱子没连上）：场地坐标出了问题，本轮记 aborted 并停止整组（W2、箱子方案 C2）
+      await this.game.mod.call('arena/finish', { arena, origin })
+      return finishRecord({ outcome: 'aborted', error: checked.error, setupFailed: true })
     }
+    if (params.station) await this.sleep(AIM_SETTLE_MS)
 
     // 旁听：本轮的节点、任务结束、chat/send
     const state = { taskEnd: null, taskSeen: false, nodeCalls: 0, refs: new Set() }
@@ -421,10 +373,9 @@ export class Trainer {
     let timedOut = false
     let lastStatus = null
     let reachedAt = null
-    const reached = (status) => (status?.craftedDelta?.[picked.target] ?? 0) >= picked.wanted
+    const reached = (status) => Boolean(task.reached?.(ctx, picked, status))
     try {
-      const template = single ? `${arena}_${mode}` : `${arena}_multi`
-      const instruction = renderTemplate(this.prompts.training[template], { target: picked.target, portions: picked.portions, want: picked.wanted })
+      const instruction = task.instruction(ctx, picked, this.prompts)
       const t0 = this.now()
       const planned = this.bridge.startPlanning({ sessionId, instruction })
       if (!planned.ok) {
@@ -484,26 +435,12 @@ export class Trainer {
       const finished = await this.game.mod.call('arena/finish', { arena, origin })
       const final = finished?.ok ? finished.data : lastStatus
       if (!finished?.ok) record.error ??= `arena/finish: ${finished?.error ?? 'no response'}`
-      const delta = final?.craftedDelta ?? {}
-      const crafted = mode === 'hidden' ? watch.some((id) => (delta[id] ?? 0) > 0) : (delta[picked.target] ?? 0) > 0
-      const made = delta[picked.target] ?? 0
-      const craftedAtMs = final?.craftedAtMs ?? null
       const openedAtMs = final?.openedAtMs ?? null
-      // 最后一次轮询之后才做够的：记结束时刻（精度同 pollMs）
-      if (reachedAt === null && made >= picked.wanted) reachedAt = this.now()
-      const craftedMs = craftedAtMs !== null ? craftedAtMs - t0 : null
       finishRecord({
-        outcome: judge({ stopped, timedOut, setupError: false, taskState: state.taskEnd?.state ?? 'failed', crafted, ...(single ? {} : { made, wanted: picked.wanted }) }),
-        craftedMs,
-        reachedMs: single ? (made > 0 ? craftedMs : null) : reachedAt !== null ? reachedAt - t0 : null,
-        made,
-        overshoot: Math.max(0, made - picked.wanted),
+        ...task.finish(ctx, picked, { final, stopped, timedOut, taskState: state.taskEnd?.state ?? 'failed', t0, reachedAt, now: this.now() }),
         openedMs: openedAtMs !== null ? openedAtMs - t0 : null,
         stationIntact: final?.stationIntact ?? null,
         taskMs: state.taskEnd ? state.taskEnd.at - t0 : null,
-        craftedDelta: delta[picked.target] ?? 0,
-        craftedItem: final?.craftedItem ?? null,
-        inventoryHasTarget: (final?.inventory?.[picked.target] ?? 0) > 0,
         insideArena: final?.insideArena ?? null,
         treeVersions: state.taskEnd?.version ?? null,
         nodeCalls: state.nodeCalls,
@@ -532,7 +469,7 @@ export class Trainer {
     })
     // 任务历史（任务历史方案 H10）：给记录打上训练标记，成本指标抄进训练记录
     const hist = record.taskId && this.history?.annotate(record.taskId, {
-      training: { arena, batch: batch.id, run, seed, outcome: record.outcome, portions: record.portions, crafts: record.crafts }
+      training: { arena, batch: batch.id, run, seed, outcome: record.outcome, ...task.annotate(record) }
     })
     if (hist) {
       const { execMs, waitMs, modCalls, actions, reads } = hist.metrics ?? {}
@@ -633,9 +570,4 @@ export class Trainer {
     fs.mkdirSync(dir, { recursive: true })
     fs.appendFileSync(path.join(dir, `${arena}.jsonl`), JSON.stringify(line) + '\n')
   }
-}
-
-/** {lo,hi} → "4" / "2-5" */
-function specText({ lo, hi }) {
-  return lo === hi ? String(lo) : `${lo}-${hi}`
 }

@@ -67,9 +67,15 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 })
 
 test('parseTrainArgs', () => {
-  assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null })
-  assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null })
-  assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1' })
+  const none = { kind: null, rel: null, chest: null, stack: null, types: null }
+  assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
+  assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
+  assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
+  assert.deepEqual(parseTrainArgs(['chest', 'kind=take', 'rel=lt', 'chest=large', 'stack=16', 'types=2-3']),
+    { ok: true, arena: 'chest', item: null, runs: 1, seed: null, portions: null, crafts: null, kind: 'take', rel: 'lt', chest: 'large', stack: '16', types: '2-3' })
+  assert.match(parseTrainArgs(['chest', 'kind=swap']).error, /take \/ put \/ mix/)
+  assert.match(parseTrainArgs(['chest', 'stack=32']).error, /64 \/ 16 \/ 1/)
+  assert.match(parseTrainArgs(['chest', 'types=10']).error, /1–9/)
   assert.match(parseTrainArgs(['craft2x2', 'n=65']).error, /1–64/)
   assert.match(parseTrainArgs(['craft2x2', 'n=5-2']).error, /a ≤ b/)
   assert.equal(parseTrainArgs([]).ok, false)
@@ -785,4 +791,232 @@ test('stop while the finished run is still in review: the review is abandoned, i
   stuck.trainer.stop()
   await stuck.done()
   assert.equal(stuck.records().length, 1)
+})
+
+// ── 箱子训练场（箱子训练场设计方案）──
+
+const storageModule = await import('../src/training/storage.js')
+
+const SPROPS = Object.fromEntries([
+  ['stone', 64], ['dirt', 64], ['oak_log', 64], ['sand', 64], ['gravel', 64],
+  ['egg', 16], ['snowball', 16], ['ender_pearl', 16],
+  ['iron_sword', 1], ['shears', 1], ['bundle', 1]
+].map(([id, maxStack]) => [`minecraft:${id}`, { maxStack }]))
+
+test('storage sampler: layout within half the source, rel gives k, reproducible, bundle excluded', () => {
+  const { sampleStorage, storagePool, countsOf } = storageModule
+  const pool = storagePool(SPROPS, ['minecraft:bundle'])
+  assert.equal(pool.includes('minecraft:bundle'), false)
+  assert.deepEqual(sampleStorage(pool, SPROPS, 42), sampleStorage(pool, SPROPS, 42), 'same seed, same task')
+  const seen = { kind: new Set(), rel: new Set(), chest: new Set(), stackClass: new Set() }
+  for (let seed = 0; seed < 300; seed++) {
+    const t = sampleStorage(pool, SPROPS, seed, { types: { lo: 1, hi: 9 } })
+    for (const key of Object.keys(seen)) seen[key].add(t[key])
+    const capacity = t.kind === 'take' ? t.chestSlots : 36
+    const source = t.kind === 'take' ? t.layout.chest : t.layout.inventory
+    const dest = t.kind === 'take' ? t.layout.inventory : t.layout.chest
+    assert.deepEqual(dest, [], 'dest starts empty (C6)')
+    assert.equal(t.chestSlots, t.chest === 'large' ? 54 : 27)
+    assert.ok(source.length >= t.types && source.length <= Math.floor(capacity / 2), `slots ${source.length} of ${capacity}`)
+    assert.equal(new Set(source.map((s) => s.slot)).size, source.length, 'distinct slots')
+    assert.ok(source.every((s) => s.slot >= 0 && s.slot < capacity && s.count >= 1 && s.count <= SPROPS[s.id].maxStack), JSON.stringify(source))
+    assert.equal(new Set(source.map((s) => s.id)).size, t.types, 'every kind of item has at least one slot')
+    assert.ok(!t.distractors.includes(t.target) && new Set(t.distractors).size === t.types - 1)
+    assert.equal(countsOf(source)[t.target], t.n)
+    if (t.rel === 'lt') assert.ok(t.k >= 1 && t.k < t.n, `lt: k ${t.k} n ${t.n}`)
+    if (t.rel === 'eq') assert.equal(t.k, t.n)
+    if (t.rel === 'gt') assert.ok(t.k > t.n && t.k <= Math.max(Math.floor(capacity / 2) * t.stackClass, t.n + 1), `gt: k ${t.k} n ${t.n}`)
+    assert.equal(t.want, Math.min(t.k, t.n))
+  }
+  assert.deepEqual([...seen.kind].sort(), ['put', 'take'])
+  assert.deepEqual([...seen.rel].sort(), ['eq', 'gt', 'lt'])
+  assert.deepEqual([...seen.chest].sort(), ['large', 'small'])
+  assert.deepEqual([...seen.stackClass].sort((a, b) => a - b), [1, 16, 64], 'mix draws every stack class')
+
+  // 不可堆叠的目标、lt：至少 2 格，k < n 才有解
+  for (let seed = 0; seed < 50; seed++) {
+    const t = sampleStorage(pool, SPROPS, seed, { rel: 'lt', stack: '1', types: { lo: 1, hi: 1 } })
+    assert.equal(t.stackClass, 1)
+    assert.ok(t.n >= 2 && t.k < t.n)
+  }
+  const fixed = sampleStorage(pool, SPROPS, 3, { item: 'egg', kind: 'put', chest: 'large' })
+  assert.equal(fixed.target, 'minecraft:egg')
+  assert.ok(fixed.layout.inventory.length > 0 && fixed.layout.chest.length === 0)
+})
+
+test('storage expect and judge: exact counts succeed; overshoot, disturbed, lost and cursor leftovers do not', () => {
+  const { expectedCounts, judgeStorage } = storageModule
+  const picked = {
+    kind: 'take', target: 'minecraft:stone', want: 30,
+    layout: { chest: [{ slot: 0, id: 'minecraft:stone', count: 20 }, { slot: 5, id: 'minecraft:stone', count: 20 }, { slot: 7, id: 'minecraft:egg', count: 3 }], inventory: [] }
+  }
+  const expect = expectedCounts(picked)
+  assert.deepEqual(expect, { inventory: { 'minecraft:stone': 30 }, container: { 'minecraft:stone': 10, 'minecraft:egg': 3 } })
+  const final = (fields) => ({ held: expect.inventory, chest: expect.container, carried: {}, dropped: {}, stationIntact: true, ...fields })
+  const j = (fields, extra = {}) => judgeStorage({ taskState: 'done', final: final(fields), picked, ...extra })
+  assert.deepEqual(j({}), { outcome: 'success', moved: 30, disturbed: [], reached: true })
+  assert.equal(j({}, { taskState: 'failed' }).outcome, 'failed', 'reached but reported failure')
+  assert.equal(j({ held: { 'minecraft:stone': 31 }, chest: { 'minecraft:stone': 9, 'minecraft:egg': 3 } }).outcome, 'overshoot')
+  const disturbed = j({ held: { 'minecraft:stone': 30, 'minecraft:egg': 1 }, chest: { 'minecraft:stone': 10, 'minecraft:egg': 2 } })
+  assert.equal(disturbed.outcome, 'disturbed')
+  assert.deepEqual(disturbed.disturbed, ['minecraft:egg'])
+  assert.equal(j({ held: { 'minecraft:stone': 25 }, carried: { 'minecraft:stone': 5 } }).outcome, 'false_success', 'still on the cursor')
+  assert.equal(j({ held: { 'minecraft:stone': 20 }, chest: { 'minecraft:stone': 20, 'minecraft:egg': 3 } }).outcome, 'false_success', 'too few')
+  assert.equal(j({ held: { 'minecraft:stone': 29 }, dropped: { 'minecraft:stone': 1 } }).outcome, 'lost', 'thrown on the ground')
+  assert.equal(j({ stationIntact: false }).outcome, 'lost', 'chest broken')
+  assert.equal(j({ chest: null }).outcome, 'lost')
+  assert.equal(j({ held: { 'minecraft:stone': 31 }, chest: { 'minecraft:stone': 9, 'minecraft:egg': 3 } }, { timedOut: true }).outcome, 'overshoot', 'overshoot outranks timeout')
+  assert.equal(j({ held: {}, chest: { 'minecraft:stone': 40, 'minecraft:egg': 3 } }, { timedOut: true, taskState: 'failed' }).outcome, 'timeout')
+  assert.equal(j({}, { stopped: true }).outcome, 'aborted')
+  assert.equal(judgeStorage({ taskState: 'done', final: null, picked }).outcome, 'failed', 'no final state')
+
+  const put = { kind: 'put', target: 'minecraft:egg', want: 4, layout: { chest: [], inventory: [{ slot: 9, id: 'minecraft:egg', count: 16 }, { slot: 0, id: 'minecraft:dirt', count: 1 }] } }
+  assert.deepEqual(expectedCounts(put), { inventory: { 'minecraft:egg': 12, 'minecraft:dirt': 1 }, container: { 'minecraft:egg': 4 } })
+})
+
+test('config: the chest arena is a storage arena with its own defaults and checks; craft arenas are unchanged', () => {
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.chest, { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
+  assert.equal(config.training.arenas.craft2x2.type, undefined)
+  const mine = normalizeConfig({ training: { arenas: { box: { type: 'storage', origin: [0, 100, 0], kind: 'put' } } } }).training.arenas.box
+  assert.equal(mine.kind, 'put')
+  assert.equal(mine.rel, 'mix', 'storage defaults fill the rest')
+  assert.equal(mine.grid, undefined, 'no craft fields')
+  assert.throws(() => normalizeConfig({ training: { arenas: { chest: { rel: 'ne' } } } }), /chest\.rel/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { chest: { types: '0-3' } } } }), /types/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { chest: { dest: 'partial' } } } }), /dest/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { chest: { type: 'smelt' } } } }), /type/)
+})
+
+const ARENAS_CHEST = { chest: { type: 'storage', origin: [0, 100, 60], timeoutSec: 600, kind: 'take', rel: 'mix', chest: 'small', stack: 'mix', types: '1-3', dest: 'empty', exclude: ['minecraft:bundle'] } }
+
+/** 箱子题的假世界：prepare 按参数布置，script 结束前把计数改成 finalOf(params) 的样子 */
+function chestHarness({ finalOf = (params) => ({ held: params.expect.inventory, chest: params.expect.container }), chestSlots = (station) => (station === 'large_chest' ? 54 : 27), arenas = ARENAS_CHEST } = {}) {
+  const { countsOf } = storageModule
+  const world = { params: null, state: {} }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1 }, finalOf(world.params), { reachedAtMs: clock() })
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas, itemProps: SPROPS,
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: countsOf(params.items), chest: countsOf(params.chestItems), carried: {}, dropped: {}, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk: true, chestSlots: chestSlots(params.station) }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('chest run: prepare lays out the chest and the goal, the take template is used, exact counts succeed with reachedMs', async () => {
+  const h = chestHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'chest', runs: 2, seed: 11 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /kind=take，rel=mix，chest=small/)
+  await h.done()
+  const records = h.records('chest')
+  assert.equal(records.length, 2)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.equal(record.kind, 'take')
+    assert.equal(record.chest, 'small')
+    assert.equal(record.chestSlots, 27)
+    assert.ok(record.reachedMs !== null && record.reachedMs <= record.taskMs, JSON.stringify(record))
+    assert.ok(record.openedMs !== null && record.openedMs <= record.reachedMs)
+    assert.equal(record.moved, record.want)
+    assert.equal(record.stationIntact, true)
+    assert.deepEqual(record.final.carried, {})
+    assert.ok(h.instructions[i].startsWith(`你正前方有一个箱子，视角已经对准它。请从箱子里取出 ${record.k} 个 ${record.target} 放进你的物品栏；`), h.instructions[i])
+  }
+  const prepare = h.calls.find(([m]) => m === 'arena/prepare')[1]
+  assert.equal(prepare.station, 'chest')
+  assert.deepEqual(prepare.items, [], 'take: the inventory starts empty')
+  assert.ok(prepare.chestItems.length > 0)
+  assert.deepEqual(prepare.watch, [])
+  assert.deepEqual(prepare.expect, storageModule.expectedCounts(records[0]))
+  assert.ok(h.sleeps.includes(100), 'waits for the client to pick up the crosshair target')
+  const texts = h.notices.map(([, text]) => text)
+  assert.match(texts[0], /^第 1\/2 轮：会话 run-1，取 \d+ 个 minecraft:\w+（箱子里有 \d+ 个，(lt|eq|gt)，小箱子，\d 种物品，seed=\d+）$/)
+  assert.match(texts[1], /^第 1\/2 轮结果 success，达成用时 \d+\.\d 秒，任务用时/)
+  assert.doesNotMatch(prompts.training.chest_take + prompts.training.chest_put, /右键/, 'describe the situation, do not teach the move')
+})
+
+test('chest run: a large chest that did not connect aborts the batch before planning; options of the other task type are refused', async () => {
+  const h = chestHarness({ chestSlots: () => 27 })
+  h.trainer.start({ sessionId: 's1', arena: 'chest', chest: 'large', runs: 3 })
+  await h.done()
+  const records = h.records('chest')
+  assert.equal(records.length, 1)
+  assert.equal(records[0].outcome, 'aborted')
+  assert.match(records[0].error, /large_chest has 27 slots, expected 54/)
+  assert.deepEqual(h.calls.map(([m]) => m), ['arena/status', 'arena/prepare', 'arena/finish'])
+  assert.deepEqual(h.planned, [])
+
+  const both = chestHarness({ arenas: { ...ARENAS_CHEST, ...ARENAS_2X2 } })
+  assert.match(both.trainer.start({ sessionId: 's1', arena: 'chest', portions: '4' }).error, /不认这些选项：n/)
+  assert.match(both.trainer.start({ sessionId: 's1', arena: 'craft2x2', kind: 'take', rel: 'lt' }).error, /不认这些选项：kind、rel/)
+  assert.match(both.trainer.start({ sessionId: 's1', arena: 'chest', item: 'bundle' }).error, /物品池里没有 minecraft:bundle/)
+  const noProps = harness({ script: () => {}, arenas: ARENAS_CHEST, itemProps: null })
+  assert.match(noProps.trainer.start({ sessionId: 's1', arena: 'chest' }).error, /item-props\.json/)
+})
+
+test('chest run: moving one too many is overshoot; the put template goes the other way', async () => {
+  const over = chestHarness({
+    arenas: { chest: { ...ARENAS_CHEST.chest, rel: 'lt' } },
+    finalOf: (params) => {
+      // 多取 1 个：目标物品是 expect 里物品栏的那一项（取之前物品栏是空的）
+      const [[id, n]] = Object.entries(params.expect.inventory)
+      return { held: { [id]: n + 1 }, chest: { ...params.expect.container, [id]: params.expect.container[id] - 1 } }
+    }
+  })
+  over.trainer.start({ sessionId: 's1', arena: 'chest', seed: 5 })
+  await over.done()
+  const [record] = over.records('chest')
+  assert.equal(record.outcome, 'overshoot', JSON.stringify(record.final))
+  assert.equal(record.moved, record.want + 1)
+
+  const put = chestHarness({ arenas: { chest: { ...ARENAS_CHEST.chest, kind: 'put', chest: 'large' } } })
+  put.trainer.start({ sessionId: 's1', arena: 'chest', seed: 9 })
+  await put.done()
+  const [p] = put.records('chest')
+  assert.equal(p.outcome, 'success')
+  assert.equal(p.chestSlots, 54)
+  assert.ok(/^你正前方有一个箱子，视角已经对准它。请把你物品栏里的 \d+ 个 minecraft:\w+ 放进箱子；/.test(put.instructions[0]), put.instructions[0])
+  const prepare = put.calls.find(([m]) => m === 'arena/prepare')[1]
+  assert.equal(prepare.station, 'large_chest')
+  assert.deepEqual(prepare.chestItems, [], 'put: the chest starts empty')
+})
+
+test('report: chest records group by task / chest / stack and get their own columns', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (kind, rel, chest, stackClass, outcome, extra = {}) => ({ batch: 'b1', target: 'minecraft:stone', kind, rel, chest, stackClass, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true, ...extra })
+  const records = [
+    rec('take', 'lt', 'small', 64, 'success'),
+    rec('take', 'lt', 'large', 16, 'overshoot', { reachedMs: null }),
+    rec('put', 'gt', 'small', 64, 'disturbed'),
+    rec('put', 'eq', 'large', 1, 'lost', { stationIntact: false })
+  ]
+  const byTask = summarize(records, { by: 'task' })
+  assert.equal(byTask.storage, true)
+  assert.deepEqual(byTask.rows.map((r) => [r.key, r.runs]), [['take/lt', 2], ['put/eq', 1], ['put/gt', 1]])
+  assert.deepEqual([byTask.total.overshoot, byTask.total.disturbed, byTask.total.lost, byTask.total.stationBroken], [1, 1, 1, 1])
+  assert.equal(byTask.total.medianReachedMs, 5000, 'reached median over successful runs')
+  const text = formatSummary(byTask)
+  assert.match(text.split('\n')[0], /^取放\/关系\t轮数\t成功率\t.*超量\t动了别的\t丢失\t打开箱子中位\t达成中位\t任务中位/)
+  assert.doesNotMatch(text, /合成|工作台/)
+  assert.deepEqual(summarize(records, { by: 'chest' }).rows.map((r) => r.key).sort(), ['大箱子', '小箱子'])
+  assert.deepEqual(summarize(records, { by: 'stack' }).rows.map((r) => r.key), ['64', '1', '16'])
+  assert.doesNotMatch(formatSummary(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1 }])), /动了别的/, 'craft output is unchanged')
 })

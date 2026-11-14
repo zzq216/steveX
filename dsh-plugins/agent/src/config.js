@@ -1,5 +1,10 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DEFAULT_OBSERVE_BY_COMMAND } from './bt/observe.js'
+import { STORAGE_CHOICES, parseTypesSpec } from './training/storage.js'
+
+/** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
+const STORAGE_ARENA_DEFAULTS = Object.freeze({ kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
 
 const steveXRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -21,7 +26,7 @@ export const DEFAULTS = Object.freeze({
   /** core.nbt.query 读的采集端落盘目录（相对 steveX/） */
   visionRoot: 'vendor/stevex-template-1.21.11/run/stevex/vision',
   /** 单次提交（大纲 / 展开 / 补丁）编译后的节点上限；2026-11-07 从 15 调到 25（第一次写批量合成时 15 太紧） */
-  maxExpansionNodes: 25,
+  maxExpansionNodes: 100,
   maxInvalidAttempts: 3,
   maxValueBytes: 16384,
   /** 修复请求的快照缓冲保留最近多少个叶子的前后快照（P2 §4.3） */
@@ -60,7 +65,9 @@ export const DEFAULTS = Object.freeze({
   maxCapsuleDepth: 8,
   /** 每个 Steps / Action 前后读哪些状态来源报告差异（可观测性） */
   /** settle：动作后隔 intervalMs 再读 inventory / container，连续两次一样才拍"执行后"快照，最多 maxReads 次；maxReads 0 = 不等（2026-11-09） */
-  observe: { enabled: true, sources: ['inventory', 'container', 'f3'], settle: { intervalMs: 50, maxReads: 4 } },
+  /** byCommand：叶子里的命令都在表里时只观察表里的来源（2026-11-13）。container/slot 只在界面开着时点，界面的 slots 已含玩家背包格，inventory / f3 是重复读 */
+  /** 观察读取记在节点的 calls.observe，等稳定的读取记在 calls.settle，都不算进成本画像的 mod 调用（执行器的证据设施，不是 agent 的成本） */
+  observe: { enabled: true, sources: ['inventory', 'container', 'f3'], byCommand: DEFAULT_OBSERVE_BY_COMMAND, settle: { intervalMs: 50, maxReads: 4 } },
   timing: { clickWaitMs: 80, lookWaitMs: 150, pollMs: 100 },
   /** 本地应答器（没有大模型时回答请求）。DSH 里属于会话的任务的请求都交给大模型，它只回答 /bt run 的手写树 */
   localResponder: true,
@@ -118,10 +125,16 @@ export const DEFAULTS = Object.freeze({
      *   grid: 合成格边长 2 | 3（缺省 2）, station: 场内工作站 'crafting_table' | null（缺省 null）,
      *   timeoutSec? / wallTimeoutSec?: 覆盖全局的时间上限, portions? / crafts?: n、m 的默认值 "k" | "a-b"（T14，命令行优先；不写 = n 在 1–64 随机） }。
      * 工作台训练场见 docs/工作台训练场设计方案.md
+     *
+     * type 选题型（箱子训练场设计方案 C11）：不写 = 'craft'（上面这些字段）；'storage' = 箱子存取，字段是
+     *   { origin, kind: take | put | mix, rel: lt | eq | gt | mix, chest: small | large | mix, stack: 64 | 16 | 1 | mix,
+     *     types: 物品种类数（含目标）"k" | "a-b"（1–9）, dest: 'empty'（C6，partial 暂不开放）, exclude: 不抽的物品 id,
+     *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/箱子训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
-      craft3x3: { origin: [10000, 120, 10030], mode: 'named', grid: 3, station: 'crafting_table', exclude: [], timeoutSec: 900 }
+      craft3x3: { origin: [10000, 120, 10030], mode: 'named', grid: 3, station: 'crafting_table', exclude: [], timeoutSec: 900 },
+      chest: { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] }
     }
   },
   planner: {
@@ -144,7 +157,11 @@ export function normalizeConfig(raw = {}) {
     ...raw,
     timing: { ...DEFAULTS.timing, ...(raw.timing ?? {}) },
     sandbox: { ...DEFAULTS.sandbox, ...(raw.sandbox ?? {}) },
-    observe: { ...DEFAULTS.observe, ...(raw.observe ?? {}), settle: { ...DEFAULTS.observe.settle, ...(raw.observe?.settle ?? {}) } },
+    observe: {
+      ...DEFAULTS.observe, ...(raw.observe ?? {}),
+      byCommand: { ...DEFAULTS.observe.byCommand, ...(raw.observe?.byCommand ?? {}) },
+      settle: { ...DEFAULTS.observe.settle, ...(raw.observe?.settle ?? {}) }
+    },
     planner: { ...DEFAULTS.planner, ...(raw.planner ?? {}) },
     fast: { ...DEFAULTS.fast, ...(raw.fast ?? {}) },
     reflect: { ...DEFAULTS.reflect, ...(raw.reflect ?? {}) },
@@ -169,15 +186,29 @@ export function normalizeConfig(raw = {}) {
     if (!(Array.isArray(arena.origin) && arena.origin.length === 3 && arena.origin.every(Number.isInteger))) {
       throw new Error(`stevex-agent config: training.arenas.${name}.origin must be [x, y, z] integers`)
     }
-    if (!['named', 'hidden'].includes(arena.mode)) throw new Error(`stevex-agent config: training.arenas.${name}.mode must be "named" or "hidden"`)
-    if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
-      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of recipe names`)
-    }
-    if (![2, 3].includes(arena.grid)) throw new Error(`stevex-agent config: training.arenas.${name}.grid must be 2 or 3`)
-    if (![null, 'crafting_table'].includes(arena.station)) throw new Error(`stevex-agent config: training.arenas.${name}.station must be "crafting_table" or null`)
     for (const key of ['timeoutSec', 'wallTimeoutSec']) if (arena[key] !== undefined && !(Number.isInteger(arena[key]) && arena[key] > 0)) {
       throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
     }
+    if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'storage' ? 'item ids' : 'recipe names'}`)
+    }
+    const type = arena.type ?? 'craft'
+    if (!['craft', 'storage'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft" or "storage"`)
+    if (type === 'storage') {
+      for (const [key, choices] of Object.entries(STORAGE_CHOICES)) {
+        if (!choices.includes(String(arena[key]))) throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be one of ${choices.join(' | ')}`)
+      }
+      try {
+        parseTypesSpec(arena.types)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      if (arena.dest !== 'empty') throw new Error(`stevex-agent config: training.arenas.${name}.dest must be "empty" (partial is not open yet)`)
+      continue
+    }
+    if (!['named', 'hidden'].includes(arena.mode)) throw new Error(`stevex-agent config: training.arenas.${name}.mode must be "named" or "hidden"`)
+    if (![2, 3].includes(arena.grid)) throw new Error(`stevex-agent config: training.arenas.${name}.grid must be 2 or 3`)
+    if (![null, 'crafting_table'].includes(arena.station)) throw new Error(`stevex-agent config: training.arenas.${name}.station must be "crafting_table" or null`)
     for (const key of ['portions', 'crafts']) {
       const value = arena[key]
       if (value === undefined || value === null) continue
@@ -205,7 +236,10 @@ export function normalizeConfig(raw = {}) {
 function normalizeTraining(raw = {}) {
   const arenas = {}
   for (const [name, arena] of Object.entries({ ...DEFAULTS.training.arenas, ...(raw.arenas ?? {}) })) {
-    arenas[name] = { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
+    const type = arena.type ?? DEFAULTS.training.arenas[name]?.type ?? 'craft'
+    arenas[name] = type === 'storage'
+      ? { ...STORAGE_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+      : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }
 }

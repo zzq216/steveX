@@ -1,6 +1,7 @@
 package name.modid.api;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -34,13 +35,16 @@ public class ArenaApi {
             String arena = arena(params);
             BlockPos origin = origin(params, arena);
             String station = station(params, arena);
-            List<ArenaManager.Give> items = gives(params.get("items"));
-            List<String> watch = strings(params.get("watch"), "watch");
-            if (watch.isEmpty()) throw new IllegalArgumentException("watch must list at least one item id");
+            List<ArenaManager.Give> items = gives(params.get("items"), "items");
+            // 箱子训练场（箱子方案）：箱子里放什么、本轮的目标计数；合成场地不给
+            List<ArenaManager.Give> chestItems = params.get("chestItems") == null ? List.of() : gives(params.get("chestItems"), "chestItems");
+            ArenaManager.Expect expect = expect(params.get("expect"));
+            List<String> watch = params.get("watch") == null ? List.of() : strings(params.get("watch"), "watch");
+            if (items.isEmpty() && chestItems.isEmpty()) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
             long dayTime = AgentWebSocketServer.num(params, "dayTime", 1000);
             long seed = params.get("seed") instanceof Number n ? n.longValue() : 0L;
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, seed, watch, dayTime));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime));
         });
         handlers.put("arena/status", params -> onServer(5_000, ArenaManager::status));
         handlers.put("arena/finish", params -> {
@@ -113,15 +117,36 @@ public class ArenaApi {
         return (String) v;
     }
 
-    private static List<ArenaManager.Give> gives(Object v) {
-        if (!(v instanceof List<?> list) || list.isEmpty()) throw new IllegalArgumentException("items must be a non-empty list of { slot, id, count }");
+    /** [{ slot, id, count }]，可以为空（箱子题"取"的物品栏、"放"的箱子开局都是空的）。 */
+    private static List<ArenaManager.Give> gives(Object v, String name) {
+        if (!(v instanceof List<?> list)) throw new IllegalArgumentException(name + " must be a list of { slot, id, count }");
         List<ArenaManager.Give> out = new ArrayList<>();
         for (Object o : list) {
             if (!(o instanceof Map<?, ?> m) || !(m.get("slot") instanceof Number slot) || !(m.get("id") instanceof String id)
                     || !(m.get("count") instanceof Number count)) {
-                throw new IllegalArgumentException("each item must be { slot:int, id:string, count:int }");
+                throw new IllegalArgumentException("each entry of " + name + " must be { slot:int, id:string, count:int }");
             }
             out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue()));
+        }
+        return out;
+    }
+
+    /** { inventory: { id: n }, container: { id: n } }；省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。 */
+    private static ArenaManager.Expect expect(Object v) {
+        if (v == null) return null;
+        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("expect must be { inventory: { id: n }, container: { id: n } }");
+        return new ArenaManager.Expect(counts(m.get("inventory"), "expect.inventory"), counts(m.get("container"), "expect.container"));
+    }
+
+    private static Map<String, Integer> counts(Object v, String name) {
+        if (v == null) return Map.of();
+        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException(name + " must be { id: count }");
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : m.entrySet()) {
+            if (!(e.getKey() instanceof String id) || !(e.getValue() instanceof Number n) || n.intValue() < 0) {
+                throw new IllegalArgumentException(name + " must map item ids to non-negative counts");
+            }
+            if (n.intValue() > 0) out.put(id, n.intValue());
         }
         return out;
     }

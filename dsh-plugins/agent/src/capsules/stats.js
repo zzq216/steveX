@@ -14,13 +14,27 @@ import path from 'node:path'
  * - 同一个任务只并一次（tasks 列表），手动重复复盘、进程重启、重建都不会翻倍
  * - 快树没有节点事件，快树里的使用不计入（D6）
  * - 统计不做归因：tasksFailed 只是"用过它的任务里有几个失败了"
+ * - 跨实例（2026-11-13）：节点退出事件带实参指纹 args（标量原样、大块数据换成哈希），按"参数组合"分开计数（instances）；
+ *   胶囊没有输入参数时按任务分开。展示"在几种参数组合上成功过、哪些参数变过、哪些组合没成功过"。
+ *   2026-11-13 之前的事件没有 args，那部分只进总数、不进 instances
+ * - 调用处出错（2026-11-13）：Compute / 条件代码因为调用点写错而失败——没在 read 里声明状态源、实参不合签名、
+ *   读引用解析不了——记 callError，不算条目的失败、不进 instances（task-20261114040740-3：调用点漏写 inventory
+ *   被记成 plan-feasible-fill 在 cyan_bed 上失败）。按错误原文判断，所以离线重建也会按新口径重算旧事件
  */
 const VERSION = 1
 const MAX_ERROR_SAMPLES = 3
 const MAX_ERROR_CHARS = 200
 /** 等转正的草稿数字只留最近几个任务（复盘只针对刚结束的任务） */
 const KEEP_DRAFT_TASKS = 5
-const COUNTS = ['calls', 'ok', 'fail', 'error']
+/** 每个引用最多记多少种参数组合（超出丢最早的） */
+const MAX_INSTANCES = 100
+const COUNTS = ['calls', 'ok', 'fail', 'error', 'callError']
+/** 调用点写错的错误原文（只对 Compute / 条件代码判断：SubTree 的错误是从子节点传上来的，子树体里调错了是条目自己的问题） */
+const CALL_SITE_ERRORS = [
+  /is not read by this node/,                              // 代码读了没在 read 里声明的状态源（沙箱）
+  /(^|: )(missing required param "|unknown param "|param "[^"]+" )/, // 实参不合签名（signature.checkResolvedInputs）
+  /blackboard has no key "|blackboard key "[^"]+" has no field "/    // 实参里的 $键 解析不了
+]
 const TASK_COUNTS = ['tasks', 'tasksDone', 'tasksFailed']
 
 export class CapsuleStats {
@@ -160,14 +174,74 @@ export function usageSummary(stat, kind, key = '') {
     const outcome = kind === 'condition'
       ? `判真 ${stat.ok} / 判假 ${stat.fail} / 报错 ${stat.error}`
       : `成功 ${stat.ok} / 失败 ${stat.error}`
-    parts.push(`用过 ${stat.calls} 次 / ${stat.tasks} 个任务（${stat.tasksDone} 成 ${stat.tasksFailed} 败），${outcome}`)
+    parts.push(`用过 ${stat.calls} 次 / ${stat.tasks} 个任务（${stat.tasksDone} 成 ${stat.tasksFailed} 败），${outcome}${callErrorNote(stat)}`)
   }
   if (stat.draft) {
     const d = stat.draft
     const outcome = kind === 'condition' ? `判真 ${d.ok} / 判假 ${d.fail} / 报错 ${d.error}` : `成功 ${d.ok} / 失败 ${d.error}`
-    parts.push(`转正前（草稿）：用过 ${d.calls} 次 / ${d.tasks} 个任务，${outcome}`)
+    parts.push(`转正前（草稿）：用过 ${d.calls} 次 / ${d.tasks} 个任务，${outcome}${callErrorNote(d)}`)
   }
+  const spread = instanceSummary(mergeInstances({}, stat.instances, stat.draft?.instances), kind)
+  if (spread) parts.push(spread)
   return parts.length ? parts.join('；') + fastNote : `尚无记录${fastNote}`
+}
+
+function callErrorNote(stat) {
+  return stat.callError > 0 ? ` / 调用处出错 ${stat.callError}（缺 read、实参不合签名等，不算条目失败）` : ''
+}
+
+/**
+ * 跨实例一句话：在几种参数组合上成功过（条件代码：没报错就算）、哪些参数变过、哪些组合一次都没成功。
+ * 没有 instances（旧数据）→ null。
+ */
+export function instanceSummary(instances, kind) {
+  const rows = Object.entries(instances ?? {})
+  if (rows.length === 0) return null
+  const worked = ([, c]) => (kind === 'condition' ? c.calls > c.error : c.ok > 0)
+  const ok = rows.filter(worked).length
+  if (rows.every(([key]) => key.startsWith('task:'))) {
+    return `跨实例：没有输入参数，按任务算——在 ${ok} 个任务里成功过（共 ${rows.length} 个）`
+  }
+  const parsed = rows.filter(([key]) => !key.startsWith('task:')).map(([key, c]) => ({ args: safeParse(key), c }))
+  const values = new Map()
+  for (const { args } of parsed) for (const [name, value] of Object.entries(args)) {
+    if (!values.has(name)) values.set(name, new Set())
+    values.get(name).add(JSON.stringify(value))
+  }
+  const varied = [...values].filter(([, set]) => set.size > 1).map(([name, set]) => `${name} ${set.size} 种`)
+  const failed = parsed.filter(({ c }) => !worked([null, c])).map(({ args }) => renderArgs(args))
+  const parts = [`跨实例：在 ${ok} 种参数组合上成功过（共 ${rows.length} 种${varied.length ? `；变过的参数：${varied.join('、')}` : ''}）`]
+  if (ok <= 1) parts[0] += '，未跨实例验证'
+  if (failed.length) parts.push(`没成功过的组合：${failed.slice(0, 3).join(' | ')}${failed.length > 3 ? ` | …另 ${failed.length - 3} 种` : ''}`)
+  return parts.join('；')
+}
+
+function renderArgs(args) {
+  const text = Object.entries(args).map(([k, v]) => `${k}=${typeof v === 'string' && v.startsWith('#') ? '…' : JSON.stringify(v)}`).join(', ')
+  return text || '（无参数）'
+}
+
+function safeParse(text) {
+  try { return JSON.parse(text) ?? {} } catch { return {} }
+}
+
+/** 实参指纹 → instances 的键：有参数 = 排好序的 JSON；没有参数 = 按任务。解析失败（null / 缺）→ null，不计。 */
+function instanceKey(record) {
+  const args = record.args
+  if (args === undefined || args === null || typeof args !== 'object') return null
+  return Object.keys(args).length ? JSON.stringify(args) : `task:${record.taskId}`
+}
+
+function mergeInstances(into, ...sources) {
+  for (const source of sources) {
+    for (const [key, c] of Object.entries(source ?? {})) {
+      const row = into[key] ?? (into[key] = { calls: 0, ok: 0, fail: 0, error: 0 })
+      for (const k of COUNTS) row[k] = (row[k] ?? 0) + (c[k] ?? 0)
+    }
+  }
+  const keys = Object.keys(into)
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_INSTANCES))) delete into[key]
+  return into
 }
 
 /**
@@ -216,7 +290,7 @@ function emptyData() {
 }
 
 function newTally() {
-  return { calls: 0, ok: 0, fail: 0, error: 0, firstUsed: null, lastUsed: null, errors: [] }
+  return { calls: 0, ok: 0, fail: 0, error: 0, callError: 0, firstUsed: null, lastUsed: null, errors: [], instances: {} }
 }
 
 function newRow() {
@@ -229,21 +303,30 @@ function newRow() {
  */
 function addExit(tally, record) {
   tally.calls++
-  if (record.status === 'SUCCESS') tally.ok++
-  else if (record.type === 'Condition' && !record.error) tally.fail++
-  else {
-    tally.error++
-    if (record.error) pushError(tally, { taskId: record.taskId, nodeId: record.id, message: String(record.error).slice(0, MAX_ERROR_CHARS) })
-  }
+  const outcome = record.status === 'SUCCESS' ? 'ok'
+    : record.type === 'Condition' && !record.error ? 'fail'
+      : isCallSiteError(record) ? 'callError' : 'error'
+  tally[outcome] = (tally[outcome] ?? 0) + 1
+  if ((outcome === 'error' || outcome === 'callError') && record.error) pushError(tally, { taskId: record.taskId, nodeId: record.id, message: String(record.error).slice(0, MAX_ERROR_CHARS) })
+  const key = outcome === 'callError' ? null : instanceKey(record)
+  if (key) mergeInstances(tally.instances ?? (tally.instances = {}), { [key]: { calls: 1, [outcome]: 1 } })
   tally.firstUsed ??= record.at ?? null
   tally.lastUsed = record.at ?? tally.lastUsed
 }
 
+/** 调用点写错（见 CALL_SITE_ERRORS）：不算条目的失败 */
+export function isCallSiteError(record) {
+  if (record?.type !== 'Compute' && record?.type !== 'Condition') return false
+  const text = String(record.error ?? '')
+  return CALL_SITE_ERRORS.some((re) => re.test(text))
+}
+
 function mergeTally(into, from) {
-  for (const k of COUNTS) into[k] += from[k] ?? 0
+  for (const k of COUNTS) into[k] = (into[k] ?? 0) + (from[k] ?? 0)
   if (from.firstUsed && (!into.firstUsed || from.firstUsed < into.firstUsed)) into.firstUsed = from.firstUsed
   if (from.lastUsed && (!into.lastUsed || from.lastUsed > into.lastUsed)) into.lastUsed = from.lastUsed
   for (const sample of from.errors ?? []) pushError(into, sample)
+  if (from.instances && Object.keys(from.instances).length) mergeInstances(into.instances ?? (into.instances = {}), from.instances)
   return into
 }
 

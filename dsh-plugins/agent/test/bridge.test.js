@@ -214,23 +214,50 @@ test('提示词：所有模板的变量都填得上', () => {
   assert.doesNotThrow(() => renderTemplate(prompts.requests.task_end, { taskId: 't', state: 'done', goal: 'g', result: 'r' }))
 })
 
-test('I13：产出树的回合不准入读状态 / 查数据的工具；展开请求与 bt_view 里的黑板只有形状、没有值', async () => {
+test('I13：产出树的回合不准入读状态 / 查数据的工具；展开请求里小值给值、大块只给形状（2026-11-13）；bt_view 只给形状', async () => {
   for (const tools of Object.values(REQUEST_TOOLS)) {
     for (const name of ['mod_query', 'nbt_query', 'json_query']) assert.equal(tools.includes(name), false, name)
   }
   const { bridge, executor, delivered } = setup()
   const plan = bridge.startPlanning({ sessionId: 's1', instruction: '搬原木' })
-  const blackboard = { 'log.slot': { slot: 36, item: 'minecraft:oak_log' }, 'log.cells': [[1, 2], [3, 4]], 'log.found': true }
+  const blackboard = { 'log.slot': { slot: 36, item: 'minecraft:oak_log' }, 'log.cells': Array.from({ length: 40 }, (_, i) => [i, i + 1]), 'log.found': true }
   assert.equal(bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree: { seq: '搬', do: [{ expand: '把 $log.slot 的原木放进箱子' }] }, blackboard }).ok, true)
   await runUntil(executor, () => executor.task.state === 'suspended')
 
   const text = delivered.at(-1).text
-  assert.match(text, /log\.slot: \{slot: int, item: string\}/)
-  assert.match(text, /log\.cells: list\(2\) of list\(2\) of int/)
-  assert.match(text, /log\.found: bool/)
+  assert.match(text, /^log\.slot = \{"slot":36,"item":"minecraft:oak_log"\}$/m)
+  assert.match(text, /^log\.found = true$/m)
+  assert.match(text, /^log\.cells: list\(40\) of list\(2\) of int（\d+ 字节，只给形状）$/m)
+  assert.doesNotMatch(text, /\[0,1\]/, '大块数据不出现')
   // \b：任务 id 里的时间戳（如 …123644…）会含 "36"，只查独立的值
-  assert.doesNotMatch(text, /\b36\b|oak_log|\btrue\b/, '具体值不出现在请求里')
   assert.doesNotMatch(bridge.view().task.blackboard, /\b36\b|oak_log/)
+})
+
+test('写死值检查（2026-11-13）：展开 / 补丁里抄了本请求给出的值 → 通过但带警告、记事件；任务参数与小值不算', async () => {
+  const { bridge, executor, delivered } = setup()
+  const events = []
+  executor.on('event', (e) => events.push(e))
+  const MAKE = {
+    mk: {
+      signature: { outputs: { item: { type: 'string' }, n: { type: 'int' }, mode: { type: 'string' } } },
+      body: 'function main() { return { item: "minecraft:white_wool", n: 27, mode: "short" } }'
+    }
+  }
+  const plan = bridge.startPlanning({ sessionId: 's1', instruction: '做床' })
+  claim(bridge, delivered, 1)
+  const tree = { seq: '做', do: [{ compute: 'task/mk' }, { expand: '接着做' }] }
+  assert.equal(bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree, code: MAKE, blackboard: { target: 'minecraft:magenta_bed' } }).ok, true)
+  await runUntil(executor, () => executor.task.state === 'suspended')
+  const expand = claim(bridge, delivered, 2)
+  const cmp = (key, value) => ({ cond: 'blackboard/compare', params: { key, op: '==', value } })
+  const res = bridge.submitExpansion({ sessionId: 's1', requestId: expand.requestId, subtree: { seq: '比', do: [
+    cmp('item', 'minecraft:white_wool'), cmp('n', 27), cmp('target', 'minecraft:magenta_bed'), cmp('mode', 'short')
+  ] } })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(res.warnings.length, 2, JSON.stringify(res.warnings))
+  assert.match(res.warnings[0], /^n1\.2\.1\.1\.params\.value = "minecraft:white_wool" is the same as 黑板 item, a value of this run/)
+  assert.match(res.warnings[1], /^n1\.2\.1\.2\.params\.value = 27 is the same as 黑板 n/)
+  assert.deepEqual(events.find((e) => e.event === 'literal/warning').hits.map((h) => h.value), ['minecraft:white_wool', 27])
 })
 
 test('回合出错（如模型返回坏 JSON）：计一次不合法，发重试消息开新回合；用完 → 作废 / 任务失败', async () => {

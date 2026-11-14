@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { FakeMod, allRecipes } from './fake_mod.js'
 import { buildReflectDirectory, renderReflectDirectory } from '../src/bt/evidence.js'
 import { makeRuntime, runUntil } from './helpers.js'
+import { blackboardView, renderExpansionContext } from '../src/llm/bridge.js'
 
 // ── ForEach ─────────────────────────────────────────────────────────────────
 
@@ -209,6 +210,85 @@ test('SubTree：调用点参数按 signature 校验', () => {
   assert.throws(() => executor.startTask({ tree: { use: 'code/test.double' } }), /SubTree needs a trees\/ ref|no capsule named/)
 })
 
+// ── 展开请求的现场（2026-11-13）──────────────────────────────────────────────
+
+const fakePlanner = {
+  folder: 'code',
+  name: 'test.plan',
+  signature: { outputs: { mode: { type: 'string' }, missing: { type: 'list' }, big: { type: 'list' } } },
+  body: 'function main() { return { mode: "short", missing: [{ id: "minecraft:white_wool", need: 3 }], big: Array.from({ length: 80 }, (_, i) => i) } }'
+}
+const modeIsOk = { cond: 'blackboard/compare', name: '守卫：计划可行', params: { key: 'mode', op: '==', value: 'ok' } }
+const pickaxeQuery = { compute: 'code/core.json.query', params: { path: 'recipes', records: 'recipes', filters: { result: 'minecraft:wooden_pickaxe' }, fields: ['type', 'pattern'] }, writes: { recipes: 'result' } }
+
+test('展开请求附现场：前面失败的分支停在哪、小值给值、大块数据与记忆世界查询结果只给形状', async () => {
+  const { executor, requests } = makeRuntime({ capsules: [fakePlanner] })
+  executor.startTask({ tree: { seq: '做', do: [pickaxeQuery, { sel: '路线', do: [
+    { seq: '主路线', do: [{ compute: 'code/test.plan' }, modeIsOk] },
+    { expand: '兜底' }
+  ] }] } })
+  await runUntil(executor, () => executor.task.state === 'suspended')
+  const req = requests.at(-1)
+  assert.equal(req.type, 'expand')
+  assert.deepEqual(req.context.failures, [{ arm: { id: 'n1.2.1', name: '主路线' }, at: { id: 'n1.2.1.2', name: '守卫：计划可行', type: 'Condition' }, error: null, frames: [] }])
+  assert.deepEqual(req.context.frames, [])
+  assert.deepEqual(req.context.hidden, ['recipes'])
+
+  const view = blackboardView(req.blackboard, { hidden: req.context.hidden })
+  assert.match(view, /^mode = "short"$/m)
+  assert.match(view, /^missing = \[\{"id":"minecraft:white_wool","need":3\}\]$/m)
+  assert.match(view, /^big: list\(80\) of int（\d+ 字节，只给形状）$/m)
+  assert.match(view, /^recipes: .*（记忆世界查询结果，只给形状）$/m)
+  const text = renderExpansionContext(req.context)
+  assert.match(text, /## 前面没做成的分支（近的在前）\n\n- n1\.2\.1「主路线」：失败在 n1\.2\.1\.2「守卫：计划可行」（Condition）；错误：（无：条件不成立）/)
+  assert.equal(renderExpansionContext({ frames: [], failures: [], hidden: [] }), '', '没有现场就不加段落')
+})
+
+test('展开点在库里子树内部：消息给出子树的黑板；展开出来的节点读子树里写的键不被误判成"没有节点写过"', async () => {
+  const inner = {
+    folder: 'trees',
+    name: 'test.plan-then-expand',
+    signature: { outputs: {} },
+    body: { seq: '子树', do: [{ compute: 'code/test.plan' }, { sel: '路线', do: [modeIsOk, { expand: '兜底' }] }] }
+  }
+  const { executor, requests } = makeRuntime({ capsules: [fakePlanner, doubler, inner] })
+  executor.startTask({ blackboard: { goal: 3 }, tree: { seq: '做', do: [{ use: 'trees/test.plan-then-expand' }] } })
+  await runUntil(executor, () => executor.task.state === 'suspended')
+  const req = requests.at(-1)
+  assert.equal(req.evidence.nodeId, 'n1.1/c.2.2')
+  assert.deepEqual(req.context.frames.map((f) => [f.id, Object.keys(f.values).sort()]), [['n1.1', ['big', 'missing', 'mode']]])
+  assert.deepEqual(req.blackboard, { goal: 3 }, '任务帧里没有子树的中间值')
+  const text = renderExpansionContext(req.context)
+  assert.match(text, /## 展开点所在子树的黑板.*\n\nn1\.1（trees\/test\.plan-then-expand@\w+）：\n {2}mode = "short"/)
+  assert.match(text, /\n- n1\.1\/c\.2\.1「守卫：计划可行」（Condition）；错误：（无：条件不成立）\n/, '同一个 sel 里排在前面的分支（分支本身就是失败的节点）')
+
+  const res = executor.submitExpansion(req.requestId, { compute: 'code/test.double', params: { xs: '$big' } })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  await runUntil(executor, () => executor.task.state === 'done')
+})
+
+test('前面失败的分支是 use 子树：附上它退出时的黑板（失败原因在里面）；子树里的查询结果仍只给形状', async () => {
+  const mainRoute = {
+    folder: 'trees',
+    name: 'test.main-route',
+    signature: { outputs: {} },
+    body: { seq: '主路线', do: [pickaxeQuery, { compute: 'code/test.plan' }, modeIsOk] }
+  }
+  const { executor, requests } = makeRuntime({ capsules: [fakePlanner, mainRoute] })
+  executor.startTask({ tree: { sel: '做', do: [{ use: 'trees/test.main-route', name: '主路线' }, { expand: '兜底' }] } })
+  await runUntil(executor, () => executor.task.state === 'suspended')
+  const req = requests.at(-1)
+  const [failure] = req.context.failures
+  assert.equal(failure.at.id, 'n1.1/c.3')
+  assert.deepEqual(failure.frames.map((f) => f.id), ['n1.1'])
+  assert.equal(failure.frames[0].values.mode, 'short')
+  assert.ok(req.context.hidden.includes('recipes'), '子树里的查询节点也算')
+  const text = renderExpansionContext(req.context)
+  assert.match(text, /- n1\.1「主路线」：失败在 n1\.1\/c\.3「守卫：计划可行」（Condition）；错误：（无：条件不成立）\n {2}子树 n1\.1（trees\/test\.main-route@\w+）退出时的黑板：\n/)
+  assert.match(text, /^ {4}mode = "short"$/m)
+  assert.match(text, /^ {4}recipes: .*（记忆世界查询结果，只给形状）$/m)
+})
+
 // ── 可观测性 ────────────────────────────────────────────────────────────────
 
 test('可观测性：每个 Steps / Action 前后的差异进事件日志；expect 不成立 → 失败并附上实际发生的差异', async () => {
@@ -224,6 +304,14 @@ test('可观测性：每个 Steps / Action 前后的差异进事件日志；expe
   const moved = events.find((e) => e.event === 'observe' && e.id === 'n1.2')
   assert.deepEqual(moved.diff.container.slots, [{ slot: 9, before: '空', after: 'oak_log×2' }, { slot: 36, before: 'oak_log×2', after: '空' }])
   assert.equal(events.find((e) => e.event === 'observe' && e.id === 'n1.1').diff.container.screen, 'none → inventory')
+
+  // 按命令缩小观察来源（2026-11-13）：只有 container/slot 的叶子只读 container；观察读取记 calls.observe，不算树的 reads
+  const exitOf = (id) => events.find((e) => e.event === 'node' && e.phase === 'exit' && e.id === id)
+  const { actions, reads, observe } = exitOf('n1.2').calls
+  assert.deepEqual({ actions, reads, observe }, { actions: 2, reads: 0, observe: 2 }, '点格子：前后各读 container 一次')
+  assert.deepEqual(Object.keys(executor.task.snapshots.get('before@n1.2').state), ['container'])
+  assert.equal(exitOf('n1.1').calls.observe, 6, '其余命令照旧读 inventory / container / f3')
+  assert.deepEqual(Object.keys(executor.task.snapshots.get('before@n1.1').state).sort(), ['container', 'f3', 'inventory'])
 
   // 第一次：界面被关掉了，但原木还是 2 个；自动重试（§7.5 ①）时界面已经关着，所以什么都没变
   const attempts = events.filter((e) => e.event === 'node' && e.id === 'n1.3' && e.status === 'FAILURE').map((e) => e.error)
@@ -298,7 +386,8 @@ test('快照等状态稳定（observe.settle）：动作后服务端结果晚到
   const diff = settled.events.find((e) => e.event === 'observe' && e.id === 'n1.1').diff
   assert.deepEqual(diff.inventory, [{ slot: 5, before: '空', after: 'stick×32' }])
   const exit = settled.events.find((e) => e.event === 'node' && e.id === 'n1.1' && e.phase === 'exit')
-  assert.equal(exit.calls.reads, 6, '前后各读 3 个来源，口径不变')
+  assert.equal(exit.calls.observe, 6, '前后各读 3 个来源，记在执行器的观察读取（2026-11-13）')
+  assert.equal(exit.calls.reads, 0, 'expect 要的 inventory 已在观察来源里，不再另读，树自己的读取为 0')
   assert.ok(exit.calls.settle >= 4, '等稳定的读取单独记')
 
   // 不等（maxReads 0，以前的行为）：expect 读到的是中间状态

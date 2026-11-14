@@ -86,16 +86,23 @@ test('补丁之后：node 显示补丁来源；新叶子再执行的快照带 #n
   assert.ok(executor.task.snapshots.names().includes('before@n1.2.p2.1'))
 })
 
-test('快照缓冲：同一叶子再执行带 #n；只保留最近 keep 次叶子执行；特殊时刻不淘汰', () => {
+test('快照缓冲：同一叶子再执行带 #n；第一次执行一直保留，重复执行只留最近 keep 次；特殊时刻不淘汰', () => {
   const buf = new SnapshotBuffer({ keep: 2 })
   let t = 0
   buf.moment('interrupt', { player: 1 }, ++t)
-  buf.leafBefore('n1', {}, ++t); buf.leafAfter('n1', {}, ++t)
-  buf.leafBefore('n1', {}, ++t); buf.leafAfter('n1', {}, ++t)
+  for (let i = 0; i < 4; i++) { buf.leafBefore('n1', {}, ++t); buf.leafAfter('n1', {}, ++t) }
   buf.leafBefore('n2', {}, ++t)
-  assert.deepEqual(buf.names(), ['before@n2', 'after@n1#2', 'before@n1#2', 'interrupt'])
-  buf.leafAfter('n1', {}, ++t)
-  assert.equal(buf.get('after@n1'), null, '被淘汰的执行不会再补"后"快照')
+  assert.deepEqual(buf.names(), ['before@n2', 'after@n1#4', 'before@n1#4', 'after@n1#3', 'before@n1#3', 'after@n1', 'before@n1', 'interrupt'],
+    '循环里的 #2 被淘汰，第一次执行（循环开始前的现场）还在')
+  buf.leafAfter('n2', {}, ++t)
+  assert.ok(buf.get('after@n2'), '第一次执行照常补"后"快照')
+
+  buf.leafBefore('n3', {}, ++t); buf.leafAfter('n3', {}, ++t)
+  buf.leafBefore('n3', {}, ++t)                       // n3#2 进环形缓冲，还没结束
+  buf.leafBefore('n1', {}, ++t); buf.leafBefore('n1', {}, ++t) // 挤掉 n3#2
+  buf.leafAfter('n3', {}, ++t)
+  assert.equal(buf.get('after@n3#2'), null, '被淘汰的执行不会再补"后"快照')
+  assert.ok(buf.get('before@n3') && buf.get('after@n3'))
   assert.equal(buf.moment('interrupt', {}, ++t), 'interrupt#2')
   assert.equal(buf.moment('live', {}, ++t, { numbered: true }), 'live#1')
 })

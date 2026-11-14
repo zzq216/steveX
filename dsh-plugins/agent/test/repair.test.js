@@ -7,6 +7,7 @@ import { loadPrompts } from '../src/llm/prompts.js'
 import { createLocalResponder } from '../src/bt/index.js'
 import { treeTools } from '../src/tools/index.js'
 import { makeRuntime, runUntil } from './helpers.js'
+import { FakeMod } from './fake_mod.js'
 
 const prompts = loadPrompts(fileURLToPath(new URL('../prompts', import.meta.url)))
 const okCond = { cond: 'blackboard/compare', params: { key: 'ok', op: '>=', value: 1 }, name: '确认' }
@@ -19,8 +20,8 @@ const BUMP = {
   }
 }
 
-function setup() {
-  const rt = makeRuntime({ config: { observe: { enabled: true } } })
+function setup({ mod } = {}) {
+  const rt = makeRuntime({ mod, config: { observe: { enabled: true } } })
   const delivered = []
   const bridge = new Bridge({
     executor: rt.executor, library: rt.library, sandbox: rt.sandbox, prompts,
@@ -146,4 +147,20 @@ test('bt_inspect 工具的每种输出都是无损 JSON（DSH 拒收 undefined�
     lossless(out)
   }
   assert.ok(message)
+})
+
+test('修复回合里 bt_inspect 看到的格子号写进补丁 → 通过但带警告（2026-11-13）', async () => {
+  const rt = setup({ mod: new FakeMod({ inventory: { 36: ['stick', 1] } }) })
+  const message = await toFailed(rt)
+  rt.bridge.onPreStep({ sessionId: 's1', turn: 2, step: 1, messages: [{ source: message.source }] })
+  assert.equal((await rt.bridge.inspect({ what: 'live', sources: ['inventory'] })).ok, true)
+  const node = { sel: '补', do: [
+    { cond: 'blackboard/compare', params: { key: 'ok', op: '==', value: 36 } },
+    { act: 'key/hotbar', params: { slot: 1 }, writes: { ok: '+1' } }
+  ] }
+  const patched = rt.bridge.submitPatch({ sessionId: 's1', requestId: message.source.requestId, ops: [{ op: 'insert-before', id: 'n1.2', node }] })
+  assert.equal(patched.ok, true, JSON.stringify(patched))
+  assert.equal(patched.warnings?.length, 1, JSON.stringify(patched.warnings))
+  assert.match(patched.warnings[0], /params\.value = 36 is the same as live#1 的 inventory\.slots\[0\]\.slot/)
+  await runUntil(rt.executor, () => rt.executor.task.state === 'done')
 })

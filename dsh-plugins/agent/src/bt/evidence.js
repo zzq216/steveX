@@ -23,14 +23,16 @@ export const ALL_STATE_SOURCES = Object.freeze(['player', 'inventory', 'containe
  *   before@<id> / after@<id>    叶子第一次执行；同一叶子再次执行（循环、重试、恢复后重跑）→ before@<id>#2 …
  *   interrupt / episode-end / … 特殊时刻；同名再来一次 → interrupt#2 …
  *   live#1 / live#2 …           bt_inspect 的 live（总是带编号）
- * 叶子快照只保留最近 keep 次执行的（环形淘汰）；特殊时刻的保留到任务结束。
+ * 每个叶子**第一次**执行的前后快照保留到任务结束；再次执行（#2 起）的只保留最近 keep 次（环形淘汰）；特殊时刻的保留到任务结束。
+ * （2026-11-13：原来第一次执行也进环形缓冲，摆料 forEach 点 33 击就把"摆料前的背包"挤掉了，复盘只能按点击序列倒推叠数，
+ *   task-20261114040740-3。第一次执行的份数以树的叶子数为上限，不会无界增长。）
  */
 export class SnapshotBuffer {
   constructor({ keep = 20 } = {}) {
     this.keep = keep
     this.entries = new Map() // name → { name, at, state, kind: 'leaf' | 'moment' }
     this.runs = new Map()    // 叶子 id → 已开始的执行次数
-    this.leafOrder = []      // 叶子执行的先后：[{ before, after }]
+    this.leafOrder = []      // 再次执行（#2 起）的先后：[{ before, after }]，环形淘汰
     this.counts = new Map()  // 特殊时刻的基名 → 次数
     this.seq = 0             // 写入顺序（同一毫秒里的前后快照也分得清先后）
   }
@@ -41,7 +43,8 @@ export class SnapshotBuffer {
     this.runs.set(id, n)
     const suffix = n === 1 ? '' : `#${n}`
     const run = { before: `before@${id}${suffix}`, after: `after@${id}${suffix}` }
-    this.entries.set(run.before, { name: run.before, at, seq: ++this.seq, state, kind: 'leaf' })
+    this.entries.set(run.before, { name: run.before, at, seq: ++this.seq, state, kind: n === 1 ? 'first' : 'leaf' })
+    if (n === 1) return // 第一次执行不进环形缓冲
     this.leafOrder.push(run)
     while (this.leafOrder.length > this.keep) {
       const old = this.leafOrder.shift()
@@ -54,9 +57,11 @@ export class SnapshotBuffer {
   leafAfter(id, state, at) {
     const n = this.runs.get(id)
     if (!n) return
-    const name = `after@${id}${n === 1 ? '' : `#${n}`}`
-    if (!this.leafOrder.some((run) => run.after === name)) return
-    this.entries.set(name, { name, at, seq: ++this.seq, state, kind: 'leaf' })
+    const suffix = n === 1 ? '' : `#${n}`
+    // "前"已经被淘汰的执行不再补"后"
+    if (!this.entries.has(`before@${id}${suffix}`)) return
+    const name = `after@${id}${suffix}`
+    this.entries.set(name, { name, at, seq: ++this.seq, state, kind: n === 1 ? 'first' : 'leaf' })
   }
 
   /** 特殊时刻。@returns 实际用的名字 */
@@ -122,13 +127,16 @@ export function buildDirectory(task, pending, { path, versions = [] }) {
   }
 }
 
+/** 快照名单截断时补的一句：第一次执行的快照一直都在（SnapshotBuffer），名字不带 #n。 */
+const FIRST_RUN_NOTE = '；每个叶子第一次执行的 before@<id> / after@<id> 一直保留，循环里的重复执行只留最近的'
+
 /** 目录 → 消息正文里的一段文字。 */
 export function renderDirectory(dir) {
   const lines = [`${dir.type}：${dir.title}`]
   if (dir.error) lines.push(`错误：${dir.error}`)
   if (dir.path.length) lines.push(`路径：${dir.path.map((p) => `${p.id}${p.name ? `「${p.name}」` : ''}`).join(' → ')}`)
   lines.push('可查看（bt_inspect）：')
-  lines.push(`  快照  ${dir.snapshots.length ? `${dir.snapshots.slice(0, 12).join(', ')}${dir.snapshots.length > 12 ? `, …（共 ${dir.snapshots.length} 份）` : `（共 ${dir.snapshots.length} 份）`}` : '（无）'}`)
+  lines.push(`  快照  ${dir.snapshots.length ? `${dir.snapshots.slice(0, 12).join(', ')}${dir.snapshots.length > 12 ? `, …（共 ${dir.snapshots.length} 份${FIRST_RUN_NOTE}）` : `（共 ${dir.snapshots.length} 份）`}` : '（无）'}`)
   lines.push(`  事件  ${dir.events} 条`)
   lines.push(`  黑板  ${dir.blackboard.length ? `${dir.blackboard.length} 个键：${dir.blackboard.join(', ')}` : '（空）'}`)
   if (dir.versions.length) lines.push(`  记忆来源已换代  ${dir.versions.map((v) => `${v.source}（${v.nodeId} 读到之后又变过）`).join('；')}`)
@@ -295,6 +303,63 @@ export function buildReflectDirectory(task, { drafts = [] } = {}) {
   }
 }
 
+const MEMORY_QUERY_REF = /^code\/core\.(json|nbt)\.query(@|$)/
+
+/**
+ * 展开请求的现场（2026-11-13）。展开回合不能用 bt_inspect，定结构要用的少量东西直接附在消息里：
+ *   frames    展开点所在的子树（由外到内）此刻的黑板——展开出来的节点读写的是最里面那一层
+ *   failures  展开点的祖先 sel 里排在它前面、已经失败的分支，各自沿失败路径追到的节点与错误（近的在前）；
+ *             路径上已退出的 use 子树附上它们退出时的黑板（frames）
+ *   hidden    记忆世界查询（code/core.json.query / code/core.nbt.query）写下的键，及遍历它们的 forEach 变量：只给形状（I13）
+ * @param {object} task
+ * @param {string} nodeId  expand 节点 id
+ * @param {{ outputsOf?: (ref: string) => string[] }} [deps]  Compute 没写 writes 时按输出名写键
+ */
+export function buildExpansionContext(task, nodeId, { outputsOf = () => [] } = {}) {
+  const parts = String(nodeId).split('/')
+  const frames = []
+  for (let i = 1; i < parts.length; i++) {
+    const node = task.byId.get(parts.slice(0, i).join('/'))
+    if (node?.type === 'SubTree' && node.frame) frames.push({ id: node.id, ref: node.spec.ref ?? null, values: node.frame.snapshot() })
+  }
+
+  const parents = new Map()
+  const walk = (node) => { for (const kid of node.children()) { parents.set(kid, node); walk(kid) } }
+  walk(task.root)
+  // 失败路径：从分支往下，每层取最后一个失败的孩子
+  const failedPath = (node, path = []) => {
+    path.push(node)
+    const failed = node.children().filter((kid) => kid.lastStatus === 'FAILURE').pop()
+    return failed ? failedPath(failed, path) : path
+  }
+  const failures = []
+  let child = task.byId.get(nodeId)
+  for (let parent = parents.get(child); parent; child = parent, parent = parents.get(parent)) {
+    if (parent.type !== 'Selector') continue
+    const kids = parent.children()
+    for (const arm of kids.slice(0, kids.indexOf(child)).reverse()) {
+      if (arm.lastStatus !== 'FAILURE') continue
+      const path = failedPath(arm)
+      const leaf = path.at(-1)
+      // 失败路径上的 use 子树已经退出，它们的黑板（规划器的 mode / missing 之类）只留在 task.frames 里（2026-11-13）
+      const exited = path.filter((node) => node.type === 'SubTree' && task.frames?.has(node.id))
+        .map((node) => ({ id: node.id, ref: task.frames.get(node.id).ref ?? null, values: task.frames.get(node.id).values }))
+      failures.push({ arm: { id: arm.id, name: arm.name }, at: { id: leaf.id, name: leaf.name, type: leaf.type }, error: leaf.lastError ?? null, frames: exited })
+    }
+  }
+
+  const hidden = new Set()
+  for (const node of task.byId.values()) {
+    if (node.type !== 'Compute' || !MEMORY_QUERY_REF.test(node.spec.ref ?? '')) continue
+    for (const key of node.spec.writes ? Object.keys(node.spec.writes) : outputsOf(node.spec.ref)) hidden.add(key)
+  }
+  for (const node of task.byId.values()) {
+    const list = node.type === 'ForEach' && typeof node.spec.list === 'string' ? node.spec.list.slice(1).split('.')[0] : null
+    if (list && hidden.has(list)) hidden.add(node.spec.as)
+  }
+  return { frames, failures, hidden: [...hidden] }
+}
+
 const ORIGIN_TEXT = { outline: '大纲' }
 
 /** 复盘目录 → 消息正文里的一段文字。 */
@@ -304,7 +369,7 @@ export function renderReflectDirectory(dir) {
   lines.push(`节点：共 ${dir.nodes.total} 个；${Object.entries(dir.nodes.counts).map(([k, n]) => `${k === 'NOT_RUN' ? '未执行' : k} ${n}`).join(' · ')}`)
   if (dir.failures.length) lines.push(`失败过的节点：${dir.failures.map((f) => `${f.id} ×${f.times}（最终 ${f.final ?? '未执行'}）`).join('、')}`)
   const snaps = dir.snapshots
-  lines.push(`快照（bt_inspect what=snapshot）：${snaps.length ? `${snaps.slice(0, 12).join(', ')}${snaps.length > 12 ? `, …（共 ${snaps.length} 份）` : `（共 ${snaps.length} 份）`}` : '（无）'}`)
+  lines.push(`快照（bt_inspect what=snapshot）：${snaps.length ? `${snaps.slice(0, 12).join(', ')}${snaps.length > 12 ? `, …（共 ${snaps.length} 份${FIRST_RUN_NOTE}）` : `（共 ${snaps.length} 份）`}` : '（无）'}`)
   lines.push(`事件（bt_inspect what=events）：${dir.events.total} 条（${Object.entries(dir.events.kinds).map(([k, n]) => `${k} ${n}`).join(' · ')}）`)
   lines.push(`黑板键（bt_inspect what=blackboard）：${dir.blackboard.length ? dir.blackboard.join(' · ') : '（空）'}`)
   if (dir.frames?.length) lines.push(`子树黑板（退出时的值，bt_inspect what=blackboard 加 id=<节点>）：${dir.frames.map((f) => `${f.id}（${f.ref ?? '?'}）：${f.keys.join(' · ') || '（空）'}`).join('；')}`)

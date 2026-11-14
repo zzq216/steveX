@@ -231,11 +231,17 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     },
     {
       name: 'capsule_get',
-      description: '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions。',
+      description: [
+        '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字、在几种参数组合上成功过与没成功过的组合）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions。',
+        '正文按行号列在最后（子树按 JSON 分行）；放不下时只列前面能放下的行，并写明共几行——后面的用 start（从第几行起）/ lines（读几行）接着读，这时只返回那一段正文。只要契约与统计、不要正文：withBody: false。'
+      ].join('\n'),
       parameters: {
-        ref: { type: 'string', required: true, description: '如 "code/core.json.query"、"trees/x@1a2b3c4d"、"task/plan-grid"' }
+        ref: { type: 'string', required: true, description: '如 "code/core.json.query"、"trees/x@1a2b3c4d"、"task/plan-grid"' },
+        start: { type: 'integer', description: '只读正文：从第几行起（1 起算）。给了 start 或 lines 就只返回这一段正文' },
+        lines: { type: 'integer', description: `只读正文：读几行（默认 ${BODY_PAGE_LINES}，最多 ${BODY_MAX_LINES}）` },
+        withBody: { type: 'boolean', description: 'false = 不带正文，只要契约、统计与版本链' }
       },
-      output: { schema: JSON_OUTPUT, render },
+      output: { schema: JSON_OUTPUT, render: (args, value) => textBlocks(renderCapsule(args, value, maxOutputChars)) },
       isConcurrencySafe: () => true,
       async execute(args, exec) {
         const draft = String(args.ref).startsWith('task/') ? bridge?.reflectDraft?.(sessionOf(exec), args.ref) : null
@@ -260,4 +266,49 @@ export function knowledgeTools({ registry, library, stats = null, history = null
       }
     }
   ]
+}
+
+/** capsule_get 一页正文的默认行数与上限 */
+const BODY_PAGE_LINES = 300
+const BODY_MAX_LINES = 600
+
+/**
+ * capsule_get 的文本（2026-11-13）：契约 / 统计照旧是 JSON，正文单独按行号列出——原来正文是 JSON 里的一个长字符串、
+ * 排在版本链之后，整体超过 maxOutputChars 就从尾部截断，长代码的后半段永远看不到（task-20261114070515-8 复盘：
+ * "The body got truncated at 20000 chars… There's no tool to slice"）。
+ */
+export function renderCapsule(args, value, maxChars) {
+  const { body, ...meta } = value
+  const bodyText = body === undefined ? null : typeof body === 'string' ? body : JSON.stringify(body, null, 1)
+  const all = bodyText === null ? [] : bodyText.split('\n')
+  const ranged = args?.start !== undefined || args?.lines !== undefined
+  if (ranged) {
+    if (bodyText === null) return `${value.ref}：没有正文${value.host ? '（宿主实现的内置查询）' : ''}`
+    const from = Math.max(1, Number.isInteger(args.start) ? args.start : 1)
+    const count = Math.min(BODY_MAX_LINES, Math.max(1, Number.isInteger(args.lines) ? args.lines : BODY_PAGE_LINES))
+    return `${value.ref} 正文（共 ${all.length} 行）\n${numbered(all, from, count, maxChars)}`
+  }
+  const head = jsonText(meta, maxChars)
+  if (bodyText === null || args?.withBody === false) {
+    return bodyText === null ? head : `${head}\n\n正文共 ${all.length} 行（没有列出；要看用 start / lines）`
+  }
+  const budget = Math.max(2000, maxChars - head.length - 200)
+  return `${head}\n\n正文（共 ${all.length} 行）：\n${numbered(all, 1, BODY_MAX_LINES, budget)}`
+}
+
+/** 第 from 行起最多 count 行、总字符不超过 budget；没列完就写明从哪行接着读。 */
+function numbered(lines, from, count, budget) {
+  if (from > lines.length) return `（从第 ${from} 行起没有内容：正文共 ${lines.length} 行）`
+  const out = []
+  let used = 0
+  let last = from - 1
+  for (let n = from; n <= Math.min(lines.length, from + count - 1); n++) {
+    const line = `${n}: ${lines[n - 1]}`
+    if (out.length && used + line.length + 1 > budget) break
+    out.push(line)
+    used += line.length + 1
+    last = n
+  }
+  const rest = last < lines.length ? `\n…（第 ${from}–${last} 行；后面还有 ${lines.length - last} 行，用 start: ${last + 1} 接着读）` : ''
+  return out.join('\n') + rest
 }

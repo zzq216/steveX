@@ -1,13 +1,13 @@
 import { EventEmitter } from 'node:events'
 import { SUCCESS, FAILURE, RUNNING, NEEDS_EXPANSION, isTerminal } from './status.js'
-import { Blackboard } from './blackboard.js'
+import { Blackboard, argsFingerprint } from './blackboard.js'
 import { buildTree, walkSpec, replaceSpec, pinRefs } from './build.js'
 import { compileTree } from './compiler.js'
 import { validateTree } from './validator.js'
 import { EventLog } from './event_log.js'
 import { planPatch } from './patch.js'
-import { DEFAULT_OBSERVE_SOURCES } from './observe.js'
-import { SnapshotBuffer, ALL_STATE_SOURCES, buildDirectory, inspect } from './evidence.js'
+import { DEFAULT_OBSERVE_SOURCES, DEFAULT_OBSERVE_BY_COMMAND } from './observe.js'
+import { SnapshotBuffer, ALL_STATE_SOURCES, buildDirectory, buildExpansionContext, inspect } from './evidence.js'
 
 /**
  * 行为树执行器（集成方案 §3.2 / 行为树设计 §7）。
@@ -49,10 +49,10 @@ export class Executor extends EventEmitter {
     this.capsules = capsules
     this.eventLog = eventLog
     this.config = {
-      tickMs: 50, maxExpansionNodes: 25, maxInvalidAttempts: 3, maxValueBytes: 16384, snapshotKeep: 20, reactiveEveryMs: 1000, respawnTimeoutMs: 10000, respawnPollMs: 200,
+      tickMs: 50, maxExpansionNodes: 100, maxInvalidAttempts: 3, maxValueBytes: 16384, snapshotKeep: 20, reactiveEveryMs: 1000, respawnTimeoutMs: 10000, respawnPollMs: 200,
       fastMaxEpisodeMs: 30000,
       ...config,
-      observe: { enabled: true, sources: DEFAULT_OBSERVE_SOURCES, ...(config.observe ?? {}) }
+      observe: { enabled: true, sources: DEFAULT_OBSERVE_SOURCES, byCommand: DEFAULT_OBSERVE_BY_COMMAND, ...(config.observe ?? {}) }
     }
     this.now = now
     this.fast = null       // { spec, root, version }
@@ -127,6 +127,7 @@ export class Executor extends EventEmitter {
       byId: built.byId,
       version: 1,
       blackboard: new Blackboard({ maxValueBytes: this.config.maxValueBytes, initial: blackboard }),
+      initialBlackboard: structuredClone(blackboard), // 任务参数：写死值检查不把它们算作"看到的值"（2026-11-13）
       pending: null,
       retriedLeaf: null,
       expansionNode: null,
@@ -465,14 +466,20 @@ export class Executor extends EventEmitter {
       reactiveEveryMs: task ? this.config.reactiveEveryMs : undefined,
       trackAbort: (promise) => this.pendingAborts.push(promise),
       requestExpansion: task ? (node) => { task.expansionNode = node } : undefined,
-      onNode: task ? (node, phase, status) => this.log(task.taskId, {
-        event: 'node', phase, id: node.id, type: node.type, name: node.name ?? undefined,
-        status, error: phase === 'exit' && status === FAILURE ? node.lastError ?? undefined : undefined,
-        // 调用胶囊的节点（Compute / 条件代码 / SubTree）退出时记下钉过哈希的引用：胶囊使用统计据此累计（整理方案 D1）
-        ref: phase === 'exit' ? node.spec.ref ?? undefined : undefined,
-        // 叶子本次发出的 mod 调用（任务历史方案 H1）：成本画像据此按节点 / 胶囊汇总
-        calls: phase === 'exit' && node.calls && (node.calls.actions || node.calls.reads || node.calls.settle) ? { ...node.calls } : undefined
-      }) : undefined
+      onNode: task ? (node, phase, status, nodeCtx) => {
+        // 调用胶囊的节点进入时记下这次的实参指纹（2026-11-13，跨实例证据）：用的是调用方此刻的黑板
+        if (phase === 'enter' && typeof node.spec.ref === 'string') node.callArgs = argsFingerprint(node.spec.params, nodeCtx?.blackboard)
+        this.log(task.taskId, {
+          event: 'node', phase, id: node.id, type: node.type, name: node.name ?? undefined,
+          status, error: phase === 'exit' && status === FAILURE ? node.lastError ?? undefined : undefined,
+          // 调用胶囊的节点（Compute / 条件代码 / SubTree）退出时记下钉过哈希的引用：胶囊使用统计据此累计（整理方案 D1）
+          ref: phase === 'exit' ? node.spec.ref ?? undefined : undefined,
+          args: phase === 'exit' && typeof node.spec.ref === 'string' ? node.callArgs ?? undefined : undefined,
+          // 叶子本次发出的 mod 调用（任务历史方案 H1）：成本画像据此按节点 / 胶囊汇总
+          // calls.observe / calls.settle 是执行器的观察与等稳定读取，成本画像不算进 agent 的 mod 调用（2026-11-13）
+          calls: phase === 'exit' && node.calls && (node.calls.actions || node.calls.reads || node.calls.settle || node.calls.observe) ? { ...node.calls } : undefined
+        })
+      } : undefined
     }
   }
 
@@ -492,7 +499,8 @@ export class Executor extends EventEmitter {
       if (this.task !== task || task.pending?.requestId !== requestId) return
       this.emit('request', {
         taskId: task.taskId, requestId, type, evidence, tree: task.spec, blackboard: task.blackboard.snapshot(),
-        directory: PATCH_REQUESTS.includes(type) ? this.directory(task) : null
+        directory: PATCH_REQUESTS.includes(type) ? this.directory(task) : null,
+        context: type === 'expand' ? buildExpansionContext(task, evidence.nodeId, { outputsOf: (ref) => this.outputsOf(ref) }) : null
       })
     }
     if (!PATCH_REQUESTS.includes(type)) {
@@ -682,7 +690,10 @@ export class Executor extends EventEmitter {
     try {
       const prepared = this.prepare(subtree, {
         kind: 'task', rootId: `${nodeId}.1`, maxNodes: this.config.maxExpansionNodes,
-        initialKeys: [...writtenKeys(task.spec, this.capsules?.library), ...Object.keys(task.blackboard.snapshot())]
+        initialKeys: [
+          ...writtenKeys(task.spec, this.capsules?.library), ...Object.keys(task.blackboard.snapshot()),
+          ...this.enclosingFrameKeys(task, nodeId)
+        ]
       })
       spec = prepared.spec
       errors = prepared.check.errors
@@ -714,6 +725,29 @@ export class Executor extends EventEmitter {
     this.log(task.taskId, { event: 'expansion/applied', requestId, nodeId, version: task.version, ids: [...built.byId.keys()] })
     this.setState('running')
     return { ok: true, version: task.version, ids: [...built.byId.keys()] }
+  }
+
+  /**
+   * 展开点在库里子树内部时（id 形如 n1.1/c.2.2）：那几层子树的黑板此刻已有的键 + 子树体里会写的键。
+   * 展开出来的节点读写的是最里面那层实例帧，读不到的再回落任务帧（2026-11-13：原先只认任务帧，
+   * 读子树里写的键被误判成"没有节点写过"，task-20261113141927-1 r2）。
+   */
+  enclosingFrameKeys(task, nodeId) {
+    const parts = String(nodeId).split('/')
+    const keys = []
+    for (let i = 1; i < parts.length; i++) {
+      const node = task.byId.get(parts.slice(0, i).join('/'))
+      if (node?.type !== 'SubTree') continue
+      if (node.frame) keys.push(...Object.keys(node.frame.snapshot()))
+      keys.push(...Object.keys(node.entry?.signature.inputs ?? {}))
+      if (node.entry?.body && typeof node.entry.body === 'object') keys.push(...writtenKeys(node.entry.body, this.capsules?.library))
+    }
+    return keys
+  }
+
+  /** 胶囊的输出名（Compute 没写 writes 时就写这些键）。 */
+  outputsOf(ref) {
+    return Object.keys(this.capsules?.library?.tryGet(ref)?.signature.outputs ?? {})
   }
 
   /**

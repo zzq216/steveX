@@ -9,6 +9,12 @@
  */
 export const DEFAULT_OBSERVE_SOURCES = Object.freeze(['inventory', 'container', 'f3'])
 
+/**
+ * 按命令缩小观察来源（2026-11-13）：叶子里的命令都在表里时只读表里的来源。
+ * container/slot 只在界面开着时点，界面的 slots 已含玩家背包格——再读 inventory / f3 是重复读（摆料每击原来 6 次观察读取）。
+ */
+export const DEFAULT_OBSERVE_BY_COMMAND = Object.freeze({ 'container/slot': Object.freeze(['container']) })
+
 /** @returns {object|null} 没有任何变化时返回 null */
 export function diffState(before, after) {
   if (!before || !after) return null

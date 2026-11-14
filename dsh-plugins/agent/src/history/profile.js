@@ -4,7 +4,10 @@
  * 只陈述事实，不下结论：哪里该改由复盘里的 agent 判断（H2、H3）。
  *
  * - 纯执行时间 execMs：任务处于 running 的累计时长（task/state 事件），扣掉等展开 / 修补回合（suspended）与暂停
- * - mod 调用：叶子节点退出事件里的 calls { actions, reads }（一次读 N 个来源记 N 次）
+ * - mod 调用：叶子节点退出事件里的 calls { actions, reads }（一次读 N 个来源记 N 次）——agent 写的树自己发出的动作与读取。
+ *   执行器的观察读取（calls.observe，Steps / Action 前后的快照）与等稳定读取（calls.settle）单列，不算进 modCalls：
+ *   成本画像用来衡量 agent 的树，执行器的证据设施不是它的成本（2026-11-13）。
+ *   之前的事件没有 calls.observe，Steps / Action 的 reads 当时就是观察读取（expect 额外要的来源极少），按观察读取算
  * - 节点 / 胶囊的耗时按"运行时钟"算：只计 running 期间，所以等 LLM 回合的时间不会算到外层节点头上
  * - 节点 / 胶囊的调用次数含子树：叶子退出时，计入当时所有已进入、尚未退出的节点
  */
@@ -79,6 +82,8 @@ export function buildProfile(events, { top = 10, repeatMin = 3 } = {}) {
   const capsules = new Map() // ref → { ref, runs, modCalls, ms }
   let actions = 0
   let reads = 0
+  let observeReads = 0
+  let settleReads = 0
   let nodeRuns = 0
   for (const e of events) {
     if (e.event !== 'node') continue
@@ -88,9 +93,12 @@ export function buildProfile(events, { top = 10, repeatMin = 3 } = {}) {
     }
     if (e.phase !== 'exit') continue
     nodeRuns++
-    const own = (e.calls?.actions ?? 0) + (e.calls?.reads ?? 0)
-    actions += e.calls?.actions ?? 0
-    reads += e.calls?.reads ?? 0
+    const calls = splitCalls(e)
+    const own = calls.actions + calls.reads
+    actions += calls.actions
+    reads += calls.reads
+    observeReads += calls.observe
+    settleReads += calls.settle
     if (own) for (const o of open) o.calls += own
     const index = open.findLastIndex((o) => o.id === e.id)
     const frame = index >= 0 ? open.splice(index, 1)[0] : { enterRun: runningUntil(at(e)), calls: own }
@@ -126,10 +134,24 @@ export function buildProfile(events, { top = 10, repeatMin = 3 } = {}) {
     startedAt: new Date(startedAt).toISOString(),
     durationMs: lastAt - startedAt,
     execMs, waitMs, pausedMs, waits,
-    modCalls, actions, reads, nodeRuns,
+    modCalls, actions, reads, observeReads, settleReads, nodeRuns,
     capsules: capsuleRows.slice(0, top),
     nodes: nodeRows.slice(0, top),
     repeats
+  }
+}
+
+const OBSERVED_LEAVES = ['Steps', 'Action']
+
+/** 一条退出事件的调用拆分：树自己的动作 / 读取，执行器的观察 / 等稳定读取。旧事件没有 calls.observe 时按文件头的规则换算。 */
+export function splitCalls(e) {
+  const c = e.calls ?? {}
+  const legacy = c.observe === undefined && OBSERVED_LEAVES.includes(e.type)
+  return {
+    actions: c.actions ?? 0,
+    reads: legacy ? 0 : c.reads ?? 0,
+    observe: legacy ? c.reads ?? 0 : c.observe ?? 0,
+    settle: c.settle ?? 0
   }
 }
 
@@ -142,7 +164,10 @@ export function formatProfile(profile) {
   const waits = Object.entries(profile.waits).map(([kind, w]) => `${kind} ${w.count} 次 ${sec(w.ms)}`).join('、')
   const lines = [
     `总计：执行 ${sec(profile.execMs)}（不含等 LLM 回合 ${sec(profile.waitMs)}${waits ? `：${waits}` : ''}${profile.pausedMs ? `；暂停 ${sec(profile.pausedMs)}` : ''}），` +
-      `mod 调用 ${profile.modCalls} 次（动作 ${profile.actions} / 读取 ${profile.reads}），节点执行 ${profile.nodeRuns} 次`
+      `mod 调用 ${profile.modCalls} 次（树发出的：动作 ${profile.actions} / 读取 ${profile.reads}），节点执行 ${profile.nodeRuns} 次` +
+      (profile.observeReads || profile.settleReads
+        ? `；另有执行器的观察读取 ${profile.observeReads ?? 0} 次、等稳定读取 ${profile.settleReads ?? 0} 次（动作前后留证据，不算进上面的调用数，也不由树决定）`
+        : '')
   ]
   if (profile.capsules.length) {
     lines.push(`按胶囊（前 ${profile.capsules.length}，按 mod 调用排；调用与耗时含子树）：`)

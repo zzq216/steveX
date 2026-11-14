@@ -18,10 +18,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.stats.Stats;
+import net.minecraft.world.Container;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -29,10 +32,12 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -51,6 +56,10 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>带工作站的场地（docs/工作台训练场设计方案.md W2）：工作站放在 (ox, oy+1, oz+2)，玩家站在中心朝 +z，
  * 俯角按"眼睛 → 工作站中心"算出，准星正对工作站朝向玩家的那一面。
+ *
+ * <p>箱子场地（docs/箱子训练场设计方案.md）：工作站是小箱子（{@code chest}）或大箱子（{@code large_chest}，
+ * 多占 (ox+1, oy+1, oz+2) 一格），每轮按本轮的大小重搭；prepare 清空并布置箱子、登记本轮的目标计数
+ * （{@link Expect}），tick 里记第一次恰好达到目标的时刻（C9）；status 另报箱子、物品栏、光标、地上掉落物的计数（C8）。
  */
 public final class ArenaManager {
 
@@ -59,17 +68,27 @@ public final class ArenaManager {
     /** 一块场地：origin + 工作站名（null = 没有工作站）。 */
     public record Site(BlockPos origin, String station) {}
 
-    /** 工作站名 → 方块。目前只有工作台（W2）。 */
-    private static final Map<String, Block> STATIONS = Map.of("crafting_table", Blocks.CRAFTING_TABLE);
+    /** 工作站名 → 方块：工作台（W2）；小箱子、大箱子（箱子方案 C2，大箱子是两块 CHEST）。 */
+    private static final Map<String, Block> STATIONS = Map.of(
+            "crafting_table", Blocks.CRAFTING_TABLE,
+            "chest", Blocks.CHEST,
+            "large_chest", Blocks.CHEST);
 
     /** 已知场地：名字 → Site。arena/build 会登记或更新；/arena 命令按这里传送。 */
     private static final Map<String, Site> KNOWN = new ConcurrentHashMap<>(Map.of(
             "craft2x2", new Site(DEFAULT_ORIGIN, null),
-            "craft3x3", new Site(new BlockPos(10000, 120, 10030), "crafting_table")));
+            "craft3x3", new Site(new BlockPos(10000, 120, 10030), "crafting_table"),
+            "chest", new Site(new BlockPos(10000, 120, 10060), "chest")));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
     private record Watch(Item item, String id, int baseline) {}
+
+    /**
+     * 本轮的目标计数（箱子方案 C9）：物品栏（不含光标）与工作站容器里各物品 id 的数量都恰好如此、且光标为空，
+     * 就算到达。取 / 放、要几个这些语义由插件定，mod 只比对。
+     */
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container) {}
 
     /** 进行中的一轮；null = 没有进行中的训练。 */
     private static final class Run {
@@ -78,20 +97,25 @@ public final class ArenaManager {
         final UUID player;
         final List<Watch> watch;
         final long startedAtMs;
-        final BlockPos stationPos; // 没有工作站时为 null
+        final String stationName; // 没有工作站时为 null
+        final List<BlockPos> stationPositions; // 工作站占的方块（大箱子两格）；没有工作站时为空
         final Block station;
+        final Expect expect; // 没有目标计数时为 null
         Long craftedAtMs;
         String craftedItem;
         Long openedAtMs;
+        Long reachedAtMs;
 
-        Run(String arena, BlockPos origin, UUID player, List<Watch> watch, long startedAtMs, BlockPos stationPos, Block station) {
+        Run(String arena, BlockPos origin, UUID player, List<Watch> watch, long startedAtMs, String stationName, Block station, Expect expect) {
             this.arena = arena;
             this.origin = origin;
             this.player = player;
             this.watch = watch;
             this.startedAtMs = startedAtMs;
-            this.stationPos = stationPos;
+            this.stationName = stationName;
+            this.stationPositions = List.copyOf(stationStates(stationName, origin).keySet());
             this.station = station;
+            this.expect = expect;
         }
     }
 
@@ -120,6 +144,53 @@ public final class ArenaManager {
         return new BlockPos(o.getX(), o.getY() + 1, o.getZ() + 2);
     }
 
+    public static boolean isChest(String station) {
+        return "chest".equals(station) || "large_chest".equals(station);
+    }
+
+    /** 箱子工作站的格数：小箱子 27、大箱子 54；不是箱子 → 0。 */
+    public static int chestCapacity(String station) {
+        return "large_chest".equals(station) ? 54 : "chest".equals(station) ? 27 : 0;
+    }
+
+    /**
+     * 工作站占的方块与状态。工作台、小箱子占一格；大箱子占两格（箱子方案 C2）。
+     *
+     * <p>箱子朝北，正面对着站在 -z 一侧的玩家。两个相邻箱子<b>不会</b>因为 setBlock 自动连成大箱子
+     * （{@code ChestBlock.updateShape} 只在邻居已经是 LEFT/RIGHT 时才跟着连，{@code ChestBlock.java:170-180}），
+     * 所以两半显式设 TYPE。{@code getConnectedDirection}：LEFT 连向 FACING 的顺时针方向，朝北时是东，
+     * 故 LEFT 在 (ox, oz+2)、RIGHT 在 (ox+1, oz+2)。准星对着 LEFT 那一半。
+     */
+    private static Map<BlockPos, BlockState> stationStates(String station, BlockPos o) {
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>();
+        if (station == null) return out;
+        BlockPos at = stationPos(o);
+        switch (station) {
+            case "chest" -> out.put(at, chestState(ChestType.SINGLE));
+            case "large_chest" -> {
+                out.put(at, chestState(ChestType.LEFT));
+                out.put(at.east(), chestState(ChestType.RIGHT));
+            }
+            default -> out.put(at, station(station).defaultBlockState());
+        }
+        return out;
+    }
+
+    private static BlockState chestState(ChestType type) {
+        return Blocks.CHEST.defaultBlockState().setValue(ChestBlock.FACING, Direction.NORTH).setValue(ChestBlock.TYPE, type);
+    }
+
+    /**
+     * 工作站箱子的容器。大箱子取合并容器，格号与界面一致（RIGHT 那半在前，{@code ChestBlock.combine}）；
+     * 只剩一半时就是那一半。那一格不是箱子（被挖掉了）→ null。
+     */
+    private static Container stationContainer(ServerLevel level, BlockPos o) {
+        BlockPos at = stationPos(o);
+        BlockState state = level.getBlockState(at);
+        if (!(state.getBlock() instanceof ChestBlock chest)) return null;
+        return ChestBlock.getContainer(chest, state, level, at, true);
+    }
+
     /** 世界关闭时丢掉进行中的状态，避免带进下一个世界。 */
     public static void reset() {
         active = null;
@@ -129,13 +200,14 @@ public final class ArenaManager {
 
     /** 幂等搭建场地，返回实际改动的方块数。station 不为 null 时在场内放工作站，被挖掉的会补回（W8）。 */
     public static int build(MinecraftServer server, String arena, BlockPos o, String station) {
-        Block stationBlock = station(station);
+        station(station); // 未知名字在这里报错
         KNOWN.put(arena, new Site(o.immutable(), station));
         ServerLevel level = server.overworld();
         int ox = o.getX(), oy = o.getY(), oz = o.getZ();
-        BlockPos stationAt = stationPos(o);
+        Map<BlockPos, BlockState> stationAt = stationStates(station, o);
         int placed = 0;
-        // 场内：地板 11×11，外圈屏障墙 3 格高；场内上方清空
+        // 场内：地板 11×11，外圈屏障墙 3 格高；场内上方清空（所以箱子上方一定是空气、打得开，箱子方案 S4）。
+        // 换箱子大小时，多出来的那半随场内清空改回空气
         for (int dx = -5; dx <= 5; dx++) {
             for (int dz = -5; dz <= 5; dz++) {
                 placed += set(level, new BlockPos(ox + dx, oy, oz + dz), Blocks.STONE.defaultBlockState());
@@ -143,8 +215,7 @@ public final class ArenaManager {
                 for (int dy = 1; dy <= 3; dy++) {
                     BlockPos pos = new BlockPos(ox + dx, oy + dy, oz + dz);
                     BlockState state = wall ? Blocks.BARRIER.defaultBlockState()
-                            : stationBlock != null && pos.equals(stationAt) ? stationBlock.defaultBlockState()
-                            : Blocks.AIR.defaultBlockState();
+                            : stationAt.getOrDefault(pos, Blocks.AIR.defaultBlockState());
                     placed += set(level, pos, state);
                 }
             }
@@ -254,13 +325,33 @@ public final class ArenaManager {
     }
 
     /**
+     * 箱子里的物品（箱子方案 C4）：格号在 [0, capacity) 里、不重复，数量在 [1, 堆叠上限] 里——
+     * 出题器保证不超上限，这里不兜底拆堆，超了直接报错。
+     */
+    static void checkChestItems(List<Give> items, int capacity) {
+        if (!items.isEmpty() && capacity == 0) throw new IllegalArgumentException("chestItems need a chest station");
+        boolean[] used = new boolean[Math.max(capacity, 1)];
+        for (Give g : items) {
+            if (g.slot() < 0 || g.slot() >= capacity) throw new IllegalArgumentException("chest slot out of range [0, " + (capacity - 1) + "]: " + g.slot());
+            if (used[g.slot()]) throw new IllegalArgumentException("duplicate chest slot: " + g.slot());
+            used[g.slot()] = true;
+            int max = item(g.id()).getDefaultMaxStackSize();
+            if (g.count() < 1 || g.count() > max) throw new IllegalArgumentException("bad count for " + g.id() + " in the chest: " + g.count() + " (stack size " + max + ")");
+        }
+    }
+
+    /**
      * 每轮重置（方案 T8）并发放材料，开始监测 watch 里各物品的 crafted 统计。
+     * 箱子工作站（箱子方案）：清空箱子后放进 chestItems；给了 expect 就在 tick 里检测到达（C9）。
      * 已有进行中的一轮时拒绝：先 finish 再开新一轮。
      */
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
-                                              List<Give> requested, long seed, List<String> watchIds, long dayTime) {
+                                              List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
+                                              Expect expect, long dayTime) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         Block stationBlock = station(station);
+        checkChestItems(chestItems, chestCapacity(station));
+        if (expect != null && !isChest(station)) throw new IllegalArgumentException("expect needs a chest station");
         List<Give> items = split(requested, seed);
         List<ItemStack> stacks = new ArrayList<>();
         for (Give g : items) stacks.add(new ItemStack(item(g.id()), g.count()));
@@ -298,6 +389,15 @@ public final class ArenaManager {
         // 7. 发材料，记统计基线
         for (int i = 0; i < items.size(); i++) player.getInventory().setItem(items.get(i).slot(), stacks.get(i));
         player.inventoryMenu.broadcastChanges();
+        // 8. 箱子：先清空（上一轮剩下的不能留），再放本轮的
+        Container chest = null;
+        if (isChest(station)) {
+            chest = stationContainer(level, o);
+            if (chest == null) throw new IllegalStateException("no chest at " + stationPos(o) + " after building the arena");
+            chest.clearContent();
+            for (Give g : chestItems) chest.setItem(g.slot(), new ItemStack(item(g.id()), g.count()));
+            chest.setChanged();
+        }
         List<Watch> watch = new ArrayList<>();
         Map<String, Object> baseline = new LinkedHashMap<>();
         for (int i = 0; i < watchIds.size(); i++) {
@@ -305,8 +405,7 @@ public final class ArenaManager {
             watch.add(new Watch(watchItems.get(i), watchIds.get(i), value));
             baseline.put(watchIds.get(i), value);
         }
-        BlockPos stationAt = stationBlock != null ? stationPos(o) : null;
-        active = new Run(arena, o.immutable(), player.getUUID(), watch, System.currentTimeMillis(), stationAt, stationBlock);
+        active = new Run(arena, o.immutable(), player.getUUID(), watch, System.currentTimeMillis(), station, stationBlock, expect);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("arena", arena);
@@ -319,7 +418,12 @@ public final class ArenaManager {
         if (stationBlock != null) {
             out.put("station", station);
             out.put("pitch", player.getXRot());
-            out.put("aimOk", aimsAt(player, stationAt, stationBlock));
+            out.put("aimOk", aimsAt(player, stationPos(o), stationBlock));
+        }
+        if (chest != null) {
+            // 大箱子没连上时这里是 27（C2 自检）
+            out.put("chestSlots", chest.getContainerSize());
+            out.put("chest", counts(chest));
         }
         return out;
     }
@@ -333,10 +437,12 @@ public final class ArenaManager {
         out.put("startedAtMs", active.startedAtMs);
         out.put("craftedAtMs", active.craftedAtMs);
         out.put("craftedItem", active.craftedItem);
+        ServerLevel level = server.overworld();
         if (active.station != null) {
             out.put("openedAtMs", active.openedAtMs);
-            out.put("stationIntact", server.overworld().getBlockState(active.stationPos).is(active.station));
+            out.put("stationIntact", stationIntact(level, active));
         }
+        if (active.expect != null) out.put("reachedAtMs", active.reachedAtMs);
         ServerPlayer player = server.getPlayerList().getPlayer(active.player);
         out.put("playerOnline", player != null);
         if (player == null) return out;
@@ -345,7 +451,22 @@ public final class ArenaManager {
         out.put("craftedDelta", delta);
         out.put("inventory", inventory(player, active.watch));
         out.put("insideArena", inside(server, player, active.origin));
+        if (isChest(active.stationName)) {
+            // 箱子方案 C8：四处分开计数——物品栏（不含光标）、箱子、光标、场内地上
+            Container chest = stationContainer(level, active.origin);
+            out.put("chestSlots", chest != null ? chest.getContainerSize() : null);
+            out.put("chest", chest != null ? counts(chest) : null);
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+        }
         return out;
+    }
+
+    /** 工作站的每一格都还是那种方块（大箱子要两半都在）。 */
+    private static boolean stationIntact(ServerLevel level, Run run) {
+        for (BlockPos pos : run.stationPositions) if (!level.getBlockState(pos).is(run.station)) return false;
+        return true;
     }
 
     /** 结束本轮：读最终状态后传送到场外。没有进行中的一轮时只传送。 */
@@ -359,7 +480,7 @@ public final class ArenaManager {
         return out;
     }
 
-    /** 服务器 tick：记第一次合成时刻、第一次打开工作台的时刻；定期清掉场内敌对生物。 */
+    /** 服务器 tick：记第一次合成、第一次打开工作站、第一次恰好达到目标计数的时刻；定期清掉场内敌对生物。 */
     public static void onServerTick(MinecraftServer server) {
         Run run = active;
         if (run == null) return;
@@ -374,15 +495,60 @@ public final class ArenaManager {
                 }
             }
         }
-        if (run.station != null && run.openedAtMs == null && player.containerMenu instanceof CraftingMenu) {
+        if (run.station != null && run.openedAtMs == null && opensStation(run.stationName, player.containerMenu)) {
             run.openedAtMs = System.currentTimeMillis();
+        }
+        if (run.expect != null && run.reachedAtMs == null && reached(server.overworld(), player, run)) {
+            run.reachedAtMs = System.currentTimeMillis();
         }
         if (++tickCounter % MONSTER_SWEEP_TICKS == 0) {
             for (Entity e : server.overworld().getEntitiesOfClass(Entity.class, box(run.origin), e -> e instanceof Enemy)) e.discard();
         }
     }
 
+    /** 当前界面是不是这个工作站的界面：工作台 → CraftingMenu（物品栏的 2×2 是 InventoryMenu，不会误记）；箱子 → ChestMenu。 */
+    private static boolean opensStation(String station, AbstractContainerMenu menu) {
+        return isChest(station) ? menu instanceof ChestMenu : menu instanceof CraftingMenu;
+    }
+
+    /** 箱子方案 C9：物品栏（不含光标）与箱子的计数恰好等于 expect，且光标为空。箱子不在了 → 否。 */
+    private static boolean reached(ServerLevel level, ServerPlayer player, Run run) {
+        if (!player.containerMenu.getCarried().isEmpty()) return false;
+        Container chest = stationContainer(level, run.origin);
+        return chest != null && counts(player.getInventory()).equals(run.expect.inventory()) && counts(chest).equals(run.expect.container());
+    }
+
     // ── 工具 ─────────────────────────────────────────────────────────────
+
+    private static String id(ItemStack stack) {
+        return BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+    }
+
+    /** 容器按物品 id 汇总数量（只列有的；插件传来的 expect 也去掉了 0）。玩家物品栏含盔甲、副手格。 */
+    private static Map<String, Integer> counts(Container container) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (int i = 0; i < container.getContainerSize(); i++) {
+            ItemStack stack = container.getItem(i);
+            if (!stack.isEmpty()) out.merge(id(stack), stack.getCount(), Integer::sum);
+        }
+        return out;
+    }
+
+    /** 光标上的物品：{ id: count }，空 → {}。 */
+    private static Map<String, Integer> carried(AbstractContainerMenu menu) {
+        ItemStack stack = menu.getCarried();
+        return stack.isEmpty() ? Map.of() : Map.of(id(stack), stack.getCount());
+    }
+
+    /** 场内地上的掉落物按 id 汇总（扔出来的、箱子被挖掉后掉出来的）。 */
+    private static Map<String, Integer> dropped(ServerLevel level, BlockPos o) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (ItemEntity e : level.getEntitiesOfClass(ItemEntity.class, box(o))) {
+            ItemStack stack = e.getItem();
+            if (!stack.isEmpty()) out.merge(id(stack), stack.getCount(), Integer::sum);
+        }
+        return out;
+    }
 
     private static Item item(String id) {
         Identifier key = Identifier.tryParse(id);

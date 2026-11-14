@@ -4,7 +4,7 @@ import { renderTree, ancestorsOf } from '../bt/overview.js'
 import { renderDirectory, buildReflectDirectory, renderReflectDirectory } from '../bt/evidence.js'
 import { saveCapsule, saveDraft } from '../capsules/save.js'
 import { CapsuleVersions } from '../capsules/versions.js'
-import { collectEvidence, checkLiterals } from '../capsules/literals.js'
+import { collectEvidence, checkLiterals, addShownValues, addSnapshotValues, seenLiteralHits, valueKey } from '../capsules/literals.js'
 import { walkSpec } from '../bt/build.js'
 import { libraryRows, renderLibrary, checkReason, appendCurateLog } from '../capsules/curate.js'
 import { renderTemplate } from './prompts.js'
@@ -30,8 +30,10 @@ import { formatProfile } from '../history/profile.js'
  * - 必须以提交结束回合（I5）：回合要结束时请求仍未回答 → 返回提醒文本（由适配层 steer），算一次不合法尝试
  * - 同一请求第 maxInvalidAttempts 次不合法（含提醒）→ plan 作废 / 任务失败（§4.2）
  * - 代码草稿（I11）：提交工具的 `code` 字段先写进任务草稿区，再编译校验树
- * - 产出树的回合不给数据（I13）：不准入 mod_query / nbt_query / json_query，黑板只给形状不给值——
- *   大模型看不到具体值，就只能用 `$键` 引用、把判断写进树，树才能提取成可复用的胶囊
+ * - 产出树的回合不给数据（I13）：不准入 mod_query / nbt_query / json_query，记忆世界的值看不到——
+ *   大模型只能用 `$键` 引用、把判断写进树，树才能提取成可复用的胶囊。
+ *   例外（2026-11-13）：展开请求里任务自己执行出来的小值（≤ EXPAND_VALUE_BYTES，如规划器的 mode / missing）直接给，
+ *   并附上前面失败分支停在哪、所在子树的黑板；大块数据与记忆世界查询结果仍只给形状
  *
  * @typedef {{ text: string, summary: string, source: object }} OutgoingMessage
  */
@@ -218,8 +220,20 @@ export class Bridge {
       this.log(`[bt] expand ${requestId}: 任务 ${taskId} 不属于任何会话（/bt run 跑的手写树），保持挂起；/bt abort 结束`)
       return
     }
-    const req = { requestId, type: 'expand', taskId, sessionId, nodeId: evidence.nodeId, goal: evidence.goal, answered: false, closed: false, createdAt: this.now() }
+    const req = { requestId, type: 'expand', taskId, sessionId, nodeId: evidence.nodeId, goal: evidence.goal, answered: false, closed: false, createdAt: this.now(), seen: new Map() }
     this.requests.set(requestId, req)
+    // 消息里给出的值记下来，提交时比对写死值（2026-11-13，只警告）
+    const hidden = new Set(request.context?.hidden ?? [])
+    const shown = (values, prefix) => {
+      for (const [key, value] of Object.entries(values ?? {})) {
+        if (!hidden.has(key) && Buffer.byteLength(JSON.stringify(value) ?? '') <= EXPAND_VALUE_BYTES) addShownValues(value, `${prefix}${key}`, this.seenAdder(req))
+      }
+    }
+    shown(request.blackboard, '黑板 ')
+    for (const frame of request.context?.frames ?? []) shown(frame.values, `子树 ${frame.id} 的黑板 `)
+    for (const failure of request.context?.failures ?? []) {
+      for (const frame of failure.frames ?? []) shown(frame.values, `子树 ${frame.id} 退出时的黑板 `)
+    }
     const task = this.executor.task
     const text = renderTemplate(this.prompts.requests.expand, {
       taskId, requestId,
@@ -229,7 +243,8 @@ export class Bridge {
       goal: evidence.goal,
       path: ancestorsOf(task.spec, evidence.nodeId).join(' › ') || '（根）',
       tree: renderTree(task.spec, { statuses: statusMap(task), mark: evidence.nodeId }),
-      blackboard: blackboardShape(request.blackboard),
+      blackboard: blackboardView(request.blackboard, { hidden: request.context?.hidden }),
+      context: renderExpansionContext(request.context),
       drafts: this.draftRefs().join(', ') || '（无）',
       maxAttempts: this.maxInvalidAttempts,
       skill: this.prompts.skills.expand
@@ -248,7 +263,7 @@ export class Bridge {
     const sessionId = this.taskSessions.get(taskId)
     if (!sessionId) return // 本地应答器回答
     const nodeId = directory?.path.at(-1)?.id ?? null
-    const req = { requestId, type, taskId, sessionId, nodeId, answered: false, closed: false, createdAt: this.now() }
+    const req = { requestId, type, taskId, sessionId, nodeId, answered: false, closed: false, createdAt: this.now(), seen: new Map() }
     this.requests.set(requestId, req)
     const task = this.executor.task
     const text = renderTemplate(this.prompts.requests[type], {
@@ -968,7 +983,7 @@ export class Bridge {
     const result = this.executor.submitExpansion(requestId, subtree)
     if (!result.ok) return result
     req.answered = true
-    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids, ...this.retiredWarnings(this.executor.task?.spec, result.ids) }
+    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids, ...this.submissionWarnings(req, result.ids, code) }
   }
 
   /** bt_submit_patch：回答修复请求（P2 §3）。`ops: []` = 原树继续。 */
@@ -981,13 +996,55 @@ export class Bridge {
     const result = this.executor.submitPatch(requestId, ops ?? [])
     if (!result.ok) return result
     req.answered = true
-    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids, ...this.retiredWarnings(this.executor.task?.spec, result.ids) }
+    return { ok: true, taskId: req.taskId, requestId, version: result.version, ids: result.ids, ...this.submissionWarnings(req, result.ids, code) }
   }
 
   /** bt_inspect（P2 §4.4）：当前任务；复盘回合里看复盘请求持有的那个已结束的任务（P4 §2.4）。 */
-  inspect(args, { sessionId = null } = {}) {
+  async inspect(args, { sessionId = null } = {}) {
     const req = this.reflectRequestFor(sessionId)
-    return req ? this.executor.inspect(args, { task: req.task, reflect: true }) : this.executor.inspect(args)
+    if (req) return this.executor.inspect(args, { task: req.task, reflect: true })
+    const result = await this.executor.inspect(args)
+    // 修复回合里看到的值记在在飞请求上，提交补丁时比对写死值（2026-11-13）
+    const pending = this.requests.get(this.executor.task?.pending?.requestId)
+    if (pending?.seen && result?.ok) {
+      const add = this.seenAdder(pending)
+      const value = result.value ?? {}
+      if (args?.what === 'blackboard') for (const [key, v] of Object.entries(value.values ?? {})) addShownValues(v, `bt_inspect 黑板 ${args.id ? `${args.id} 的 ` : ''}${key}`, add)
+      if (args?.what === 'snapshot') addSnapshotValues(value.state ?? value.diff ?? {}, `快照 ${value.name ?? value.to} 的 `, add)
+      if (args?.what === 'live') addSnapshotValues(value.state ?? {}, `${value.name} 的 `, add)
+    }
+    return result
+  }
+
+  /**
+   * 记一个"这个请求里看到的值"：任务参数（开局黑板里的值）除外——它们本来就在指令里（2026-11-13）。
+   * @returns {(value, where) => void}
+   */
+  seenAdder(req) {
+    const params = new Set()
+    const initial = this.executor.task?.taskId === req.taskId ? this.executor.task.initialBlackboard : null
+    addShownValues(initial ?? {}, '', (value) => params.add(valueKey(value)))
+    return (value, where) => {
+      const key = valueKey(value)
+      if (key && !params.has(key) && !req.seen.has(key)) req.seen.set(key, where)
+    }
+  }
+
+  /** 展开 / 补丁通过后的警告：用了已下架的名字（D9）+ 新节点里写死了这个请求里看到的值（2026-11-13）。 */
+  submissionWarnings(req, ids, code) {
+    const warnings = this.retiredWarnings(this.executor.task?.spec, ids).warnings ?? []
+    const task = this.executor.task
+    if (req.seen?.size && task) {
+      const nodes = (ids ?? []).map((id) => task.byId.get(id)?.spec).filter(Boolean)
+      const hits = seenLiteralHits({ nodes, code, seen: req.seen, registry: this.registry })
+      if (hits.length) {
+        this.executor.log(req.taskId, { event: 'literal/warning', requestId: req.requestId, hits })
+        for (const hit of hits) {
+          warnings.push(`${hit.path} = ${JSON.stringify(hit.value)} is the same as ${hit.where}, a value of this run that this request showed you. Written into the tree it only fits this run: reference the key with "$…" or read it in the tree (if it really is a game constant, ignore this). The tree still runs — this is only a warning`)
+        }
+      }
+    }
+    return warnings.length ? { warnings } : {}
   }
 
   /** bt_abort_task：放弃规划中的新任务，或放弃在跑的任务（默认中止流程，进 failed）。 */
@@ -1216,6 +1273,48 @@ export function blackboardShape(snapshot) {
   const entries = Object.entries(snapshot ?? {})
   if (entries.length === 0) return '（空）'
   return entries.map(([key, value]) => `${key}: ${shapeOf(value)}`).join('\n')
+}
+
+/** 展开请求里直接给值的上限（序列化后的字节数）：失败原因这类枚举、短列表在内，大块数据只给形状。 */
+export const EXPAND_VALUE_BYTES = 200
+
+/**
+ * 展开请求里的黑板（2026-11-13 起）：小的值直接给（`键 = 值`），大块数据与记忆世界查询结果只给形状。
+ * 记忆世界的值仍然看不到（I13）；任务自己执行出来的小结论（规划器的 mode、缺了什么……）看得到。
+ * @param {object} snapshot
+ * @param {{ hidden?: string[], maxBytes?: number }} [options]
+ */
+export function blackboardView(snapshot, { hidden = [], maxBytes = EXPAND_VALUE_BYTES } = {}) {
+  const entries = Object.entries(snapshot ?? {})
+  if (entries.length === 0) return '（空）'
+  const hide = new Set(hidden)
+  return entries.map(([key, value]) => {
+    if (hide.has(key)) return `${key}: ${shapeOf(value)}（记忆世界查询结果，只给形状）`
+    const text = JSON.stringify(value)
+    const bytes = Buffer.byteLength(text ?? '')
+    return bytes <= maxBytes ? `${key} = ${text}` : `${key}: ${shapeOf(value)}（${bytes} 字节，只给形状）`
+  }).join('\n')
+}
+
+/** 展开请求的现场（evidence.buildExpansionContext）→ 消息里的两段；都没有就是空串。 */
+export function renderExpansionContext(context, { maxBytes = EXPAND_VALUE_BYTES } = {}) {
+  if (!context) return ''
+  const label = (node) => `${node.id}${node.name ? `「${node.name}」` : ''}`
+  const sections = []
+  if (context.failures?.length) {
+    sections.push(['## 前面没做成的分支（近的在前）', '',
+      ...context.failures.map((f) => [
+        `- ${f.at.id === f.arm.id ? label(f.arm) : `${label(f.arm)}：失败在 ${label(f.at)}`}（${f.at.type}）；错误：${f.error ?? (f.at.type === 'Condition' ? '（无：条件不成立）' : '（无）')}`,
+        ...(f.frames ?? []).map((frame) => `  子树 ${frame.id}（${frame.ref ?? '?'}）退出时的黑板：\n${blackboardView(frame.values, { hidden: context.hidden, maxBytes }).replace(/^/gm, '    ')}`)
+      ].join('\n'))
+    ].join('\n'))
+  }
+  if (context.frames?.length) {
+    sections.push(['## 展开点所在子树的黑板（由外到内；展开出来的节点读写最里面一层，读不到再回落上面的任务黑板）', '',
+      ...context.frames.map((f) => `${f.id}（${f.ref ?? '?'}）：\n${blackboardView(f.values, { hidden: context.hidden, maxBytes }).replace(/^/gm, '  ')}`)
+    ].join('\n'))
+  }
+  return sections.length ? `\n${sections.join('\n\n')}\n` : ''
 }
 
 const MAX_SHAPE_DEPTH = 3

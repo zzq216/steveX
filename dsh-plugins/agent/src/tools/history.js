@@ -60,7 +60,7 @@ export function historyTools({ history, bridge, maxOutputChars }) {
         '复盘时评估这次的树：成本高（mod 调用多）、耗时长、等 LLM 回合多、容易出错的地方。依据是复盘请求里的成本画像（需要细节用 bt_inspect）。可以多次调用，后一次覆盖前一次。',
         '- issues：0–5 条 { where, kind, problem, evidence, idea?, status? }。status 不写 = open（待以后的任务核对）；写 blocked = 受现有能力限制（缺少某个命令 / 能力，换写法也改不了），不再进以后的核对，仍挂在胶囊上可见。where = 节点 id 或这次用到的胶囊引用（可不带 @hash）；kind = cost / time / turns / fragile / other；problem 写问题是什么；evidence 写成本画像或事件里的依据；idea 可选，写你设想的改法',
         '- none：没有值得记的问题时写理由（如"每次合成只调用一次子树，调用次数已接近下限"）。issues 与 none 二选一',
-        '- claims：复盘请求里列出了"涉及这次所用版本的待核对判断"时，逐条核对 { ref: "<名字>@<新版哈希>", claim: <方括号里的序号>, status: confirmed（这次的情况印证了判断）| refuted（这次的情况推翻了判断）| open（这次的情况说明不了）, evidence }',
+        '- claims：复盘请求里列出了"涉及这次所用版本的待核对判断"时，逐条核对 { ref: "<名字>@<新版哈希>", claim: <方括号里的序号>, status: confirmed（这次的情况印证了判断）| refuted（这次的情况推翻了判断）| open（这次的情况说明不了）, evidence }。只按这次实际跑的那一版的结果核对：判断涉及另一版在这次会怎样、而另一版这次没跑，就是 open，不要推演',
         '- review：复盘请求里列出了以往任务待验证的问题时，逐条核对 { record, issue, status: resolved | open | wrong | blocked, evidence }（blocked = 受现有能力限制，以后不再核对）。record = 那条问题所属的任务 id（如 "task-20261107022153-2"），issue = 问题前面方括号里的序号（数字，如 [0] 就写 0）',
         '这条评估会和这次的树一起存进任务历史；问题挂在胶囊上时，用到这个胶囊的规划在 capsule_search 里也看得到。任务做成时，结束复盘前必须先评估。'
       ].join('\n'),

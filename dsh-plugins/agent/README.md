@@ -21,6 +21,7 @@ steveX 的行为树执行器、胶囊库与 Compute 沙箱，以及让大模型�
 | **胶囊版本说明** | 替换同名胶囊时记下改动与"哪一版在什么情况下更好"（`versions.json`）；`capsule_search` / `capsule_get` 显示版本数、未执行、版本链；用到的任务复盘时核对（`task_assess.claims`）；整理清单计数；GC 保留旧版更好的版本 | **已实现**，单元测试通过；待游戏内验收（[胶囊版本说明设计方案.md](../../docs/胶囊版本说明设计方案.md) §6） |
 | **训练场** | `/bt train`：2×2 合成专项训练（每轮重置、随机配方发 1 份材料、发任务、按 `crafted` 统计判定、记回合与 token）；mod 侧 `arena/*`（不给 agent）与游戏内 `/arena`；`npm run training-report` | **已实现**；游戏内验收通过（[训练场设计方案.md](../../docs/训练场设计方案.md) §7） |
 | **工作台训练场** | `/bt train craft3x3`：场内放工作台、准星对准它，只抽 3×3 配方（按形状分组），记打开工作台的时刻与工作台是否被挖；报告按形状汇总、列出引用的旧胶囊 | **已实现**，单元测试通过；待游戏内验收（[工作台训练场设计方案.md](../../docs/工作台训练场设计方案.md) §6） |
+| **箱子训练场** | `/bt train chest`：场内放小箱子或大箱子，每轮"从箱子取 k 个"或"往箱子放 k 个"，k 与实有数量的关系可控（lt / eq / gt）；按两边的计数判定，多拿、动了别的、丢失各自记；mod 在 tick 里记恰好搬完的时刻 | **已实现**，单元测试通过；待游戏内验收（[箱子训练场设计方案.md](../../docs/箱子训练场设计方案.md) §6） |
 | **整理** | 胶囊库整理：使用统计（`stats.json`，`capsule_search` / `capsule_get` 展示）、`/bt curate` 整理回合（`capsule_retire` / `capsule_describe` / `bt_curate_done`）、`curate.everyTasks` 自动触发（默认 0）、离线 GC 与脚本 | **已实现**，单元测试通过；待 DSH 内验收（[胶囊库整理设计方案.md](../../docs/胶囊库整理设计方案.md) §10.3） |
 
 **没有人写的技能**：读世界的条件、合成 / 挖掘这类高层动作、配方解析，都由 agent 在训练中写成胶囊。
@@ -94,7 +95,7 @@ node scripts/bt-run.js examples/walk_loop.json --fast examples/fast_drowning.jso
 
 DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt status`、`/bt nodes`、`/bt pause | resume`、`/bt abort`、`/bt fast status | log | rollback <版本> | reflect | load <file>`、`/bt capsules`。
 
-事件日志与树版本写在 `steveX/runtime/tasks/<taskId>/`：`node` 事件是节点进出，`observe` 事件是每个 `Steps` / `Action` 前后的状态差异。"执行后"要等状态稳定再读（`observe.settle`：隔 `intervalMs` 再读 inventory / container，连续两次一样为止，最多 `maxReads` 次，`maxReads: 0` = 不等），这些读取记在 `calls.settle`，不算进成本画像的 mod 调用。
+事件日志与树版本写在 `steveX/runtime/tasks/<taskId>/`：`node` 事件是节点进出，`observe` 事件是每个 `Steps` / `Action` 前后的状态差异。"执行后"要等状态稳定再读（`observe.settle`：隔 `intervalMs` 再读 inventory / container，连续两次一样为止，最多 `maxReads` 次，`maxReads: 0` = 不等），这些读取记在 `calls.settle`，不算进成本画像的 mod 调用。前后读哪些来源由 `observe.sources` 决定，`observe.byCommand` 按命令缩小：叶子里的命令都在表里时只读表里的来源（默认 `container/slot` 只读 `container`——界面的 slots 已含玩家背包格）。观察读取记在 `calls.observe`，同样不算进成本画像的 mod 调用：成本画像衡量的是 agent 写的树，执行器留证据的读取不是它的成本，画像里单列"执行器的观察读取 / 等稳定读取"。旧任务的数字用 `node scripts/reprofile-history.js [--write]` 按这个口径重算（写回前先停掉 DSH）。
 
 ## 树文件格式
 
@@ -144,7 +145,7 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 - 回合出错（如模型返回坏 JSON）→ `agent/error` 接住：计一次不合法，`followup` 重试；用完 → 作废 / 失败
 - **工具守卫**：`ctx.tools.guard` 拒绝不在名单里的调用（会话名单 = steveX 工具 + `extraTools`；绑定了请求的回合 = 该请求的名单）。会话级 `restrict` 只管看得见，挡不住 agent 层自己注册的工具
 - `/bt` 声明了 `input`，DSH Web 输入框才会把带参数的 `/bt task …` 当命令执行
-- **产出树的回合不给数据（I13）**：`mod_query` / `nbt_query` / `json_query` 只在普通问答回合可用；请求与 `bt_view` 里的黑板只给形状（类型、结构、列表长度），不给值。树要用的数据由树自己读（`read`、`code/core.nbt.query`、`code/core.json.query`），这样产出的子树才能参数化、提取成胶囊
+- **产出树的回合不给数据（I13）**：`mod_query` / `nbt_query` / `json_query` 只在普通问答回合可用；请求与 `bt_view` 里的黑板只给形状（类型、结构、列表长度），不给值；例外是展开请求：小值（≤ 200 字节）直接给，并附前面没做成的分支与所在子树的黑板，记忆世界查询结果和大块数据仍只给形状。树要用的数据由树自己读（`read`、`code/core.nbt.query`、`code/core.json.query`），这样产出的子树才能参数化、提取成胶囊
 - `recover` / `escalate` / `failed` / `died`（P2 起）：属于会话的任务交给大模型——消息只推目录，证据用 `bt_inspect` 自取，用 `bt_submit_patch` 回答；不属于会话的任务（`/bt run` 的手写树）仍由本地应答器回答（原树继续 / 放弃任务）
 - 死亡（P2e）：任务存在期间轮询 `player`，`dead` 为真 → 中止、松键关容器 → 自动 `player/respawn` → 等到生命值回满 → `died` 请求；重生失败（极限模式、mod 未升级）→ 任务失败
 - reactive 序列（P2d）：任务树里缺省每 `reactiveEveryMs`（1000）复查一次守卫，树里可写 `every`（≥ 200）；只能用在 seq 上，最后一个孩子之前只能是 cond / compute
@@ -247,5 +248,10 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 6. **工作台场地 craft3x3**（[工作台训练场设计方案.md](../../docs/工作台训练场设计方案.md)）：`prepare` 在场内正前方补回工作台、把准星对准它（服务器射线自检 `aimOk`，不为真则本轮 `aborted` 并停止整组）；只抽放不进 2×2 的配方，先等概率抽形状再抽配方；超过堆叠上限的材料（如牛奶桶）由 mod 按 seed 拆到空槽；记录多 `shape`、`openedMs`（第一次打开工作台）、`stationIntact`
 7. **多份材料、指定产物个数**（[训练场设计方案.md](../../docs/训练场设计方案.md) T14）：`n=` 发几份材料、`m=` 要合成几次，写 `k` 或 `a-b`（1–64）。文案写产物个数（m × 单次产量）并要求"不要多做"；做多了判 `overshoot`（失败），恰好做够才算 `success`。**不写 n、m 时 n 在 1–64 里随机**、m 在 1…n−1 里随机；要复现旧轮次写 `n=1 m=1`（单次模式：原模板、原随机数序列、原判定）。n 还要满足"材料 + 全部做光的产物 + 合成剩余物 ≤ 36 格"，放不下就在能放下的范围里重抽，固定的 n 放不下直接报错。用到 `data/item-props.json`（堆叠上限与剩余物，随仓库提交；重新生成用 `npm run extract-item-props`，读 `1.21.11_src`）。记录多 `single`、`portions`、`crafts`、`yield`、`wanted`、`made`、`overshoot`、`reachedMs`（做够的时刻，精度同 `pollMs`）、`nMax`
 
-- 脚本：`npm run training-report -- [场地] [--by target|shape|portions] [--last N] [--batch <批次>]`；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"
-- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`
+8. **箱子场地 chest**（[箱子训练场设计方案.md](../../docs/箱子训练场设计方案.md)）：场地配置 `type: 'storage'`，题型代码在 `src/training/storage.js`（合成题在 `craft.js`，训练器按 `type` 选）。
+   - 每轮按种子出题：取 / 放（`kind`）、小 / 大箱子（`chest`）、目标物品的堆叠上限（`stack`）、物品种类数（`types`，含目标）、要求数量与实有数量的关系（`rel`：lt / eq / gt）。来源方占不超过一半的格子，目标方开局为空
+   - `prepare` 按本轮大小放箱子（大箱子两半显式连接），清空后放进 `chestItems`，并登记目标计数 `expect`；自检 `aimOk` 和 `chestSlots`（27 / 54），不对就本轮 `aborted` 并停止整组
+   - 判定看任务结束时的计数：`success`（物品栏、箱子都恰好如此，光标为空）、`overshoot`（多搬了）、`disturbed`（动了干扰物品）、`lost`（地上有掉落物、总数变少或箱子被挖）、`false_success`、`failed`、`timeout`、`aborted`
+   - 记录多 `kind`、`rel`、`chest`、`n`、`k`、`want`、`layout`、`final`、`moved`、`disturbed`、`reachedMs`（mod 在 tick 里记的恰好搬完的时刻）
+- 脚本：`npm run training-report -- [场地] [--by target|shape|portions|task|chest|stack] [--last N] [--batch <批次>]`；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"；箱子场地缺省按 `task`（取放 / 关系）分组，换一套列（超量、动了别的、丢失、打开箱子中位、达成中位、箱子被挖）
+- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`。箱子场地 `{type: 'storage', origin, kind, rel, chest, stack, types, dest: 'empty', exclude, timeoutSec?}`，chest 缺省全部 `mix`、`types: '1-4'`、排除 `minecraft:bundle`

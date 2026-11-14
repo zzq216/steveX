@@ -5,6 +5,8 @@ import path from 'node:path'
  * 训练记录汇总（训练场设计方案 T10）：按目标物品（或配方形状）看成功率、用时、虚报率、token。
  * 带工作站的场地另有"打开工作台"中位用时、工作台被挖掉的轮数（工作台训练场设计方案 W9），
  * 以及每轮引用了哪些在本场地第一轮之前就有的胶囊（W10）。
+ * 箱子场地（箱子训练场设计方案 C12）：按 取放 × 数量关系、箱子大小、堆叠上限分组；多出"动了别的""丢失"两种结果，
+ * 用时看"打开箱子""达成"（恰好搬完的那一刻）与任务用时。
  */
 
 export function readRecords(file) {
@@ -24,15 +26,16 @@ const secs = (ms) => (ms === null ? '-' : `${(ms / 1000).toFixed(1)}s`)
 
 /**
  * @param {object[]} records
- * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions' }} [filter]
- * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean }}
- *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）
+ * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack' }} [filter]
+ * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean }}
+ *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）
  */
 export function summarize(records, { last = null, batch = null, by = 'target' } = {}) {
   let picked = batch ? records.filter((r) => r.batch === batch) : records
   if (last) picked = picked.slice(-last)
   const station = picked.some((r) => r.stationIntact !== null && r.stationIntact !== undefined)
   const multi = picked.some((r) => r.single === false)
+  const storage = picked.some((r) => r.kind === 'take' || r.kind === 'put')
   // 任务历史（任务历史方案 H10）：记录里有 assessed 字段才显示这几列
   const historyCols = picked.some((r) => r.assessed !== undefined)
   const group = (list) => {
@@ -48,6 +51,8 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       timeout: count('timeout'),
       aborted: count('aborted'),
       overshoot: count('overshoot'),
+      disturbed: count('disturbed'),
+      lost: count('lost'),
       assessed: list.filter((r) => r.assessed).length,
       withIssues: list.filter((r) => r.assessed && r.issues > 0).length,
       withPredecessor: list.filter((r) => (r.predecessors ?? []).length > 0).length,
@@ -65,12 +70,23 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   }
   const groups = new Map()
   for (const r of picked) {
-    const key = (by === 'shape' ? r.shape : by === 'portions' ? portionsKey(r) : r.target) ?? '（未记录）'
+    const key = groupKey(r, by) ?? '（未记录）'
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, historyCols }
+}
+
+const CHEST_NAMES = { small: '小箱子', large: '大箱子' }
+
+function groupKey(r, by) {
+  if (by === 'shape') return r.shape
+  if (by === 'portions') return portionsKey(r)
+  if (by === 'task') return r.kind && r.rel ? `${r.kind}/${r.rel}` : null
+  if (by === 'chest') return CHEST_NAMES[r.chest] ?? null
+  if (by === 'stack') return Number.isInteger(r.stackClass) ? String(r.stackClass) : null
+  return r.target
 }
 
 /** --by portions 的分组键：n/m；单次模式记"单次"；T14 之前的记录没有这些字段 → null */
@@ -79,16 +95,28 @@ function portionsKey(r) {
   return Number.isInteger(r.portions) && Number.isInteger(r.crafts) ? `${r.portions}/${r.crafts}` : null
 }
 
-const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m' }
+const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限' }
 
-export function formatSummary({ rows, total, by = 'target', station = false, multi = false, historyCols = false }) {
+export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, historyCols = false }) {
   if (total.runs === 0) return '没有训练记录'
+  if (storage) return formatStorage({ rows, total, by, historyCols })
   const head = [BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '做出但报失败', '失败', '超时', '中止', ...(multi ? ['超量'] : []),
     ...(station ? ['打开工作台中位'] : []), '合成中位', ...(multi ? ['做够中位'] : []), '任务中位', 'token中位', '用过chat/send', ...(station ? ['工作台被挖'] : []),
     ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
   const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.craftedButFailed, r.failed, r.timeout, r.aborted, ...(multi ? [r.overshoot] : []),
     ...(station ? [secs(r.medianOpenedMs)] : []), secs(r.medianCraftedMs), ...(multi ? [secs(r.medianReachedMs)] : []), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend,
     ...(station ? [r.stationBroken] : []),
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/** 箱子题的表（C12）：没有合成相关的列；达成中位 = 恰好搬完那一刻（只算成功轮） */
+function formatStorage({ rows, total, by, historyCols }) {
+  const head = [BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '失败', '超时', '中止', '超量', '动了别的', '丢失',
+    '打开箱子中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '箱子被挖',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.disturbed, r.lost,
+    secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
     ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
   return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
 }

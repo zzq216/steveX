@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Bridge, REQUEST_TOOLS, REFLECT_ONLY_TOOLS } from '../src/llm/bridge.js'
 import { loadPrompts } from '../src/llm/prompts.js'
-import { buildProfile, formatProfile } from '../src/history/profile.js'
+import { buildProfile, formatProfile, splitCalls } from '../src/history/profile.js'
 import { TaskHistory } from '../src/history/store.js'
 import { historyTools } from '../src/tools/history.js'
 import { makeRuntime, runUntil, tempDir } from './helpers.js'
@@ -30,7 +30,7 @@ test('profile: running time excludes waits for LLM turns; calls roll up to every
     ...[0, 1, 2].flatMap((i) => [
       ev(5100 + i * 1000, 'node', { phase: 'enter', id: 'n1.2', type: 'SubTree' }),
       ev(5100 + i * 1000, 'node', { phase: 'enter', id: 'n1.2/c.1', type: 'Action' }),
-      ev(5900 + i * 1000, 'node', { phase: 'exit', id: 'n1.2/c.1', type: 'Action', status: 'SUCCESS', calls: { actions: 3, reads: 2 } }),
+      ev(5900 + i * 1000, 'node', { phase: 'exit', id: 'n1.2/c.1', type: 'Action', status: 'SUCCESS', calls: { actions: 3, reads: 2, observe: 4, settle: 1 } }),
       ev(6000 + i * 1000, 'node', { phase: 'exit', id: 'n1.2', type: 'SubTree', status: 'SUCCESS', ref: 'trees/craft.once@abc' })
     ]),
     ev(8100, 'node', { phase: 'exit', id: 'n1', type: 'Sequence', status: 'SUCCESS' }),
@@ -43,7 +43,7 @@ test('profile: running time excludes waits for LLM turns; calls roll up to every
   assert.equal(p.waitMs, 5000)
   assert.equal(p.execMs, 3100)
   assert.deepEqual(p.waits, { 展开: { count: 1, ms: 5000 } })
-  assert.deepEqual([p.modCalls, p.actions, p.reads], [15, 9, 6])
+  assert.deepEqual([p.modCalls, p.actions, p.reads, p.observeReads, p.settleReads], [15, 9, 6, 12, 3], '执行器的观察 / 等稳定读取单列，不进 modCalls')
   assert.deepEqual(p.capsules[0], { ref: 'trees/craft.once@abc', runs: 3, modCalls: 15, ms: 2700, callShare: 1, timeShare: 2700 / 3100 })
   const root = p.nodes.find((n) => n.id === 'n1')
   assert.equal(root.ms, 3100, 'the outer node does not get the 5 s spent waiting for the expansion')
@@ -52,6 +52,7 @@ test('profile: running time excludes waits for LLM turns; calls roll up to every
   const text = formatProfile(p)
   assert.match(text, /执行 3\.1 s（不含等 LLM 回合 5\.0 s：展开 1 次 5\.0 s）/)
   assert.match(text, /trees\/craft\.once@abc 执行 3 次，占 mod 调用 100%/)
+  assert.match(text, /mod 调用 15 次（树发出的：动作 9 \/ 读取 6）.*；另有执行器的观察读取 12 次、等稳定读取 3 次/)
   assert.equal(buildProfile([ev(0, 'node', { phase: 'enter', id: 'x' })]), null)
 })
 
@@ -68,7 +69,7 @@ const TASK_EVENTS = (taskId, ref = 'trees/craft.once@abc') => [
   { at: t(0), taskId, event: 'task/start' },
   { at: t(0), taskId, event: 'node', phase: 'enter', id: 'n1', type: 'SubTree' },
   { at: t(10), taskId, event: 'node', phase: 'enter', id: 'n1/c', type: 'Action' },
-  { at: t(20), taskId, event: 'node', phase: 'exit', id: 'n1/c', type: 'Action', status: 'SUCCESS', calls: { actions: 4, reads: 1 } },
+  { at: t(20), taskId, event: 'node', phase: 'exit', id: 'n1/c', type: 'Action', status: 'SUCCESS', calls: { actions: 4, reads: 1, observe: 2 } },
   { at: t(30), taskId, event: 'node', phase: 'exit', id: 'n1', type: 'SubTree', status: 'SUCCESS', ref },
   { at: t(30), taskId, event: 'task/done' }
 ]
@@ -194,7 +195,7 @@ test('bridge: the review shows the cost profile; done tasks must be assessed; ta
   assert.equal(bridge.submitTree({ sessionId: 's1', requestId: first.requestId, tree: OUTLINE }).ok, true)
   await runUntil(executor, () => executor.task.state === 'done')
   const review = ctx.delivered.at(-1)
-  assert.match(review.text, /## 成本画像[\s\S]*mod 调用 2 次（动作 2 \/ 读取 0）/)
+  assert.match(review.text, /## 成本画像[\s\S]*mod 调用 2 次（树发出的：动作 2 \/ 读取 0）/)
   assert.match(review.text, /LLM 回合：规划（发请求到交树）[\d.]+ s，执行中等 LLM（展开 \/ 修补）[\d.]+ s/)
   assert.match(review.text, /以往任务里待验证的问题[\s\S]*（没有：/)
   assert.match(review.text, /和参考过的同类任务比\n\n（没有：/)
@@ -231,4 +232,17 @@ test('bridge: the review shows the cost profile; done tasks must be assessed; ta
   assert.equal(bridge.reflectDone({ sessionId: 's1', requestId: 'c2', summary: '核对了上一条' }).ok, true)
   assert.equal(history.read(firstId).assessment.issues[0].status, 'wrong')
   assert.deepEqual(history.read(second.taskId).predecessors, [firstId])
+})
+
+test('profile：旧事件没有 calls.observe 时，Steps / Action 的读取按执行器观察读取算；条件 / Compute 的读取照旧算树的（2026-11-13）', () => {
+  const p = buildProfile([
+    ev(0, 'task/start', { goal: 'g' }),
+    ev(0, 'node', { phase: 'enter', id: 'n1', type: 'Action' }),
+    ev(10, 'node', { phase: 'exit', id: 'n1', type: 'Action', status: 'SUCCESS', calls: { actions: 1, reads: 6, settle: 2 } }),
+    ev(10, 'node', { phase: 'enter', id: 'n2', type: 'Compute' }),
+    ev(20, 'node', { phase: 'exit', id: 'n2', type: 'Compute', status: 'SUCCESS', calls: { actions: 0, reads: 2 } }),
+    ev(20, 'task/done', {})
+  ])
+  assert.deepEqual([p.modCalls, p.actions, p.reads, p.observeReads, p.settleReads], [3, 1, 2, 6, 2])
+  assert.deepEqual(splitCalls({ type: 'Action', calls: { actions: 1, reads: 1, observe: 2 } }), { actions: 1, reads: 1, observe: 2, settle: 0 }, '新事件原样拆')
 })

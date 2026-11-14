@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /**
  * 黑板（行为树设计 §5）：任务帧 + 胶囊实例帧两级作用域（§5.1.1）。
  *
@@ -101,6 +103,33 @@ export function resolveParams(params, blackboard) {
     return Object.fromEntries(Object.entries(params).map(([k, v]) => [k, resolveParams(v, blackboard)]))
   }
   return params
+}
+
+/**
+ * 一次胶囊调用的实参指纹（2026-11-13，跨实例证据）：按形参名排序；标量原样留（长字符串除外），
+ * 列表 / 对象 / 长字符串换成 "#<8 位哈希>"——配方列表之类不进事件日志，但不同的值仍然分得开。
+ * 解析不了（引用的键还没写）→ null。没有参数 → {}。
+ */
+export function argsFingerprint(params, blackboard) {
+  if (params === undefined || params === null) return {}
+  let resolved
+  try {
+    resolved = blackboard ? resolveParams(params, blackboard) : params
+  } catch {
+    return null
+  }
+  if (resolved === null || typeof resolved !== 'object' || Array.isArray(resolved)) return { '.': shortHash(JSON.stringify(resolved)) }
+  const out = {}
+  for (const key of Object.keys(resolved).sort()) {
+    const value = resolved[key]
+    const scalar = value === null || typeof value === 'number' || typeof value === 'boolean' || (typeof value === 'string' && value.length <= 80)
+    out[key] = scalar ? value : shortHash(JSON.stringify(value) ?? 'undefined')
+  }
+  return out
+}
+
+function shortHash(text) {
+  return `#${createHash('sha1').update(String(text)).digest('hex').slice(0, 8)}`
 }
 
 /** 收集参数里出现的全部 `$key` 读引用（校验器用）。 */

@@ -31,7 +31,7 @@ export class Node {
     if (!this.started) {
       this.started = true
       if (this.calls) this.calls = { actions: 0, reads: 0 }
-      ctx.onNode?.(this, 'enter')
+      ctx.onNode?.(this, 'enter', undefined, ctx)
     }
     const status = this.onTick(ctx)
     this.lastStatus = status
@@ -645,10 +645,30 @@ class WorldLeaf extends AsyncLeaf {
     this.expect = expect
   }
 
+  /**
+   * 执行器自己的观察读取（2026-11-13）：记在 calls.observe，不算进节点的 reads——那是执行器的证据设施，
+   * 不是树的决策读取；成本画像衡量的是 agent 写的树，不该替它付这笔账。expect 额外要的来源才记 reads（那是树自己选的）。
+   */
+  observeRead(ctx, sources, signal) {
+    this.calls.observe = (this.calls.observe ?? 0) + sources.length
+    return ctx.game.read(sources, signal)
+  }
+
+  /** 这个叶子要观察哪些来源：命令都在 observe.byCommand 里 → 取它们的并集；否则用 observe.sources。 */
+  observeSources(ctx) {
+    const defaults = ctx.observe?.sources ?? []
+    const byCommand = ctx.observe?.byCommand ?? {}
+    const names = this.commandNames()
+    if (!names.length || !names.every((name) => Array.isArray(byCommand[name]))) return defaults
+    return [...new Set(names.flatMap((name) => byCommand[name]))]
+  }
+
+  commandNames() { return [] }
+
   async observed(ctx, signal, run) {
-    const observeSources = ctx.observe?.sources ?? []
-    const sources = [...new Set([...observeSources, ...(this.expect?.command.sources ?? [])])]
-    const before = observeSources.length ? await this.game(ctx).read(observeSources, signal) : null
+    const observeSources = this.observeSources(ctx)
+    const expectOnly = (this.expect?.command.sources ?? []).filter((s) => !observeSources.includes(s))
+    const before = observeSources.length ? await this.observeRead(ctx, observeSources, signal) : null
     // 前后快照留给修复请求按需查看（P2 §4.3）
     if (before) ctx.onSnapshot?.(this, 'before', before)
     let result
@@ -656,15 +676,19 @@ class WorldLeaf extends AsyncLeaf {
       result = await run()
     } catch (error) {
       if (signal.aborted || !before) throw error
-      let after = await this.game(ctx).read(observeSources).catch(() => null)
+      let after = await this.observeRead(ctx, observeSources).catch(() => null)
       if (after) after = await this.settle(ctx, signal, after).catch(() => after)
       if (after) ctx.onSnapshot?.(this, 'after', after)
       const diff = diffState(before, after)
       ctx.onObserve?.(this, diff)
       throw new Error(`${error.message}（失败前已发生：${summarizeDiff(diff)}）`)
     }
-    if (sources.length === 0) return result
-    const after = await this.settle(ctx, signal, await this.game(ctx).read(sources, signal))
+    if (observeSources.length === 0 && expectOnly.length === 0) return result
+    const [observedAfter, expectAfter] = await Promise.all([
+      observeSources.length ? this.observeRead(ctx, observeSources, signal) : {},
+      expectOnly.length ? this.game(ctx).read(expectOnly, signal) : {}
+    ])
+    const after = await this.settle(ctx, signal, { ...observedAfter, ...expectAfter })
     if (before) ctx.onSnapshot?.(this, 'after', after)
     const diff = before ? diffState(before, after) : null
     if (before) ctx.onObserve?.(this, diff)
@@ -678,7 +702,7 @@ class WorldLeaf extends AsyncLeaf {
    * 等状态稳定再定"执行后"（2026-11-09）：动作发出后立刻读到的可能是客户端还没收到服务端结果的中间状态
    * （产物格 Shift 点击一次合成 32 次，紧接着的快照只显示 1 次），复盘拿它当证据会花几分钟对账，expect 也会误判。
    * 隔 settle.intervalMs（约一个 tick）再读 inventory / container，连续两次一样就算稳定，最多 settle.maxReads 次。
-   * 这些读取记在 calls.settle，不算进节点的 reads（mod 调用的成本口径与以前的任务保持可比）。
+   * 这些读取记在 calls.settle，不算进节点的 reads（同 calls.observe：执行器的证据设施，不是 agent 的成本）。
    */
   async settle(ctx, signal, after) {
     const { intervalMs = 50, maxReads = 0 } = ctx.observe?.settle ?? {}
@@ -753,6 +777,8 @@ export class Action extends WorldLeaf {
     this.command = command
   }
 
+  commandNames() { return [this.spec.cmd] }
+
   onTick(ctx) {
     return this.pump(
       (signal) => this.observed(ctx, signal, () => {
@@ -779,6 +805,8 @@ export class Steps extends WorldLeaf {
     this.commands = commands // 与 spec.do 一一对应；wait 为 null
     this.stepIndex = 0
   }
+
+  commandNames() { return this.spec.do.map(([cmd]) => cmd).filter((cmd) => cmd !== 'wait') }
 
   onTick(ctx) {
     return this.pump(

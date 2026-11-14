@@ -176,10 +176,56 @@ test('端到端：节点退出事件带钉过哈希的 ref；任务结束并进�
 
   const listed = await call('capsule_search', {})
   assert.deepEqual(listed.map((r) => r.ref), ctx.library.list().map((r) => r.ref), '排序不看统计')
-  assert.equal(listed.find((r) => r.ref === refs['test.has-item']).usage, '用过 1 次 / 1 个任务（1 成 0 败），判真 0 / 判假 1 / 报错 0')
+  assert.equal(listed.find((r) => r.ref === refs['test.has-item']).usage,
+    '用过 1 次 / 1 个任务（1 成 0 败），判真 0 / 判假 1 / 报错 0；跨实例：在 1 种参数组合上成功过（共 1 种），未跨实例验证')
+  assert.deepEqual(condExit.args, { count: 999, item: 'diamond' }, '退出事件带实参指纹（2026-11-13）')
+  assert.deepEqual(Object.keys(has.instances), ['{"count":999,"item":"diamond"}'])
   assert.equal(listed.find((r) => r.ref === refs['test.air-below']).usage, '尚无记录')
   assert.match(listed.find((r) => r.ref === saved.ref).usage, /^转正前（草稿）：用过 1 次/)
   const got = await call('capsule_get', { ref: 'code/test.has-item' })
   assert.equal(got.usage.thisVersion, got.usage.allVersions)
   assert.ok(got.usage.lastUsed)
+})
+
+test('跨实例（2026-11-13）：按实参指纹分开计数；同名各版本汇总；没有参数按任务；旧事件没有 args 只进总数', () => {
+  const stats = new CapsuleStats()
+  const exit = (taskId, ref, status, args) => stats.observe({ taskId, event: 'node', phase: 'exit', type: 'SubTree', id: 'n1', ref, status, args, at: '2026-11-13T00:00:00Z' })
+  const end = (taskId) => stats.observe({ taskId, event: 'task/done', at: '2026-11-13T00:00:01Z' })
+  exit('t1', 'trees/craft.x@aaaaaaaa', 'SUCCESS', { goal: 3, target: 'minecraft:white_bed' }); end('t1')
+  exit('t2', 'trees/craft.x@aaaaaaaa', 'SUCCESS', { goal: 5, target: 'minecraft:red_bed' }); end('t2')
+  exit('t3', 'trees/craft.x@bbbbbbbb', 'FAILURE', { goal: 2, target: 'minecraft:rabbit_stew' }); end('t3')
+  exit('t4', 'trees/craft.x@bbbbbbbb', 'SUCCESS', undefined); end('t4')
+  const total = stats.byName('trees/craft.x').total
+  assert.equal(total.calls, 4, '旧事件照样进总数')
+  assert.equal(Object.keys(total.instances).length, 3)
+  assert.equal(usageSummary(total, 'tree').match(/跨实例：.*$/)[0],
+    '跨实例：在 2 种参数组合上成功过（共 3 种；变过的参数：goal 3 种、target 3 种）；没成功过的组合：goal=2, target="minecraft:rabbit_stew"')
+  assert.doesNotMatch(usageSummary(stats.get('trees/craft.x@bbbbbbbb'), 'tree'), /在 2 种/, '单个版本只算自己的')
+
+  exit('t5', 'code/inv.count@cccccccc', 'SUCCESS', {}); end('t5')
+  exit('t6', 'code/inv.count@cccccccc', 'SUCCESS', {}); end('t6')
+  assert.match(usageSummary(stats.get('code/inv.count@cccccccc'), 'compute'), /跨实例：没有输入参数，按任务算——在 2 个任务里成功过（共 2 个）$/)
+  assert.doesNotMatch(usageSummary(stats.get('trees/craft.x@aaaaaaaa'), 'tree'), /未跨实例验证/)
+})
+
+test('调用处出错（2026-11-13）：缺 read / 实参不合签名 / $键解析不了 → callError，不算条目失败、不进跨实例；代码自己的错和 SubTree 照旧算失败', () => {
+  const stats = new CapsuleStats()
+  const ref = 'code/craft.plan@aaaaaaaa'
+  const exit = (taskId, error, extra = {}) => stats.observe({ taskId, event: 'node', phase: 'exit', type: 'Compute', id: 'n1', ref, status: error ? 'FAILURE' : 'SUCCESS', error, args: { goal: 31, target: `minecraft:${taskId}` }, ...extra })
+  exit('t1', 'state.inventory is not read by this node: add "inventory" to the node\'s read (e.g. read: ["inventory"])')
+  exit('t2', 'code/craft.plan@aaaaaaaa: missing required param "recipe"')
+  exit('t3', 'code/craft.plan@aaaaaaaa: param "goal" must be number')
+  exit('t4', 'blackboard has no key "craft.recipes"')
+  exit('t5', 'code/craft.plan@aaaaaaaa: returned undeclared output "dirty"')
+  exit('t6', null)
+  stats.observe({ taskId: 't7', event: 'node', phase: 'exit', type: 'SubTree', id: 'n1', ref: 'trees/x@bbbbbbbb', status: 'FAILURE', error: 'state.inventory is not read by this node', args: { goal: 1 } })
+  for (const t of ['t1', 't2', 't3', 't4', 't5', 't6', 't7']) stats.observe({ taskId: t, event: 'task/done' })
+  const row = stats.get(ref)
+  assert.deepEqual([row.calls, row.ok, row.error, row.callError], [6, 1, 1, 4])
+  assert.deepEqual(Object.keys(row.instances).map((k) => JSON.parse(k).target), ['minecraft:t5', 'minecraft:t6'], '调用处出错的组合不进 instances')
+  const usage = usageSummary(row, 'compute')
+  assert.match(usage, /成功 1 \/ 失败 1 \/ 调用处出错 4（缺 read、实参不合签名等，不算条目失败）/)
+  assert.match(usage, /跨实例：在 1 种参数组合上成功过（共 2 种.*没成功过的组合：goal=31, target="minecraft:t5"/)
+  assert.equal(stats.get('trees/x@bbbbbbbb').error, 1, 'SubTree 的错误是子节点传上来的，照旧算失败')
+  assert.equal(row.errors.length, 3, '错误样本里调用处出错也留着（规划时看得到"要加 read"）')
 })

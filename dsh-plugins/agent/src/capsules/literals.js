@@ -41,14 +41,34 @@ export function collectEvidence(task, { from = null } = {}) {
   const own = from ? names.filter((name) => new RegExp(`^(before|after)@${escape(from)}(\\.|#|$)`).test(name)) : []
   for (const name of own.length ? own : names) {
     const entry = task.snapshots.get(name)
-    walkLeaves(entry?.state ?? {}, (value, path, key, parent) => {
-      const vec3 = Array.isArray(parent) && parent.length === 3 && parent.every((n) => typeof n === 'number')
-      if (typeof value === 'number' && (SNAPSHOT_NUMBER_KEYS.test(key) || vec3)) add(value, `快照 ${name} 的 ${path}`)
-      if (typeof value === 'string' && SNAPSHOT_STRING_KEYS.test(key)) add(value, `快照 ${name} 的 ${path}`)
-    })
+    addSnapshotValues(entry?.state ?? {}, `快照 ${name} 的 `, add)
   }
   return seen
 }
+
+/** 快照里会被抄成常量的值：格子号、坐标、朝向、物品 / 方块 id。add(值, 在哪) */
+export function addSnapshotValues(state, prefix, add) {
+  walkLeaves(state, (value, path, key, parent) => {
+    const vec3 = Array.isArray(parent) && parent.length === 3 && parent.every((n) => typeof n === 'number')
+    if (typeof value === 'number' && (SNAPSHOT_NUMBER_KEYS.test(key) || vec3)) add(value, `${prefix}${path}`)
+    if (typeof value === 'string' && SNAPSHOT_STRING_KEYS.test(key)) add(value, `${prefix}${path}`)
+  })
+}
+
+/**
+ * 展开 / 修复回合里看到的黑板值（2026-11-13）：只记两种——带命名空间的 id（"minecraft:white_wool"）和 ≥ 10 的整数。
+ * 黑板里多是任务自己的代码算出来的值，词表词（"short"、"planks"）和小整数（格子 9、"4 块木板"）跟树里的常量重合多半是巧合
+ * （P4 游戏内验收的教训，见文件头），所以比 collectEvidence 窄。
+ */
+export function addShownValues(value, prefix, add) {
+  walkLeaves(value, (leaf, path) => {
+    const where = `${prefix}${path ? (path.startsWith('[') ? '' : '.') + path : ''}`
+    if (typeof leaf === 'string' && ID_PATTERN.test(leaf)) add(leaf, where)
+    if (typeof leaf === 'number' && Number.isInteger(leaf) && Math.abs(leaf) >= 10) add(leaf, where)
+  })
+}
+
+const ID_PATTERN = /^[a-z0-9_.-]+:[a-z0-9_./-]+$/
 
 /**
  * 条目里要比对的字面量。
@@ -89,6 +109,32 @@ export function checkLiterals({ folder, body, evidence, keep = {}, registry = nu
   return { hits, errors }
 }
 
+/**
+ * 展开 / 修复提交里的字面量 vs 这个请求里看到的值（2026-11-13）：只警告，不拒绝。
+ * 记忆世界查询节点（code/core.json.query / code/core.nbt.query）的参数按契约只能是字面量，不比。
+ * @param {object} options
+ * @param {Array<object>} options.nodes  新节点的执行格式 spec（各自只看自己，不递归）
+ * @param {object|null} [options.code]   本次提交带的代码草稿 { 名字: { body } }（只比字符串）
+ * @param {Map<string, string>} options.seen  valueKey → 在哪看到
+ * @returns {Array<{ path: string, value: number|string, where: string }>}
+ */
+export function seenLiteralHits({ nodes = [], code = null, seen, registry = null }) {
+  const hits = []
+  const check = (path, value) => {
+    const where = seen.get(valueKey(value))
+    if (where) hits.push({ path, value, where })
+  }
+  for (const spec of nodes) {
+    if (spec.type === 'Compute' && /^code\/core\.(json|nbt)\.query(@|$)/.test(spec.ref ?? '')) continue
+    for (const { path, value } of nodeLiterals(spec, { registry })) check(path, value)
+  }
+  for (const [name, draft] of Object.entries(code ?? {})) {
+    if (typeof draft?.body !== 'string') continue
+    for (const { path, value } of codeLiterals(draft.body)) check(`task/${name} ${path}`, value)
+  }
+  return hits
+}
+
 // ── 内部 ───────────────────────────────────────────────────────────────────
 
 /** 黑板里大模型自己的代码算出来的键：非 core.* 的 Compute 的 writes、ForEach 的 as / indexAs（所有树版本里出现过的）。 */
@@ -109,7 +155,7 @@ function derivedKeys(task) {
 }
 
 /** 值的比对键；不比的值返回 null。 */
-function valueKey(value) {
+export function valueKey(value) {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return null
     const n = Math.floor(value)
@@ -121,21 +167,25 @@ function valueKey(value) {
 
 function treeLiterals(spec, registry) {
   const out = []
-  const visitNode = (node) => {
-    if (node.params && typeof node.params === 'object') {
-      const cmd = node.type === 'Action' ? node.cmd : null
-      scanParams(node.params, `${node.id}.params`, cmd, registry, out)
-    }
-    if (node.type === 'Steps' && Array.isArray(node.do)) {
-      node.do.forEach((step, i) => {
-        if (!Array.isArray(step)) return
-        const [cmd, params] = step
-        if (cmd === 'wait') return
-        if (params !== null && typeof params === 'object') scanParams(params, `${node.id}.do[${i}].params`, cmd, registry, out)
-      })
-    }
+  walkSpec(spec, (node) => out.push(...nodeLiterals(node, { registry })))
+  return out
+}
+
+/** 一个节点自己（不含子节点）参数里的字面量（执行格式）。 */
+export function nodeLiterals(node, { registry = null } = {}) {
+  const out = []
+  if (node.params && typeof node.params === 'object') {
+    const cmd = node.type === 'Action' ? node.cmd : null
+    scanParams(node.params, `${node.id}.params`, cmd, registry, out)
   }
-  walkSpec(spec, visitNode)
+  if (node.type === 'Steps' && Array.isArray(node.do)) {
+    node.do.forEach((step, i) => {
+      if (!Array.isArray(step)) return
+      const [cmd, params] = step
+      if (cmd === 'wait') return
+      if (params !== null && typeof params === 'object') scanParams(params, `${node.id}.do[${i}].params`, cmd, registry, out)
+    })
+  }
   return out
 }
 

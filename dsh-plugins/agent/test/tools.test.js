@@ -7,7 +7,7 @@ import { createTools } from '../src/tools/index.js'
 import { Bridge } from '../src/llm/bridge.js'
 import { loadPrompts } from '../src/llm/prompts.js'
 import { METHODS, READ_METHODS } from '../src/game/index.js'
-import { NBT_SOURCES } from '../src/capsules/index.js'
+import { NBT_SOURCES, saveCapsule } from '../src/capsules/index.js'
 import { makeRuntime, runUntil } from './helpers.js'
 import { FakeMod, allRecipes } from './fake_mod.js'
 
@@ -83,6 +83,32 @@ test('command_docs / capsule_search / capsule_get', async () => {
   assert.equal(got.signature.returns, 'bool')
   assert.match(got.body, /function main/)
   assert.equal((await call('capsule_get', { ref: 'code/core.json.query' })).host, true)
+})
+
+test('capsule_get：正文按行号列在最后，放不下就写明从哪行接着读；start / lines 只读一段；withBody: false 不带正文（2026-11-13）', async () => {
+  const { call, text, library, sandbox, registry } = setup()
+  const body = Array.from({ length: 900 }, (_, i) => `  const v${i} = ${i} // ${'x'.repeat(40)}`).join('\n')
+  saveCapsule({ library, sandbox, registry }, 'code', { name: 'test.long', description: '很长的代码', signature: { outputs: { v: { type: 'int' } } }, body: `function main() {\n${body}\n  return { v: 1 }\n}` })
+  const got = await call('capsule_get', { ref: 'code/test.long' })
+  const full = text('capsule_get', {}, got)
+  assert.match(full, /"description": "很长的代码"/, '契约照旧是 JSON')
+  assert.match(full, /正文（共 903 行）：\n1: function main\(\) \{\n2: {3}const v0 = 0/)
+  const next = Number(full.match(/用 start: (\d+) 接着读/)[1])
+  assert.ok(full.length <= 4000 + 400 && next > 2, '放不下时只列能放下的行，写明从哪行接着读')
+
+  const page = text('capsule_get', { ref: 'code/test.long', start: next, lines: 5 }, got)
+  assert.match(page, new RegExp(`^code/test\\.long@\\w+ 正文（共 903 行）\\n${next}: `))
+  assert.doesNotMatch(page, /"description"/, '只读一段时不重复契约')
+  assert.match(page, new RegExp(`第 ${next}–${next + 4} 行；后面还有`))
+  const tail = text('capsule_get', { ref: 'code/test.long', start: 902 }, got)
+  assert.match(tail, /902: {3}return \{ v: 1 \}\n903: \}$/, '读到末尾不再提示接着读')
+  assert.match(text('capsule_get', { ref: 'code/test.long', start: 2000 }, got), /从第 2000 行起没有内容：正文共 903 行/)
+
+  const meta = text('capsule_get', { ref: 'code/test.long', withBody: false }, got)
+  assert.match(meta, /正文共 903 行（没有列出；要看用 start \/ lines）$/)
+  assert.doesNotMatch(meta, /const v0/)
+  const host = await call('capsule_get', { ref: 'code/core.json.query' })
+  assert.doesNotMatch(text('capsule_get', {}, host), /正文/, '内置查询没有正文')
 })
 
 test('提交类工具：结果带 taskId / requestId / 版本号；不合法不是工具错误', async () => {
