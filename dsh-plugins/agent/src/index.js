@@ -387,6 +387,8 @@ function setupPlanner(ctx, config, runtime) {
       return `steveX: ${exec.name} is not available while confirming an MC fact (allowed now: ${[...turn.allowed].join(', ')})`
     }
     const reqType = turn && bridge.requests.get(bridge.turns.get(`${sessionId}#${turn.turn}`))?.type
+    // 整理回合不产出树，"树要自己读数据"那句不适用
+    if (reqType === 'curate') return `steveX: ${exec.name} is not available in a capsule library curation turn (allowed now: ${[...turn.allowed].join(', ')})`
     const hint = reqType === 'reflect' ? (IN_REVIEW[exec.name] ?? IN_TREE[exec.name] ?? '') : (IN_TREE[exec.name] ?? '')
     return turn
       ? `steveX: ${exec.name} is not available while answering an executor request (allowed now: ${[...turn.allowed].join(', ')}); the tree must read the data itself (I13).${hint}`

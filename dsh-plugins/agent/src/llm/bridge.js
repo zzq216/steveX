@@ -703,6 +703,8 @@ export class Bridge {
         ? `上次整理：${state.lastAt}（${state.lastRequestId}），之后结束了 ${state.sinceLast} 个任务`
         : `还没有整理过；统计里已经记了 ${this.stats?.data.tasks.length ?? 0} 个任务`,
       library: renderLibrary(libraryRows(this.library, this.stats, this.history), { listLimit: this.curateConfig.listLimit }),
+      // 整理回合放行的工具（与守卫用的同一份名单，不会和实际放行的不一致）
+      tools: CURATE_TOOLS.map((name) => `\`${name}\``).join('、'),
       skill: this.prompts.skills.curate
     })
     const summary = trigger === 'auto' ? `整理胶囊库：已累计 ${state.sinceLast} 个任务` : '整理胶囊库'

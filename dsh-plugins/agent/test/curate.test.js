@@ -74,6 +74,8 @@ test('/bt curate：全库清单（按名字排序、带统计与旧版本数）�
   assert.match(message.text, /# 整理请求 k1（胶囊库）\n\n（人用 \/bt curate 发起）/)
   assert.match(message.text, /还没有整理过；统计里已经记了 1 个任务/)
   assert.match(message.text, /skill：胶囊库整理/)
+  // 写明本回合放行的工具（取自守卫的同一份名单），其他工具会被拒绝
+  assert.match(message.text, /本回合只能调用这些 steveX 工具：`command_docs`、.*`capsule_get`、.*`capsule_retire`、`capsule_describe`、`bt_curate_done`。其他工具（如任务历史 `task_search` \/ `task_get`/)
   const listed = message.text.split('\n').filter((l) => l.startsWith('- code/') || l.startsWith('- trees/'))
   assert.deepEqual(listed.map((l) => l.slice(2, l.indexOf('（'))), [...listed.map((l) => l.slice(2, l.indexOf('（')))].sort(), '按名字排序')
   assert.ok(listed.some((l) => l.startsWith(`- ${refs['test.has-item']}（条件）尚无记录｜同名旧版本 0｜背包里 item`)), listed.join('\n'))

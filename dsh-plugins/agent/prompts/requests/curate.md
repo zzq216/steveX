@@ -4,6 +4,8 @@
 
 {{last}}
 
+本回合只能调用这些 steveX 工具：{{tools}}。其他工具（如任务历史 `task_search` / `task_get`、`bt_inspect`、`bt_view`、`mod_query`）在整理回合会被拒绝。
+
 ## 胶囊库
 
 ```text
