@@ -28,6 +28,7 @@ import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.inventory.DispenserMenu;
 import net.minecraft.world.inventory.HopperMenu;
+import net.minecraft.world.inventory.StonecutterMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
@@ -65,6 +66,9 @@ import net.minecraft.world.phys.Vec3;
  * （{@link Expect}），tick 里记第一次恰好达到目标的时刻（C9）；status 另报箱子、物品栏、光标、地上掉落物的计数（C8）。
  * 同一场地也可以换成漏斗（{@code hopper}，正下方地板换成红石块把它锁住，方案 C15）或发射器（{@code dispenser}），
  * 下文"容器工作站"指这四种。
+ *
+ * <p>切石机场地（docs/切石机训练场设计方案.md）：工作站是切石机（{@code stonecutter}，没有容器）。prepare 登记"只看目标"的
+ * 目标计数（{@link Expect} 的 targets / allowed，Q9）；status 另报物品栏、光标、切石机输入格、地上掉落物的计数（Q8）。
  */
 public final class ArenaManager {
 
@@ -73,29 +77,40 @@ public final class ArenaManager {
     /** 一块场地：origin + 工作站名（null = 没有工作站）。 */
     public record Site(BlockPos origin, String station) {}
 
-    /** 工作站名 → 方块：工作台（W2）；小箱子、大箱子（箱子方案 C2，大箱子是两块 CHEST）；漏斗、发射器（方案 §8）。 */
+    /** 工作站名 → 方块：工作台（W2）；小箱子、大箱子（箱子方案 C2，大箱子是两块 CHEST）；漏斗、发射器（方案 §8）；切石机（切石机方案 Q1）。 */
     private static final Map<String, Block> STATIONS = Map.of(
             "crafting_table", Blocks.CRAFTING_TABLE,
             "chest", Blocks.CHEST,
             "large_chest", Blocks.CHEST,
             "hopper", Blocks.HOPPER,
-            "dispenser", Blocks.DISPENSER);
+            "dispenser", Blocks.DISPENSER,
+            "stonecutter", Blocks.STONECUTTER);
 
     /** 已知场地：名字 → Site。arena/build 会登记或更新；/arena 命令按这里传送。 */
     private static final Map<String, Site> KNOWN = new ConcurrentHashMap<>(Map.of(
             "craft2x2", new Site(DEFAULT_ORIGIN, null),
             "craft3x3", new Site(new BlockPos(10000, 120, 10030), "crafting_table"),
-            "chest", new Site(new BlockPos(10000, 120, 10060), "chest")));
+            "chest", new Site(new BlockPos(10000, 120, 10060), "chest"),
+            "stonecutter", new Site(new BlockPos(10000, 120, 10090), "stonecutter")));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
     private record Watch(Item item, String id, int baseline) {}
 
     /**
-     * 本轮的目标计数（箱子方案 C9）：物品栏（不含光标）与工作站容器里各物品 id 的数量都恰好如此、且光标为空，
-     * 就算到达。取 / 放、要几个这些语义由插件定，mod 只比对。
+     * 本轮的目标计数，两种写法：
+     * <ul>
+     *   <li>箱子方案 C9（targets 为 null）：物品栏（不含光标）与工作站容器里各物品 id 的数量都恰好如此、且光标为空，就算到达；</li>
+     *   <li>切石机方案 Q9（targets 不为 null）：只看目标——每个目标在物品栏里恰好是 n 个、在光标和切石机输入格里没有；
+     *       光标为空；物品栏、光标、输入格里没有 allowed 以外的物品。剩多少材料不比较（走哪条路切，材料消耗都可能不同）。</li>
+     * </ul>
+     * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container) {}
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
+        public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
+            this(inventory, container, null, null);
+        }
+    }
 
     /** 进行中的一轮；null = 没有进行中的训练。 */
     private static final class Run {
@@ -156,6 +171,11 @@ public final class ArenaManager {
     /** 容器工作站：小箱子、大箱子、漏斗、发射器（箱子方案、§8）。 */
     public static boolean isStorage(String station) {
         return storageCapacity(station) > 0;
+    }
+
+    /** 切石机工作站（切石机方案）：没有容器，计数看物品栏、光标、切石机输入格。 */
+    public static boolean isCutter(String station) {
+        return "stonecutter".equals(station);
     }
 
     /** 容器工作站的格数：小箱子 27、大箱子 54、漏斗 5、发射器 9；不是容器工作站 → 0。 */
@@ -385,7 +405,8 @@ public final class ArenaManager {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         Block stationBlock = station(station);
         checkChestItems(chestItems, storageCapacity(station));
-        if (expect != null && !isStorage(station)) throw new IllegalArgumentException("expect needs a container station (chest, large_chest, hopper, dispenser)");
+        if (expect != null && expect.targets() == null && !isStorage(station)) throw new IllegalArgumentException("expect { inventory, container } needs a container station (chest, large_chest, hopper, dispenser)");
+        if (expect != null && expect.targets() != null && !isCutter(station)) throw new IllegalArgumentException("expect { targets, allowed } needs the stonecutter station");
         List<Give> items = split(requested, seed);
         List<ItemStack> stacks = new ArrayList<>();
         for (Give g : items) stacks.add(new ItemStack(item(g.id()), g.count()));
@@ -494,6 +515,13 @@ public final class ArenaManager {
             out.put("carried", carried(player.containerMenu));
             out.put("dropped", dropped(level, active.origin));
         }
+        if (isCutter(active.stationName)) {
+            // 切石机方案 Q8：物品栏（不含光标）、光标、切石机输入格（界面开着时；关界面时会退回物品栏）、场内地上
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("cutterInput", cutterInput(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+        }
         return out;
     }
 
@@ -542,22 +570,34 @@ public final class ArenaManager {
 
     /**
      * 当前界面是不是这个工作站的界面：工作台 → CraftingMenu（物品栏的 2×2 是 InventoryMenu，不会误记）；
-     * 箱子 → ChestMenu；漏斗 → HopperMenu；发射器 → DispenserMenu。
+     * 箱子 → ChestMenu；漏斗 → HopperMenu；发射器 → DispenserMenu；切石机 → StonecutterMenu。
      */
     private static boolean opensStation(String station, AbstractContainerMenu menu) {
         return switch (station) {
             case "chest", "large_chest" -> menu instanceof ChestMenu;
             case "hopper" -> menu instanceof HopperMenu;
             case "dispenser" -> menu instanceof DispenserMenu;
+            case "stonecutter" -> menu instanceof StonecutterMenu;
             default -> menu instanceof CraftingMenu;
         };
     }
 
-    /** 箱子方案 C9：物品栏（不含光标）与容器的计数恰好等于 expect，且光标为空。容器不在了 → 否。 */
+    /** 箱子方案 C9：物品栏（不含光标）与容器的计数恰好等于 expect，且光标为空。容器不在了 → 否。切石机见 {@link #reachedTargets}。 */
     private static boolean reached(ServerLevel level, ServerPlayer player, Run run) {
         if (!player.containerMenu.getCarried().isEmpty()) return false;
+        if (run.expect.targets() != null) return reachedTargets(player, run.expect);
         Container chest = stationContainer(level, run.origin, run.stationName);
         return chest != null && counts(player.getInventory()).equals(run.expect.inventory()) && counts(chest).equals(run.expect.container());
+    }
+
+    /** 切石机方案 Q9（光标为空已由调用方检查）：目标恰好都在物品栏里，输入格里没有目标，任何地方没有 allowed 以外的物品。 */
+    private static boolean reachedTargets(ServerPlayer player, Expect expect) {
+        Map<String, Integer> held = counts(player.getInventory());
+        Map<String, Integer> input = cutterInput(player.containerMenu);
+        for (Map.Entry<String, Integer> t : expect.targets().entrySet()) {
+            if (!t.getValue().equals(held.getOrDefault(t.getKey(), 0)) || input.containsKey(t.getKey())) return false;
+        }
+        return expect.allowed().containsAll(held.keySet()) && expect.allowed().containsAll(input.keySet());
     }
 
     // ── 工具 ─────────────────────────────────────────────────────────────
@@ -579,6 +619,13 @@ public final class ArenaManager {
     /** 光标上的物品：{ id: count }，空 → {}。 */
     private static Map<String, Integer> carried(AbstractContainerMenu menu) {
         ItemStack stack = menu.getCarried();
+        return stack.isEmpty() ? Map.of() : Map.of(id(stack), stack.getCount());
+    }
+
+    /** 当前界面是切石机时它的输入格（0 号格）：{ id: count }；空或不是切石机界面 → {}。 */
+    private static Map<String, Integer> cutterInput(AbstractContainerMenu menu) {
+        if (!(menu instanceof StonecutterMenu sm)) return Map.of();
+        ItemStack stack = sm.getSlot(0).getItem();
         return stack.isEmpty() ? Map.of() : Map.of(id(stack), stack.getCount());
     }
 

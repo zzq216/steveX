@@ -20,6 +20,7 @@ import { CapsuleVersions } from './versions.js'
  *   校验与运行照 code/ 条目，落在 runtime/tasks/<taskId>/code/，不进库、不进 manifest
  * - 暂存（P3 §7.2）：快树补丁附带的条件代码在补丁被接受之前只在内存里——能被钉住、能求值，
  *   补丁被拒就丢掉（不进库、不动 manifest）；被接受时 commitStaged() 写进库，哈希与暂存时相同
+ * - 换引用（docs/胶囊换引用设计方案.md）：staleDependents 找最新版里还钉着某个名字旧版的子树，save.js 的 repinTree 把指定引用换成最新版、存成子树的新版本
  * - 下架（整理方案 §5.4）：manifest 该名字加 `retired`，条目文件不动、带哈希的引用照常能装载；
  *   capsule_search 默认不列它。同名写入新版本（write）时下架标记自然清掉
  */
@@ -203,6 +204,25 @@ export class CapsuleLibrary {
       .map((v) => v.hash)
   }
 
+  /**
+   * 换引用方案 R7：manifest 里每个名字的最新版子树（不含已下架的），body 里钉着 key（"folder/name"）某个非最新版的。
+   * 库目录里的旧版本文件不扫（规划不会选到它们）；快树不在范围内。
+   * @returns {Array<{ ref: string, pins: string[] }>}  ref = 那棵子树的最新版；pins = 它钉着的 key 的旧版引用
+   */
+  staleDependents(key) {
+    const latest = this.readManifest()[key]?.hash ?? this.builtinLatest.get(key)
+    if (!latest) return []
+    const out = []
+    for (const [treeKey, info] of Object.entries(this.readManifest())) {
+      if (!treeKey.startsWith('trees/') || treeKey === key || info.retired) continue
+      const entry = this.tryGet(`${treeKey}@${info.hash}`)
+      if (!entry) continue
+      const pins = [...capsuleRefs(entry.body)].filter((r) => r.startsWith(`${key}@`) && r !== `${key}@${latest}`).sort()
+      if (pins.length) out.push({ ref: `${treeKey}@${info.hash}`, pins })
+    }
+    return out.sort((a, b) => a.ref.localeCompare(b.ref))
+  }
+
   /** 内置条目的宿主实现；普通条目返回 null。 */
   host(ref) {
     return this.builtins.get(ref)?.host ?? null
@@ -351,6 +371,18 @@ export class CapsuleLibrary {
     }
     return { ref, hash }
   }
+}
+
+/** 执行格式子树里出现的全部胶囊引用（任何对象上的 ref 字符串） */
+export function capsuleRefs(value, out = new Set()) {
+  if (Array.isArray(value)) for (const v of value) capsuleRefs(v, out)
+  else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      if (k === 'ref' && typeof v === 'string') out.add(v)
+      else capsuleRefs(v, out)
+    }
+  }
+  return out
 }
 
 function kindOf(key, entry) {

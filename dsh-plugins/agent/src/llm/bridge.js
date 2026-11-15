@@ -2,7 +2,7 @@ import path from 'node:path'
 import { TreeError } from '../bt/executor.js'
 import { renderTree, ancestorsOf } from '../bt/overview.js'
 import { renderDirectory, buildReflectDirectory, renderReflectDirectory } from '../bt/evidence.js'
-import { saveCapsule, saveDraft } from '../capsules/save.js'
+import { repinTree, saveCapsule, saveDraft } from '../capsules/save.js'
 import { CapsuleVersions } from '../capsules/versions.js'
 import { collectEvidence, checkLiterals, addShownValues, addSnapshotValues, seenLiteralHits, valueKey } from '../capsules/literals.js'
 import { walkSpec } from '../bt/build.js'
@@ -61,9 +61,10 @@ const PATCH_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_vie
 export const PATCH_TYPES = Object.freeze(['recover', 'escalate', 'failed', 'died'])
 /** 复盘（P4 §3.2）：任务已结束，没有树可改；bt_inspect 不给 live（由执行器拒绝）。 */
 /** capsule_describe 也给复盘（2026-11-07）：只能改这次任务用到的 / 本次复盘存下的条目的说明，好把实测写进说明 */
-const REFLECT_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_inspect', 'capsule_save', 'capsule_describe', 'task_assess', 'bt_reflect_done'])
+/** capsule_repin（docs/胶囊换引用设计方案.md R6）：只在复盘回合 */
+const REFLECT_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_inspect', 'capsule_save', 'capsule_repin', 'capsule_describe', 'task_assess', 'bt_reflect_done'])
 /** 只在复盘回合可用的工具（guard 据此拒绝其他回合的调用） */
-export const REFLECT_ONLY_TOOLS = Object.freeze(['capsule_save', 'task_assess', 'bt_reflect_done'])
+export const REFLECT_ONLY_TOOLS = Object.freeze(['capsule_save', 'capsule_repin', 'task_assess', 'bt_reflect_done'])
 /** 整理（整理方案 §5.4）：接口知识 + 下架 / 改说明 / 结束。不给 capsule_save：不经任务验证的新代码不进库 */
 const CURATE_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, 'capsule_retire', 'capsule_describe', 'bt_curate_done'])
 /** 只在整理回合可用的工具（guard 据此拒绝其他回合的调用） */
@@ -527,7 +528,33 @@ export class Bridge {
       versionNote: existing && savedHash !== replaces ? versionNote : undefined
     })
     this.log(`[bt] reflect ${requestId}: saved ${result.ref}`)
-    return { ok: true, ref: result.ref, created: result.created, ...(result.rewritten ? { rewritten: result.rewritten } : {}), ...(fromInfo ? { from: fromInfo } : {}), ...(keptLiterals ? { keptLiterals } : {}) }
+    // 换引用方案 §3：存了同名新版，列出最新版还钉着它旧版的子树（只是信息）
+    const pinnedOld = existing && savedHash !== replaces ? this.library.staleDependents(key) : []
+    return { ok: true, ref: result.ref, created: result.created, ...(result.rewritten ? { rewritten: result.rewritten } : {}), ...(fromInfo ? { from: fromInfo } : {}), ...(keptLiterals ? { keptLiterals } : {}), ...(pinnedOld.length ? { pinnedOld } : {}) }
+  }
+
+  /**
+   * capsule_repin（docs/胶囊换引用设计方案.md）：把库里子树 tree 最新版中 refs 列出的名字的引用换成最新版，存成它的新版本。
+   * 版本说明由系统生成（R3）；不自动连锁（R5），结果里列出还钉着这棵树旧版的子树。
+   * @returns {{ ok: true, ref, created, changes, dependents } | { ok: false, errors: string[] } | { ok: false, error }}
+   */
+  repinCapsule({ sessionId, requestId, tree, refs }) {
+    const check = this.checkRequest(sessionId, requestId, 'reflect')
+    if (check.error) return { ok: false, error: check.error }
+    const { req } = check
+    const result = repinTree({ library: this.library, registry: this.registry }, tree, refs)
+    if (!result.ok) return result
+    const key = result.ref.slice(0, result.ref.lastIndexOf('@'))
+    const moved = result.changes.map((c) => `${c.ref} @${c.from.join('/@')} → @${c.to}`).join('；')
+    // 换回了库里已有的某一版（内容完全相同）：那一版已有自己的记录，不覆盖
+    if (!this.library.versions?.get(key, result.hash)) this.library.versions?.record(key, result.hash, {
+      parent: result.parent, by: req.taskId, repin: result.changes,
+      note: { change: `只换了引用：${moved}`, none: `只换了引用，两版的差别见被换胶囊的版本说明（${result.changes.map((c) => `${c.ref}@${c.to}`).join('、')}）`, claims: [] }
+    })
+    if (!req.saved.includes(result.ref)) req.saved.push(result.ref)
+    this.executor.log(req.taskId, { event: 'capsule/repinned', requestId, ref: result.ref, parent: result.parent, changes: result.changes, created: result.created })
+    this.log(`[bt] reflect ${requestId}: repinned ${result.ref} (${moved})`)
+    return { ok: true, ref: result.ref, parent: result.parent, created: result.created, changes: result.changes, dependents: this.library.staleDependents(key) }
   }
 
   /** bt_reflect_done（P4 §6.1）：结束复盘。summary 必填，什么都没存也要写为什么。 */

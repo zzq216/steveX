@@ -1,7 +1,7 @@
 import { JSON_OUTPUT, textBlocks, sessionOf } from './shared.js'
 
 /**
- * 任务复盘（P4 §4 / §6）：capsule_save、bt_reflect_done。只在复盘回合可用（guard，REFLECT_ONLY_TOOLS）。
+ * 任务复盘（P4 §4 / §6）：capsule_save、capsule_repin（docs/胶囊换引用设计方案.md）、bt_reflect_done。只在复盘回合可用（guard，REFLECT_ONLY_TOOLS）。
  *
  * 存不进去不是工具错误：返回 { ok: false, errors }，大模型按错误原文改了重交；不计次数（P4 §4.4）。
  *
@@ -42,6 +42,24 @@ export function reflectTools({ bridge }) {
       }
     },
     {
+      name: 'capsule_repin',
+      description: [
+        '把库里一棵子树（最新版）里指定名字的胶囊引用换成那些名字现在的最新版，存成这棵子树的新版本。子树里的其他内容（signature、正文、其余引用、description）原样保留；版本说明由系统写成"只换了引用"。',
+        '- refs 写要换的名字，不带 @hash（如 ["code/x"]）；树里没有这个名字、或已经是最新版会报错',
+        '- 换完照常校验子树：新版的输入 / 输出变了导致校验不过时什么都不存，要用就用 capsule_save 手工重存',
+        '- 不会自动往上换：结果里列出还钉着这棵树旧版的子树'
+      ].join('\n'),
+      parameters: {
+        requestId: { type: 'string', required: true, description: '复盘请求 id，如 "c1"' },
+        tree: { type: 'string', required: true, description: '要换引用的子树，如 "trees/craft.batch"（就是它的最新版）' },
+        refs: { type: 'array', items: { type: 'string' }, required: true, description: '要换成最新版的名字，如 ["code/craft.plan"]' }
+      },
+      output: { schema: JSON_OUTPUT, render: (_args, value) => textBlocks(renderRepin(value)) },
+      async execute(args, exec) {
+        return JSON.parse(JSON.stringify(bridge.repinCapsule({ sessionId: sessionOf(exec), requestId: args.requestId, tree: args.tree, refs: args.refs })))
+      }
+    },
+    {
       name: 'bt_reflect_done',
       description: '结束复盘。summary 写存了什么、为什么；什么都没存就写为什么这次没有值得存的。',
       parameters: {
@@ -59,6 +77,18 @@ export function reflectTools({ bridge }) {
   ]
 }
 
+const pinnedText = (rows) => rows.map((r) => `${r.ref}（钉着 ${r.pins.join('、')}）`).join('；')
+
+function renderRepin(value) {
+  if (value.ok) {
+    const lines = [`已存：${value.ref}（换了：${value.changes.map((c) => `${c.ref} @${c.from.join('/@')} → @${c.to}`).join('；')}）`]
+    lines.push(value.dependents.length ? `最新版还钉着它旧版的子树：${pinnedText(value.dependents)}` : '没有别的子树钉着它的旧版')
+    return lines.join('\n')
+  }
+  if (value.errors) return `没有换：\n${value.errors.map((e) => `- ${e}`).join('\n')}`
+  return `没有换：${value.error}`
+}
+
 function renderSave(value) {
   if (value.ok) {
     const lines = [`已存：${value.ref}${value.created ? '' : '（库里已有完全相同的条目，没有新写）'}`]
@@ -66,6 +96,7 @@ function renderSave(value) {
     if (value.from?.node) lines.push(`出处 ${value.from.node}：这次任务里执行 ${value.from.runs} 次，成功 ${value.from.successes} 次`)
     if (value.from?.draft) lines.push(`转正自 ${value.from.draft}`)
     if (value.keptLiterals) lines.push(`保留的字面量：${Object.keys(value.keptLiterals).join(', ')}`)
+    if (value.pinnedOld) lines.push(`最新版还钉着它旧版的子树：${pinnedText(value.pinnedOld)}`)
     return lines.join('\n')
   }
   if (value.errors) return `没有存：\n${value.errors.map((e) => `- ${e}`).join('\n')}\n请修正后重交（不计次数）。`

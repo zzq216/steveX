@@ -75,7 +75,8 @@ const USAGE = [
   '/bt fast load <file> [理由] 手动放一版快树（走同样的校验，写进版本链）',
   '/bt capsules              胶囊库条目（内置查询 + 已保存的条件 / Compute / 子树 + 本任务的草稿）',
   '/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>] [n=<份数>] [m=<次数>]  合成训练场（craft2x2 / craft3x3）：每轮重置、发 n 份材料、要求合成 m 次的产物、判定，记录写 runtime/training/<场地>.jsonl（需要单人世界）。n、m 写 k 或 a-b（1–64），不写时 n 在 1–64 随机；n=1 m=1 是单次模式',
-  '/bt train chest [item=<物品>] [runs=…] [seed=…] [kind=take|put|mix] [rel=lt|eq|gt|mix] [chest=small|large|hopper|dispenser|mix|all] [stack=64|16|1|mix] [fill=random|full|mix] [types=k|a-b]  箱子训练场：从容器取 / 往容器放指定数量的物品（chest=mix 只抽大小箱子，all 连漏斗、发射器一起抽）；rel 是要求数量与实有数量的关系，fill=full 让每格都满一组，types 是物品种类数（含目标，1–9）',
+  '/bt train chest [item=<物品>] [runs=…] [seed=…] [kind=take|put|mix] [rel=lt|eq|gt|mix] [chest=small|large|hopper|dispenser|mix|all] [stack=64|16|1|mix] [fill=random|full|mix] [types=k|a-b] [targets=k|a-b]  箱子训练场：从容器取 / 往容器放指定数量的物品（chest=mix 只抽大小箱子，all 连漏斗、发射器一起抽）；rel 是要求数量与实有数量的关系，fill=full 让每格都满一组，types 是物品种类数（含全部目标，1–9），targets 是每轮要搬几种目标物品（1–4，默认 1）',
+  '/bt train stonecutter [runs=…] [seed=…] [materials=k|a-b] [slots=k|a-b] [fill=random|full|mix] [styles=k|a-b] [bypass=exclude|keep] [material=<材料>]  切石机训练场：把 1–3 种材料各切成指定数量的几种样式，不多不少；materials 是材料种数（1–3），slots 是每种材料占的格数（1–9），styles 是每种材料切几种样式（1–3），bypass=keep 时也拿物品栏 2×2 就能直接做出的产物出题，material 固定第一种材料',
   '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
   '注意：DSH Web 只在会话开过回合后才显示命令结果。新会话里先说一句话（或 /bt task …），再用 status / nodes / capsules 这类查看命令'

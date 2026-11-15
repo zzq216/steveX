@@ -21,7 +21,9 @@ steveX 的行为树执行器、胶囊库与 Compute 沙箱，以及让大模型�
 | **胶囊版本说明** | 替换同名胶囊时记下改动与"哪一版在什么情况下更好"（`versions.json`）；`capsule_search` / `capsule_get` 显示版本数、未执行、版本链；用到的任务复盘时核对（`task_assess.claims`）；整理清单计数；GC 保留旧版更好的版本 | **已实现**，单元测试通过；待游戏内验收（[胶囊版本说明设计方案.md](../../docs/胶囊版本说明设计方案.md) §6） |
 | **训练场** | `/bt train`：2×2 合成专项训练（每轮重置、随机配方发 1 份材料、发任务、按 `crafted` 统计判定、记回合与 token）；mod 侧 `arena/*`（不给 agent）与游戏内 `/arena`；`npm run training-report` | **已实现**；游戏内验收通过（[训练场设计方案.md](../../docs/训练场设计方案.md) §7） |
 | **工作台训练场** | `/bt train craft3x3`：场内放工作台、准星对准它，只抽 3×3 配方（按形状分组），记打开工作台的时刻与工作台是否被挖；报告按形状汇总、列出引用的旧胶囊 | **已实现**，单元测试通过；待游戏内验收（[工作台训练场设计方案.md](../../docs/工作台训练场设计方案.md) §6） |
+| **切石机训练场** | `/bt train stonecutter`：场内放切石机，每轮把 1–3 种材料各切成指定数量的几种样式，不多不少；同一家族最多一种材料，目标是单次产出的整数倍；按物品栏、光标、输入格、地上的计数判定，多切、切错、丢失各自记 | **已实现**，单元测试通过；待游戏内验收（[切石机训练场设计方案.md](../../docs/切石机训练场设计方案.md) §6） |
 | **箱子训练场** | `/bt train chest`：场内放小箱子或大箱子，每轮"从箱子取 k 个"或"往箱子放 k 个"，k 与实有数量的关系可控（lt / eq / gt）；按两边的计数判定，多拿、动了别的、丢失各自记；mod 在 tick 里记恰好搬完的时刻 | **已实现**，单元测试通过；待游戏内验收（[箱子训练场设计方案.md](../../docs/箱子训练场设计方案.md) §6） |
+| **胶囊换引用** | 复盘工具 `capsule_repin { tree, refs }`：把库里子树最新版中指定的引用换成最新版、存成新版本（版本说明自动生成，照常校验，不自动往上换）；`capsule_save` 存同名新版时列出还钉着旧版的子树 | **已实现**，单元测试通过（[胶囊换引用设计方案.md](../../docs/胶囊换引用设计方案.md)） |
 | **整理** | 胶囊库整理：使用统计（`stats.json`，`capsule_search` / `capsule_get` 展示）、`/bt curate` 整理回合（`capsule_retire` / `capsule_describe` / `bt_curate_done`）、`curate.everyTasks` 自动触发（默认 0）、离线 GC 与脚本 | **已实现**，单元测试通过；待 DSH 内验收（[胶囊库整理设计方案.md](../../docs/胶囊库整理设计方案.md) §10.3） |
 
 **没有人写的技能**：读世界的条件、合成 / 挖掘这类高层动作、配方解析，都由 agent 在训练中写成胶囊。
@@ -46,7 +48,7 @@ prompts/
   skills/           慢树大纲 / 慢树展开（由代码按请求放进消息，不让大模型自己挑）
   requests/         规划 / 展开 / 提醒 / 任务结束 的消息模板（{{变量}}）
 scripts/
-  extract-recipes.js  从 MC jar 生成 data/recipes.json（JSON 查询的默认数据源）
+  extract-recipes.js  从 MC jar 生成 data/recipes.json（JSON 查询的默认数据源）和 data/stonecutting.json（切石配方）
   capsule-save.js     把一个胶囊条目存进库（P4 的 capsule_save 工具走同一个 saveCapsule）
   bt-run.js           不启动 DSH、直连 mod 跑手写树
 examples/           手写树与示例胶囊
@@ -249,9 +251,16 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 7. **多份材料、指定产物个数**（[训练场设计方案.md](../../docs/训练场设计方案.md) T14）：`n=` 发几份材料、`m=` 要合成几次，写 `k` 或 `a-b`（1–64）。文案写产物个数（m × 单次产量）并要求"不要多做"；做多了判 `overshoot`（失败），恰好做够才算 `success`。**不写 n、m 时 n 在 1–64 里随机**、m 在 1…n−1 里随机；要复现旧轮次写 `n=1 m=1`（单次模式：原模板、原随机数序列、原判定）。n 还要满足"材料 + 全部做光的产物 + 合成剩余物 ≤ 36 格"，放不下就在能放下的范围里重抽，固定的 n 放不下直接报错。用到 `data/item-props.json`（堆叠上限与剩余物，随仓库提交；重新生成用 `npm run extract-item-props`，读 `1.21.11_src`）。记录多 `single`、`portions`、`crafts`、`yield`、`wanted`、`made`、`overshoot`、`reachedMs`（做够的时刻，精度同 `pollMs`）、`nMax`
 
 8. **箱子场地 chest**（[箱子训练场设计方案.md](../../docs/箱子训练场设计方案.md)）：场地配置 `type: 'storage'`，题型代码在 `src/training/storage.js`（合成题在 `craft.js`，训练器按 `type` 选）。
-   - 每轮按种子出题：取 / 放（`kind`）、容器（`chest`：小箱子、大箱子、漏斗、发射器；`mix` 只抽大小箱子，`all` 四种都抽；漏斗由下方的红石块锁住）、目标物品的堆叠上限（`stack`）、每格数量随机还是取满（`fill`，默认随机）、物品种类数（`types`，含目标）、要求数量与实有数量的关系（`rel`：lt / eq / gt）。来源方占不超过一半的格子，目标方开局为空
+   - 每轮按种子出题：取 / 放（`kind`）、容器（`chest`：小箱子、大箱子、漏斗、发射器；`mix` 只抽大小箱子，`all` 四种都抽；漏斗由下方的红石块锁住）、目标物品的堆叠上限（`stack`）、每格数量随机还是取满（`fill`，默认随机）、每轮几种目标物品（`targets`，默认 1，多目标时文案逐项列出）、物品种类数（`types`，含全部目标）、要求数量与实有数量的关系（`rel`：lt / eq / gt）。来源方占不超过一半的格子，目标方开局为空
    - `prepare` 按本轮大小放箱子（大箱子两半显式连接），清空后放进 `chestItems`，并登记目标计数 `expect`；自检 `aimOk` 和 `chestSlots`（27 / 54），不对就本轮 `aborted` 并停止整组
    - 判定看任务结束时的计数：`success`（物品栏、箱子都恰好如此，光标为空）、`overshoot`（多搬了）、`disturbed`（动了干扰物品）、`lost`（地上有掉落物、总数变少或箱子被挖）、`false_success`、`failed`、`timeout`、`aborted`
    - 记录多 `kind`、`rel`、`chest`、`n`、`k`、`want`、`layout`、`final`、`moved`、`disturbed`、`reachedMs`（mod 在 tick 里记的恰好搬完的时刻）
-- 脚本：`npm run training-report -- [场地] [--by target|shape|portions|task|chest|stack|fill] [--last N] [--batch <批次>]`；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"；箱子场地缺省按 `task`（取放 / 关系）分组，换一套列（超量、动了别的、丢失、打开箱子中位、达成中位、箱子被挖）
-- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`。箱子场地 `{type: 'storage', origin, kind, rel, chest, stack, fill, types, dest: 'empty', exclude, timeoutSec?}`，chest 缺省 kind / rel / chest / stack 为 `mix`、`fill: 'random'`、`types: '1-4'`、排除 `minecraft:bundle`
+9. **切石机场地 stonecutter**（[切石机训练场设计方案.md](../../docs/切石机训练场设计方案.md)）：场地配置 `type: 'stonecut'`，题型代码在 `src/training/stonecut.js`，出题用 `data/stonecutting.json`（同时是 agent 能查的 `json.stonecutting`）。
+   - 每轮按种子出题：材料种数（`materials`，1–3）、每种材料占的格数（`slots`，1–9）、每格数量随机还是取满（`fill`）、每种材料切几种样式（`styles`，1–3）。先按家族抽材料，同一家族最多一种；铜的各氧化阶段、打蜡版本算一个家族
+   - 每种样式的目标 = 消耗份数 × 单次产出，消耗份数不超过平均分到的材料数；材料格加全部产物格不超过 36
+   - `bypass=exclude`（默认）时，物品栏 2×2 用同一种材料就能直接做出的产物不出题；`material=` 固定第一种材料
+   - `prepare` 补回切石机、对准准星（`aimOk` 自检），登记只看目标的 `expect { targets, allowed }`
+   - 判定：`success`（目标恰好都在物品栏里，光标为空，没有多余产物）、`overshoot`、`miscut`（出现题目没要的产物，包括没用完的中间产物）、`lost`（切石机被挖、地上有掉落物）、`false_success`、`failed`、`timeout`、`aborted`；剩多少材料不判
+   - 记录多 `materialCount`、`targetCount`、`materials`（每种材料的家族、格数、数量和各样式的 `yield` / `uses` / `want` / `made`）、`layout`、`extra`、`final`（含 `cutterInput`）、`reachedMs`
+- 脚本：`npm run training-report -- [场地] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family] [--last N] [--batch <批次>]`；切石机场地缺省按 `family`（材料家族）分组，多一列"切错"；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"；箱子场地缺省按 `task`（取放 / 关系）分组，换一套列（超量、动了别的、丢失、打开箱子中位、达成中位、箱子被挖）
+- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`。箱子场地 `{type: 'storage', origin, kind, rel, chest, stack, fill, types, targets, dest: 'empty', exclude, timeoutSec?}`，chest 缺省 kind / rel / chest / stack 为 `mix`、`fill: 'random'`、`types: '1-4'`、`targets: '1'`。切石机场地 `{type: 'stonecut', origin, materials, slots, fill, styles, bypass, exclude, timeoutSec?}`，stonecutter 缺省 `materials: '1-3'`、`slots: '1-9'`、`fill: 'random'`、`styles: '1-3'`、`bypass: 'exclude'`、`timeoutSec: 900`；`training.stonecutting` 指向切石配方文件、排除 `minecraft:bundle`

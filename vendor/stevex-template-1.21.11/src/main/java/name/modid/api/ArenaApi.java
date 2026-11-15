@@ -1,9 +1,11 @@
 package name.modid.api;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -131,10 +133,20 @@ public class ArenaApi {
         return out;
     }
 
-    /** { inventory: { id: n }, container: { id: n } }；省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。 */
+    /**
+     * 两种写法：箱子 { inventory: { id: n }, container: { id: n } }；切石机 { targets: { id: n }, allowed: [id...] }（切石机方案 Q9）。
+     * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
+     */
     private static ArenaManager.Expect expect(Object v) {
         if (v == null) return null;
-        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("expect must be { inventory: { id: n }, container: { id: n } }");
+        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("expect must be { inventory: { id: n }, container: { id: n } } or { targets: { id: n }, allowed: [id...] }");
+        if (m.containsKey("targets")) {
+            Map<String, Integer> targets = counts(m.get("targets"), "expect.targets");
+            if (targets.isEmpty()) throw new IllegalArgumentException("expect.targets must name at least one item with a positive count");
+            Set<String> allowed = new HashSet<>(m.get("allowed") == null ? List.of() : strings(m.get("allowed"), "expect.allowed"));
+            if (!allowed.containsAll(targets.keySet())) throw new IllegalArgumentException("expect.allowed must include every target");
+            return new ArenaManager.Expect(Map.of(), Map.of(), targets, Set.copyOf(allowed));
+        }
         return new ArenaManager.Expect(counts(m.get("inventory"), "expect.inventory"), counts(m.get("container"), "expect.container"));
     }
 

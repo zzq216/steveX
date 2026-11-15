@@ -87,6 +87,8 @@ export function knowledgeTools({ registry, library, stats = null, history = null
       ...(record?.at ? { at: record.at } : {}),
       change: record?.change ?? '（没有记录）',
       ...(record?.none ? { none: record.none } : {}),
+      // 换引用产生的版本（换引用方案 R3）：只换了这些引用
+      ...(record?.repin?.length ? { repin: record.repin.map((r) => `${r.ref} @${r.from.join('/@')} → @${r.to}`) } : {}),
       ...(record?.claims?.length ? { claims: record.claims.map((c) => ({ better: c.better === 'new' ? `这一版（@${hash}）` : `旧版（@${record.parent}）`, when: c.when, basis: c.basis, ...(c.evidence ? { evidence: c.evidence } : {}), status: c.status, ...(c.reviews?.length ? { reviews: c.reviews } : {}) })) } : {}),
       usage: versionUsage(`${key}@${hash}`, kind),
       knownIssues: notesOf(key).filter((n) => n.hash === hash).length
@@ -101,7 +103,8 @@ export function knowledgeTools({ registry, library, stats = null, history = null
    * 雕纹铜任务的 2x2 规划器把 [" M ", " M "] 当成 3 列宽。
    */
   const JSON_NOTES = {
-    recipes: 'key / ingredients 里的标签已经展开成具体物品 id（数据里没有 #minecraft:… 形式的标签）；shaped 的 pattern 按配方生成器里的写法原样保留，可能带空格组成的空列或空行（如 [" M ", " M "]）。'
+    recipes: 'key / ingredients 里的标签已经展开成具体物品 id（数据里没有 #minecraft:… 形式的标签）；shaped 的 pattern 按配方生成器里的写法原样保留，可能带空格组成的空列或空行（如 [" M ", " M "]）。',
+    stonecutting: '切石机配方（minecraft:stonecutting）：input 是单个物品 id，result 是产物，count 是切一次（消耗 1 个 input）得到的产物个数。'
   }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),

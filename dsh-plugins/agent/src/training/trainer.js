@@ -3,7 +3,8 @@ import path from 'node:path'
 
 import { loadItemProps, loadRecipes, parseCountSpec } from './sampler.js'
 import { craft, judge, resolveCounts } from './craft.js'
-import { STORAGE_CHOICES, parseTypesSpec, storage } from './storage.js'
+import { STORAGE_CHOICES, parseTargetsSpec, parseTypesSpec, storage } from './storage.js'
+import { STONECUT_CHOICES, loadStonecutting, parseMaterialsSpec, parseSlotsSpec, parseStylesSpec, stonecut } from './stonecut.js'
 
 export { judge, resolveCounts }
 
@@ -19,13 +20,13 @@ export { judge, resolveCounts }
  *   → arena/finish（读最终状态、传送出场）→ 判定 → 等本轮会话空闲（复盘结束）→ 统计回合与 token → 追加一行 jsonl
  *
  * 题型（箱子训练场设计方案 C11）：场地配置的 type 选题型模块——craft（craft.js，合成，缺省）、storage（storage.js，
- * 箱子存取）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
+ * 箱子存取）、stonecut（stonecut.js，切石机，docs/切石机训练场设计方案.md）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
  * 有工作站的场地：prepare 的服务器射线自检不过（题型的 afterPrepare 报错）时本轮记 aborted 并停止整组（W2）；
  * 记录里有 openedMs、stationIntact（W8、W9）。
  */
 
 /** 场地配置的 type → 题型模块 */
-const TASK_TYPES = { craft, storage }
+const TASK_TYPES = { craft, storage, stonecut }
 /** prepare 之后等客户端更新准星目标（W2）：客户端要过 1 个 tick 才知道准星指着工作站 */
 const AIM_SETTLE_MS = 100
 /** 中止之后等任务真正停下的上限 */
@@ -39,26 +40,27 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const seconds = (label, ms) => (ms === null || ms === undefined ? '' : `，${label} ${(ms / 1000).toFixed(1)} 秒`)
 
 /** 题型选项的命令行名 → start() 的参数名（n、m 是合成题的份数与次数） */
-const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types' }
+const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types', targets: 'targets', materials: 'materials', slots: 'slots', styles: 'styles', bypass: 'bypass', material: 'material' }
+/** 写成 k 或 a-b 的选项 → 校验函数（原样留成字符串，start 里解析） */
+const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSpec(v, 'm'), types: parseTypesSpec, targets: parseTargetsSpec, materials: parseMaterialsSpec, slots: parseSlotsSpec, styles: parseStylesSpec }
 
 /**
  * `/bt train` 的参数：`<场地> [item=…] [runs=…] [seed=…]`，合成题另有 `[n=…] [m=…]`，箱子题另有
- * `[kind=…] [rel=…] [chest=…] [stack=…] [fill=…] [types=…]`。这里只查写法；哪个场地认哪些选项由 start 按题型查。
- * n、m、types 原样留成字符串（"4" / "2-5"），start 里解析。
- * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types } | { ok: false, error }}
+ * `[kind=…] [rel=…] [chest=…] [stack=…] [fill=…] [types=…] [targets=…]`，切石题另有 `[materials=…] [slots=…] [fill=…] [styles=…] [bypass=…] [material=…]`。
+ * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles 原样留成字符串（"4" / "2-5"），start 里解析。
+ * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types, targets, materials, slots, styles, bypass, material } | { ok: false, error }}
  */
 export function parseTrainArgs(words) {
   const [arena, ...options] = words
   if (!arena) return { ok: false, error: '缺场地名，例如 /bt train craft2x2' }
-  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null }
+  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null }
   for (const option of options) {
-    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types)=(.+)$/.exec(option)
-    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types=）` }
+    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types|targets|materials|slots|styles|bypass|material)=(.+)$/.exec(option)
+    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=）` }
     const [, key, value] = match
-    if (key === 'n' || key === 'm' || key === 'types') {
+    if (RANGE_OPTIONS[key]) {
       try {
-        if (key === 'types') parseTypesSpec(value)
-        else parseCountSpec(value, key)
+        RANGE_OPTIONS[key](value)
       } catch (error) {
         return { ok: false, error: error.message }
       }
@@ -66,9 +68,12 @@ export function parseTrainArgs(words) {
     } else if (STORAGE_CHOICES[key]) {
       if (!STORAGE_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${STORAGE_CHOICES[key].join(' / ')}` }
       out[key] = value
-    } else if (key === 'item') {
-      if (!/^([a-z0-9_.-]+:)?[a-z0-9_/.-]+$/.test(value)) return { ok: false, error: `item 不像物品 id：${value}` }
-      out.item = value
+    } else if (STONECUT_CHOICES[key]) {
+      if (!STONECUT_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${STONECUT_CHOICES[key].join(' / ')}` }
+      out[key] = value
+    } else if (key === 'item' || key === 'material') {
+      if (!/^([a-z0-9_.-]+:)?[a-z0-9_/.-]+$/.test(value)) return { ok: false, error: `${key} 不像物品 id：${value}` }
+      out[key] = value
     } else {
       const n = Number(value)
       if (key === 'runs' && !(Number.isInteger(n) && n >= 1 && n <= 1000)) return { ok: false, error: 'runs 要是 1–1000 的整数' }
@@ -160,6 +165,7 @@ export class Trainer {
     this.randomSeed = randomSeed
     this.pool = null
     this.props = undefined
+    this.cutting = undefined
     this.batch = null
     this.last = null
   }
@@ -257,6 +263,12 @@ export class Trainer {
   recipes() {
     this.pool ??= loadRecipes(this.config.recipes)
     return this.pool
+  }
+
+  /** data/stonecutting.json（切石题出题用）；没配置或文件不在 → null */
+  stonecutting() {
+    if (this.cutting === undefined) this.cutting = this.config.stonecutting && fs.existsSync(this.config.stonecutting) ? loadStonecutting(this.config.stonecutting) : null
+    return this.cutting
   }
 
   /** data/item-props.json（合成题的多份模式、箱子题要用）；文件不在 → null */

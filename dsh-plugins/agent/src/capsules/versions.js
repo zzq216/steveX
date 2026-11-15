@@ -69,12 +69,16 @@ export class CapsuleVersions {
     return { ok: true, note: { change, ...(none ? { none } : {}), claims: cleaned } }
   }
 
-  /** 记下一次替换：key = "folder/name"，hash = 新版，parent = 被替换的旧版。同一哈希再记一次会覆盖说明、保留已有判断的核对。 */
-  record(key, hash, { parent, by = null, note }) {
+  /**
+   * 记下一次替换：key = "folder/name"，hash = 新版，parent = 被替换的旧版。同一哈希再记一次会覆盖说明、保留已有判断的核对。
+   * repin（换引用方案 R3）：只换了引用的新版 [{ ref, from: [旧哈希], to }]，说明由系统生成、没有判断
+   */
+  record(key, hash, { parent, by = null, note, repin = null }) {
     const versions = (this.data.entries[key] ??= {})
     versions[hash] = {
       parent, at: new Date(this.now()).toISOString(), ...(by ? { by } : {}),
       change: note.change, ...(note.none ? { none: note.none } : {}),
+      ...(repin?.length ? { repin } : {}),
       claims: note.claims.map((c) => ({ ...c, status: 'open' }))
     }
     this.save()

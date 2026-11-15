@@ -1,10 +1,13 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_OBSERVE_BY_COMMAND } from './bt/observe.js'
-import { STORAGE_CHOICES, parseTypesSpec } from './training/storage.js'
+import { STORAGE_CHOICES, parseTargetsSpec, parseTypesSpec } from './training/storage.js'
+import { STONECUT_CHOICES, parseMaterialsSpec, parseSlotsSpec, parseStylesSpec } from './training/stonecut.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
-const STORAGE_ARENA_DEFAULTS = Object.freeze({ kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
+const STORAGE_ARENA_DEFAULTS = Object.freeze({ kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', targets: '1', dest: 'empty', exclude: ['minecraft:bundle'] })
+/** 用户自己加的切石机场地（type: 'stonecut'）没写的字段（切石机训练场设计方案 §5） */
+const STONECUT_ARENA_DEFAULTS = Object.freeze({ materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] })
 
 const steveXRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -22,7 +25,7 @@ export const DEFAULTS = Object.freeze({
   /** 任务历史的上限与淘汰阈值（H1、H9、H11） */
   history: { profileTop: 10, repeatMin: 3, reviewMax: 10, issuesMax: 5, treeChars: 8000, archiveUnseenDays: 30, maxActive: 500 },
   /** core.json.query 能读的数据源：标识 → 文件或目录（相对 steveX/）。不在这里的文件读不到 */
-  jsonSources: { recipes: 'dsh-plugins/agent/data/recipes.json' },
+  jsonSources: { recipes: 'dsh-plugins/agent/data/recipes.json', stonecutting: 'dsh-plugins/agent/data/stonecutting.json' },
   /** core.nbt.query 读的采集端落盘目录（相对 steveX/） */
   visionRoot: 'vendor/stevex-template-1.21.11/run/stevex/vision',
   /** 单次提交（大纲 / 展开 / 补丁）编译后的节点上限；2026-11-07 从 15 调到 25（第一次写批量合成时 15 太紧） */
@@ -120,6 +123,8 @@ export const DEFAULTS = Object.freeze({
     recipes: 'dsh-plugins/agent/data/recipes.json',
     /** 物品的堆叠上限与合成剩余物（多份模式算格子用，T14；npm run extract-item-props 生成），相对 steveX/ */
     itemProps: 'dsh-plugins/agent/data/item-props.json',
+    /** 切石配方（切石题出题用，切石机训练场设计方案 Q11；npm run extract-recipes 一并生成），相对 steveX/ */
+    stonecutting: 'dsh-plugins/agent/data/stonecutting.json',
     /**
      * 场地：名字 → { origin: 场内地板中心 [x,y,z], mode: named | hidden（T5）, exclude: 不抽的配方名,
      *   grid: 合成格边长 2 | 3（缺省 2）, station: 场内工作站 'crafting_table' | null（缺省 null）,
@@ -129,13 +134,17 @@ export const DEFAULTS = Object.freeze({
      * type 选题型（箱子训练场设计方案 C11）：不写 = 'craft'（上面这些字段）；'storage' = 箱子存取，字段是
      *   { origin, kind: take | put | mix, rel: lt | eq | gt | mix, chest: small | large | hopper | dispenser | mix（大小箱子）| all（四种）, stack: 64 | 16 | 1 | mix,
      *     fill: random（每格数量在 [1, 堆叠上限] 随机）| full（每格取满）| mix,
-     *     types: 物品种类数（含目标）"k" | "a-b"（1–9）, dest: 'empty'（C6，partial 暂不开放）, exclude: 不抽的物品 id,
+     *     types: 物品种类数（含全部目标）"k" | "a-b"（1–9）, targets: 每轮要搬几种目标物品 "k" | "a-b"（1–4，缺省 1，§9）, dest: 'empty'（C6，partial 暂不开放）, exclude: 不抽的物品 id,
      *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/箱子训练场设计方案.md
+     * 'stonecut' = 切石机，字段是 { origin, materials: 材料种数 "k" | "a-b"（1–3）, slots: 每种材料占的格数（1–9）, fill: random | full | mix,
+     *     styles: 每种材料切几种样式（1–3）, bypass: exclude（物品栏 2×2 就能直接做出的产物不出题）| keep, exclude: 不用的材料 / 产物 id,
+     *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/切石机训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
       craft3x3: { origin: [10000, 120, 10030], mode: 'named', grid: 3, station: 'crafting_table', exclude: [], timeoutSec: 900 },
-      chest: { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] }
+      chest: { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', targets: '1', dest: 'empty', exclude: ['minecraft:bundle'] },
+      stonecutter: { type: 'stonecut', origin: [10000, 120, 10090], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] }
     }
   },
   planner: {
@@ -191,16 +200,30 @@ export function normalizeConfig(raw = {}) {
       throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
     }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
-      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'storage' ? 'item ids' : 'recipe names'}`)
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'storage' || arena.type === 'stonecut' ? 'item ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft" or "storage"`)
+    if (!['craft', 'storage', 'stonecut'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage" or "stonecut"`)
+    if (type === 'stonecut') {
+      for (const [key, choices] of Object.entries(STONECUT_CHOICES)) {
+        if (!choices.includes(String(arena[key]))) throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be one of ${choices.join(' | ')}`)
+      }
+      try {
+        parseMaterialsSpec(arena.materials)
+        parseSlotsSpec(arena.slots)
+        parseStylesSpec(arena.styles)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (type === 'storage') {
       for (const [key, choices] of Object.entries(STORAGE_CHOICES)) {
         if (!choices.includes(String(arena[key]))) throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be one of ${choices.join(' | ')}`)
       }
       try {
         parseTypesSpec(arena.types)
+        parseTargetsSpec(arena.targets)
       } catch (error) {
         throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
       }
@@ -221,6 +244,7 @@ export function normalizeConfig(raw = {}) {
   }
   config.training.recipes = path.resolve(steveXRoot, config.training.recipes)
   config.training.itemProps = path.resolve(steveXRoot, config.training.itemProps)
+  config.training.stonecutting = path.resolve(steveXRoot, config.training.stonecutting)
   for (const key of ['maxOutputChars', 'inspectMaxBytes']) {
     if (!(Number.isInteger(config.planner[key]) && config.planner[key] > 0)) throw new Error(`stevex-agent config: planner.${key} must be a positive integer`)
   }
@@ -240,7 +264,9 @@ function normalizeTraining(raw = {}) {
     const type = arena.type ?? DEFAULTS.training.arenas[name]?.type ?? 'craft'
     arenas[name] = type === 'storage'
       ? { ...STORAGE_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
-      : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
+      : type === 'stonecut'
+        ? { ...STONECUT_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+        : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }
 }

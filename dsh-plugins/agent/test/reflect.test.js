@@ -375,3 +375,85 @@ test('复盘另开会话的通知走 notifyIdle（等任务会话空闲再插）
   assert.match(idle[0].text, /复盘 c1 在新会话 r1/)
   assert.ok(!ctx.notified.some((m) => /在新会话/.test(m.text)), '不直接插进可能还在跑的回合')
 })
+
+test('capsule_repin：存新版代码后列出还钉着旧版的子树；换引用存成子树新版本、版本说明自动生成、不自动往上换；各种拒绝', async () => {
+  const { bridge, library, events } = await finished()
+  const save = (args) => bridge.saveCapsule({ sessionId: 's1', requestId: 'c1', ...args })
+  const repin = (tree, refs) => bridge.repinCapsule({ sessionId: 's1', requestId: 'c1', tree, refs })
+  const hashOf = (ref) => ref.split('@')[1]
+  const keep = { 'c.2.params.value': '演示：目标值本来就是 42' }
+
+  const code1 = save({ folder: 'code', name: 'math.double', description: '乘 2', from: 'task/double' })
+  const inner1 = save({ folder: 'trees', name: 'calc.answer', description: '算两倍并确认', signature: CAPSULE_SIGNATURE, body: CAPSULE_BODY, keepLiterals: keep })
+  assert.equal(inner1.ok, true, JSON.stringify(inner1))
+  const outer1 = save({ folder: 'trees', name: 'calc.outer', description: '外层', signature: CAPSULE_SIGNATURE, body: { seq: '外层', do: [{ use: 'trees/calc.answer', params: { n: '$n' } }] } })
+  assert.equal(outer1.ok, true, JSON.stringify(outer1))
+  assert.equal(code1.pinnedOld, undefined, '第一次存，不列')
+
+  // 存代码新版：列出最新版还钉着旧版的子树（calc.outer 钉的是 calc.answer 的最新版，不列）
+  const code2 = save({ folder: 'code', name: 'math.double', description: '乘 2', replaces: hashOf(code1.ref), signature: DOUBLE.double.signature, body: 'function main(p: { n: number }) { return { double: p.n + p.n } }', versionNote: { change: '改成加法', none: '纯改写' } })
+  assert.equal(code2.ok, true, JSON.stringify(code2))
+  assert.deepEqual(code2.pinnedOld, [{ ref: inner1.ref, pins: [code1.ref] }])
+
+  // 拒绝
+  assert.match(repin('trees/calc.answer', []).errors.join('\n'), /refs is required/)
+  assert.match(repin('trees/calc.answer', ['code/math.double@abcd']).errors.join('\n'), /without @hash/)
+  assert.match(repin('trees/calc.answer', ['code/nope']).errors.join('\n'), /no capsule named code\/nope/)
+  assert.match(repin('trees/nope', ['code/math.double']).errors.join('\n'), /no capsule named trees\/nope/)
+  assert.match(repin('code/math.double', ['code/math.double']).errors.join('\n'), /must be a tree capsule/)
+  assert.match(repin('trees/calc.outer', ['code/math.double']).errors.join('\n'), /does not reference code\/math\.double/, '只换直接引用')
+  assert.match(repin('trees/calc.answer@0000', ['code/math.double']).errors.join('\n'), /not the latest version/)
+  assert.match(bridge.repinCapsule({ sessionId: 's2', requestId: 'c1', tree: 'trees/calc.answer', refs: ['code/math.double'] }).error, /另一个会话/)
+
+  // 换一层
+  const inner2 = repin('trees/calc.answer', ['code/math.double'])
+  assert.equal(inner2.ok, true, JSON.stringify(inner2))
+  assert.deepEqual(inner2.changes, [{ ref: 'code/math.double', from: [hashOf(code1.ref)], to: hashOf(code2.ref) }])
+  assert.equal(inner2.parent, hashOf(inner1.ref))
+  assert.deepEqual(inner2.dependents, [{ ref: outer1.ref, pins: [inner1.ref] }], '不自动往上换，只列出来')
+  const before = library.get(inner1.ref)
+  const after = library.get(inner2.ref)
+  assert.equal(after.description, before.description)
+  assert.deepEqual(after.signature, before.signature)
+  assert.equal(after.body.children[0].ref, code2.ref)
+  assert.deepEqual({ ...after.body, children: [{ ...after.body.children[0], ref: null }, after.body.children[1]] }, { ...before.body, children: [{ ...before.body.children[0], ref: null }, before.body.children[1]] }, '除了这个引用，正文完全相同')
+  const note = library.versions.get('trees/calc.answer', hashOf(inner2.ref))
+  assert.equal(note.parent, hashOf(inner1.ref))
+  assert.match(note.change, /^只换了引用：code\/math\.double @[0-9a-f]+ → @[0-9a-f]+$/)
+  assert.match(note.none, /只换了引用，两版的差别见被换胶囊的版本说明（code\/math\.double@/)
+  assert.deepEqual(note.claims, [])
+  assert.deepEqual(note.repin, inner2.changes)
+  assert.match(repin('trees/calc.answer', ['code/math.double']).errors.join('\n'), /already uses its latest version/)
+
+  // 再往上一层：按 agent 指定的来
+  const outer2 = repin('trees/calc.outer', ['trees/calc.answer'])
+  assert.equal(outer2.ok, true, JSON.stringify(outer2))
+  assert.deepEqual(outer2.dependents, [])
+  assert.equal(library.get(outer2.ref).body.children[0].ref, inner2.ref)
+
+  // 新版输入名变了：校验不过、什么都不存
+  const code3 = save({ folder: 'code', name: 'math.double', description: '乘 2', replaces: hashOf(code2.ref), signature: { inputs: { m: { type: 'int', required: true } }, outputs: { double: { type: 'int' } } }, body: 'function main(p: { m: number }) { return { double: p.m * 2 } }', versionNote: { change: '输入改名 m', none: '改名' } })
+  assert.equal(code3.ok, true, JSON.stringify(code3))
+  const broken = repin('trees/calc.answer', ['code/math.double'])
+  assert.equal(broken.ok, false)
+  assert.match(broken.errors[0], /no longer validates .*nothing was saved — save the tree by hand with capsule_save/)
+  assert.equal(library.readManifest()['trees/calc.answer'].hash, hashOf(inner2.ref))
+
+  // 锁定的条目不能换
+  library.write('trees', { name: 'calc.locked', locked: true, description: '手工条目', signature: CAPSULE_SIGNATURE, body: library.get(inner1.ref).body })
+  assert.match(repin('trees/calc.locked', ['code/math.double']).errors.join('\n'), /is locked/)
+
+  // 工具渲染、事件、结束复盘时的已存清单
+  const { reflectTools } = await import('../src/tools/reflect.js')
+  const tool = reflectTools({ bridge }).find((t) => t.name === 'capsule_repin')
+  const text = JSON.stringify(tool.output.render({}, inner2))
+  assert.match(text, /已存：trees\/calc\.answer@[0-9a-f]+（换了：code\/math\.double @[0-9a-f]+ → @[0-9a-f]+）/)
+  assert.match(text, /最新版还钉着它旧版的子树：trees\/calc\.outer@[0-9a-f]+（钉着 trees\/calc\.answer@/)
+  const saveTool = reflectTools({ bridge }).find((t) => t.name === 'capsule_save')
+  assert.match(JSON.stringify(saveTool.output.render({}, code2)), /最新版还钉着它旧版的子树：trees\/calc\.answer@/)
+  assert.ok(events.some((e) => e.event === 'capsule/repinned' && e.ref === inner2.ref && e.parent === hashOf(inner1.ref)))
+  assert.ok(REQUEST_TOOLS.reflect.includes('capsule_repin') && !REQUEST_TOOLS.curate.includes('capsule_repin') && !REQUEST_TOOLS.plan.includes('capsule_repin'))
+  const done = bridge.reflectDone({ sessionId: 's1', requestId: 'c1', summary: '换了引用' })
+  assert.ok(done.saved.includes(inner2.ref) && done.saved.includes(outer2.ref))
+  assert.match(prompts.skills.review, /要让库里某棵树改用新版，用 `capsule_repin`/)
+})

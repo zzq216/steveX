@@ -2,6 +2,7 @@ import { compileTree } from '../bt/compiler.js'
 import { validateTree } from '../bt/validator.js'
 import { pinRefs, walkSpec } from '../bt/build.js'
 import { validateSignature } from './signature.js'
+import { parseRef } from './library.js'
 import { SandboxError } from './sandbox.js'
 
 /**
@@ -75,6 +76,81 @@ export function saveCapsule({ library, sandbox, registry }, folder, entry, { rew
 
   try {
     return { ok: true, ...library.write(folder, { ...entry, body }), ...(rewritten.length ? { rewritten } : {}) }
+  } catch (error) {
+    return { ok: false, errors: [error.message] }
+  }
+}
+
+/**
+ * 换引用（docs/胶囊换引用设计方案.md）：把库里子树 tree 最新版中，names 列出的名字的引用换成它们现在的最新版，存成这棵子树的新版本。
+ * signature、preconditions、description 和其余引用原样保留；照常过树校验（R4：换上去的版本输入输出变了就校验不过），
+ * 不做写死值检查（其余内容当初保存时已查过）。
+ * @param {{ library, registry }} services
+ * @param {string} tree   "trees/<name>"（可以带最新版的 @hash）
+ * @param {string[]} names  要换的名字（"code/<name>" / "trees/<name>"，不带 @hash）
+ * @returns {{ ok: true, ref, hash, created, parent, changes: Array<{ ref, from: string[], to }> } | { ok: false, errors: string[] }}
+ */
+export function repinTree({ library, registry }, tree, names) {
+  let target
+  try {
+    target = parseRef(tree)
+  } catch (error) {
+    return { ok: false, errors: [error.message] }
+  }
+  if (target.folder !== 'trees') return { ok: false, errors: [`tree must be a tree capsule (trees/<name>), got ${tree}`] }
+  const key = `trees/${target.name}`
+  const info = library.readManifest()[key]
+  if (!info) return { ok: false, errors: [`no capsule named ${key}`] }
+  if (target.hash && target.hash !== info.hash) return { ok: false, errors: [`${tree} is not the latest version of ${key} (latest: @${info.hash}); only the latest version can be repinned`] }
+  if (info.locked) return { ok: false, errors: [`${key} is locked (a hand-made base entry) and cannot be replaced`] }
+  if (!Array.isArray(names) || names.length === 0) return { ok: false, errors: ['refs is required: the names to move to their latest version, e.g. ["code/x"]'] }
+  const entry = library.get(`${key}@${info.hash}`)
+  const body = structuredClone(entry.body)
+  const errors = []
+  const changes = []
+  for (const name of [...new Set(names)]) {
+    let ref
+    try {
+      ref = parseRef(name)
+    } catch (error) {
+      errors.push(error.message)
+      continue
+    }
+    if (ref.hash) { errors.push(`${name}: write the name without @hash; it is moved to its latest version`); continue }
+    if (ref.folder === 'task') { errors.push(`${name}: task drafts are not library entries`); continue }
+    const nameKey = `${ref.folder}/${ref.name}`
+    if (nameKey === key) { errors.push(`${name}: a tree cannot repin itself`); continue }
+    let latest
+    try {
+      latest = library.pin(nameKey)
+    } catch (error) {
+      errors.push(`${name}: ${error.message}`)
+      continue
+    }
+    const from = new Set()
+    let found = false
+    walkSpec(body, (node) => {
+      if (typeof node.ref !== 'string' || !node.ref.startsWith(`${nameKey}@`)) return
+      found = true
+      if (node.ref === latest) return
+      from.add(node.ref.slice(node.ref.lastIndexOf('@') + 1))
+      node.ref = latest
+    })
+    if (!found) errors.push(`${name}: ${key}@${info.hash} does not reference ${nameKey}`)
+    else if (!from.size) errors.push(`${name}: ${key}@${info.hash} already uses its latest version ${latest}`)
+    else changes.push({ ref: nameKey, from: [...from].sort(), to: latest.slice(latest.lastIndexOf('@') + 1) })
+  }
+  if (errors.length) return { ok: false, errors }
+  const check = validateTree(body, { registry, library, kind: 'task', initialKeys: Object.keys(entry.signature.inputs ?? {}) })
+  if (!check.ok) {
+    return { ok: false, errors: [`after moving to the latest versions the tree no longer validates (the new versions' inputs / outputs probably changed); nothing was saved — save the tree by hand with capsule_save if you still want it:`, ...check.errors] }
+  }
+  try {
+    const written = library.write('trees', {
+      name: target.name, description: entry.description, signature: entry.signature,
+      ...(entry.preconditions?.length ? { preconditions: entry.preconditions } : {}), body
+    })
+    return { ok: true, ...written, parent: info.hash, changes }
   } catch (error) {
     return { ok: false, errors: [error.message] }
   }

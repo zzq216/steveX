@@ -67,12 +67,20 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 })
 
 test('parseTrainArgs', () => {
-  const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null }
+  const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
-  assert.deepEqual(parseTrainArgs(['chest', 'kind=take', 'rel=lt', 'chest=large', 'stack=16', 'fill=full', 'types=2-3']),
-    { ok: true, arena: 'chest', item: null, runs: 1, seed: null, portions: null, crafts: null, kind: 'take', rel: 'lt', chest: 'large', stack: '16', fill: 'full', types: '2-3' })
+  assert.deepEqual(parseTrainArgs(['chest', 'kind=take', 'rel=lt', 'chest=large', 'stack=16', 'fill=full', 'types=2-3', 'targets=1-3']),
+    { ok: true, arena: 'chest', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none, kind: 'take', rel: 'lt', chest: 'large', stack: '16', fill: 'full', types: '2-3', targets: '1-3' })
+  assert.deepEqual(parseTrainArgs(['stonecutter', 'materials=2', 'slots=1-3', 'styles=2', 'bypass=keep', 'material=stone', 'fill=full']),
+    { ok: true, arena: 'stonecutter', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none, materials: '2', slots: '1-3', styles: '2', bypass: 'keep', material: 'stone', fill: 'full' })
+  assert.match(parseTrainArgs(['stonecutter', 'materials=4']).error, /materials 要写 k 或 a-b（1–3/)
+  assert.match(parseTrainArgs(['stonecutter', 'slots=10']).error, /slots 要写 k 或 a-b（1–9/)
+  assert.match(parseTrainArgs(['stonecutter', 'styles=0']).error, /styles/)
+  assert.match(parseTrainArgs(['stonecutter', 'bypass=no']).error, /exclude \/ keep/)
+  assert.match(parseTrainArgs(['stonecutter', 'material=A B']).error, /material 不像物品 id/)
+  assert.match(parseTrainArgs(['chest', 'targets=5']).error, /targets 要写 k 或 a-b（1–4/)
   assert.match(parseTrainArgs(['chest', 'fill=half']).error, /random \/ full \/ mix/)
   assert.equal(parseTrainArgs(['chest', 'chest=hopper']).chest, 'hopper')
   assert.match(parseTrainArgs(['chest', 'chest=barrel']).error, /small \/ large \/ hopper \/ dispenser \/ mix \/ all/)
@@ -194,12 +202,14 @@ const ITEM_PROPS = Object.fromEntries(
 )
 const ARENAS_2X2 = { craft2x2: { origin: [0, 100, 0], mode: 'named', exclude: [], portions: '1', crafts: '1' } }
 
-function harness({ script, timeoutSec = 600, wallTimeoutSec = 2400, cancelTurn = () => {}, openFails = false, consoleAlive = () => true, arenas = ARENAS_2X2, prepareData = () => ({}), statusData = () => ({}), itemProps = ITEM_PROPS } = {}) {
+function harness({ script, timeoutSec = 600, wallTimeoutSec = 2400, cancelTurn = () => {}, openFails = false, consoleAlive = () => true, arenas = ARENAS_2X2, prepareData = () => ({}), statusData = () => ({}), itemProps = ITEM_PROPS, recipes = RECIPES, stonecutting = null } = {}) {
   const dir = tempDir('stevex-train-')
   const recipesFile = path.join(dir, 'recipes.json')
   const itemPropsFile = path.join(dir, 'item-props.json')
+  const stonecuttingFile = path.join(dir, 'stonecutting.json')
   if (itemProps) fs.writeFileSync(itemPropsFile, JSON.stringify({ items: itemProps }))
-  fs.writeFileSync(recipesFile, JSON.stringify({ recipes: RECIPES }))
+  if (stonecutting) fs.writeFileSync(stonecuttingFile, JSON.stringify({ recipes: stonecutting }))
+  fs.writeFileSync(recipesFile, JSON.stringify({ recipes }))
   let clock = 1_000_000
   const now = () => clock
   const sleeps = []
@@ -259,7 +269,7 @@ function harness({ script, timeoutSec = 600, wallTimeoutSec = 2400, cancelTurn =
   bridge.startPlanning = (args) => { planned.push(args.sessionId); instructions.push(args.instruction); return startPlanning(args) }
   const trainer = new Trainer({
     bridge, executor, game, prompts,
-    config: { timeoutSec, wallTimeoutSec, pollMs: 1000, recipes: recipesFile, itemProps: itemPropsFile, arenas },
+    config: { timeoutSec, wallTimeoutSec, pollMs: 1000, recipes: recipesFile, itemProps: itemPropsFile, stonecutting: stonecuttingFile, arenas },
     runtimeDir: dir,
     whenIdle: async () => true,
     async openSession(consoleSessionId) {
@@ -752,7 +762,7 @@ test('splitStacks (T14 revision): total stack count drawn in [K_min, K_max], eve
 test('mc_source_* results from the recipe generator carry a note pointing at json.recipes; other files do not', async () => {
   const { recipeSourceNote } = await import('../src/tools/facts.js')
   assert.match(recipeSourceNote({ text: 'net/minecraft/data/recipes/RecipeProvider.java:374: \tpublic void harness(' }), /json\.recipes/)
-  assert.match(recipeSourceNote({ file: 'net/minecraft/data/recipes/packs/VanillaRecipeProvider.java' }), /熔炼、切石、锻造/)
+  assert.match(recipeSourceNote({ file: 'net/minecraft/data/recipes/packs/VanillaRecipeProvider.java' }), /切石机配方在 json\.stonecutting 里.*熔炼、锻造/)
   assert.equal(recipeSourceNote({ text: 'net/minecraft/world/item/HoneycombItem.java:40: WAXING' }), null)
   assert.equal(recipeSourceNote({ file: 'net/minecraft/world/inventory/ResultSlot.java' }), null)
 })
@@ -887,6 +897,44 @@ test('storage sampler: layout within half the source, rel gives k, reproducible,
   }
   assert.deepEqual([...sizes.mix].sort(), ['large', 'small'], 'mix stays with the two chests (old seeds unchanged)')
   assert.deepEqual([...sizes.all].sort(), ['dispenser', 'hopper', 'large', 'small'])
+  // §9：多目标。targets=1 与不写一样；各目标不同、都在来源方里；types 含全部目标；放进题全部目标合计 ≤ 容器格数
+  assert.deepEqual(sampleStorage(pool, SPROPS, 8, { targets: { lo: 1, hi: 1 } }), sampleStorage(pool, SPROPS, 8))
+  const counts = new Set()
+  for (let seed = 0; seed < 300; seed++) {
+    for (const chest of ['small', 'large', 'hopper', 'dispenser']) {
+      const t = sampleStorage(pool, SPROPS, seed, { chest, targets: { lo: 1, hi: 3 }, types: { lo: 1, hi: 4 } })
+      counts.add(t.targetCount)
+      assert.equal(t.targets.length, t.targetCount)
+      assert.equal(t.targets[0].id, t.target, 'the first target keeps the old top-level fields')
+      assert.equal(new Set(t.targets.map((g) => g.id)).size, t.targetCount, 'distinct targets')
+      assert.ok(t.types >= t.targetCount, 'types includes every target')
+      assert.ok(t.targets.every((g) => !t.distractors.includes(g.id)))
+      assert.deepEqual([...t.askOrder].sort(), t.targets.map((g) => g.id).sort())
+      const source = t.kind === 'take' ? t.layout.chest : t.layout.inventory
+      const capacity = t.kind === 'take' ? t.chestSlots : 36
+      assert.ok(source.length <= Math.floor(capacity / 2), `${chest} ${t.kind}: ${source.length} slots`)
+      for (const g of t.targets) {
+        assert.equal(countsOf(source)[g.id], g.n)
+        assert.equal(g.want, Math.min(g.k, g.n))
+        if (g.rel === 'lt') assert.ok(g.k >= 1 && g.k < g.n)
+        if (g.rel === 'eq') assert.equal(g.k, g.n)
+        if (g.rel === 'gt') assert.ok(g.k > g.n)
+      }
+      if (t.kind === 'put') assert.ok(source.filter((x) => t.targets.some((g) => g.id === x.id)).length <= t.chestSlots, 'all targets together fit into the container')
+    }
+  }
+  assert.deepEqual([...counts].sort(), [1, 2, 3])
+  // 漏斗取物：一半只有 2 格，要 3 种目标出不了 → 降到 2 种（C23）
+  for (let seed = 0; seed < 50; seed++) {
+    const t = sampleStorage(pool, SPROPS, seed, { kind: 'take', chest: 'hopper', targets: { lo: 3, hi: 3 }, types: { lo: 3, hi: 3 } })
+    assert.ok(t.targetCount <= 2 && t.layout.chest.length <= 2, JSON.stringify(t.layout.chest))
+  }
+  // 放进漏斗、3 种目标、要求全部、每格满：全部目标合计最多 5 格
+  for (let seed = 0; seed < 50; seed++) {
+    const t = sampleStorage(pool, SPROPS, seed, { kind: 'put', chest: 'hopper', rel: 'gt', fill: 'full', targets: { lo: 3, hi: 3 }, types: { lo: 3, hi: 4 } })
+    assert.equal(t.targetCount, 3)
+    assert.ok(t.layout.inventory.filter((x) => t.targets.some((g) => g.id === x.id)).length <= 5)
+  }
   const fixed = sampleStorage(pool, SPROPS, 3, { item: 'egg', kind: 'put', chest: 'large' })
   assert.equal(fixed.target, 'minecraft:egg')
   assert.ok(fixed.layout.inventory.length > 0 && fixed.layout.chest.length === 0)
@@ -902,7 +950,7 @@ test('storage expect and judge: exact counts succeed; overshoot, disturbed, lost
   assert.deepEqual(expect, { inventory: { 'minecraft:stone': 30 }, container: { 'minecraft:stone': 10, 'minecraft:egg': 3 } })
   const final = (fields) => ({ held: expect.inventory, chest: expect.container, carried: {}, dropped: {}, stationIntact: true, ...fields })
   const j = (fields, extra = {}) => judgeStorage({ taskState: 'done', final: final(fields), picked, ...extra })
-  assert.deepEqual(j({}), { outcome: 'success', moved: 30, disturbed: [], reached: true })
+  assert.deepEqual(j({}), { outcome: 'success', moved: 30, movedOf: { 'minecraft:stone': 30 }, disturbed: [], reached: true })
   assert.equal(j({}, { taskState: 'failed' }).outcome, 'failed', 'reached but reported failure')
   assert.equal(j({ held: { 'minecraft:stone': 31 }, chest: { 'minecraft:stone': 9, 'minecraft:egg': 3 } }).outcome, 'overshoot')
   const disturbed = j({ held: { 'minecraft:stone': 30, 'minecraft:egg': 1 }, chest: { 'minecraft:stone': 10, 'minecraft:egg': 2 } })
@@ -920,11 +968,29 @@ test('storage expect and judge: exact counts succeed; overshoot, disturbed, lost
 
   const put = { kind: 'put', target: 'minecraft:egg', want: 4, layout: { chest: [], inventory: [{ slot: 9, id: 'minecraft:egg', count: 16 }, { slot: 0, id: 'minecraft:dirt', count: 1 }] } }
   assert.deepEqual(expectedCounts(put), { inventory: { 'minecraft:egg': 12, 'minecraft:dirt': 1 }, container: { 'minecraft:egg': 4 } })
+
+  // 多目标（§9 C25）：取 30 个 stone、全部 3 个 egg，dirt 是干扰物品
+  const multi = {
+    kind: 'take', target: 'minecraft:stone', want: 30,
+    targets: [{ id: 'minecraft:stone', want: 30 }, { id: 'minecraft:egg', want: 3 }],
+    layout: { chest: [{ slot: 0, id: 'minecraft:stone', count: 40 }, { slot: 1, id: 'minecraft:egg', count: 3 }, { slot: 2, id: 'minecraft:dirt', count: 5 }], inventory: [] }
+  }
+  const mExpect = expectedCounts(multi)
+  assert.deepEqual(mExpect, { inventory: { 'minecraft:stone': 30, 'minecraft:egg': 3 }, container: { 'minecraft:stone': 10, 'minecraft:dirt': 5 } })
+  const mj = (fields) => judgeStorage({ taskState: 'done', final: { held: mExpect.inventory, chest: mExpect.container, carried: {}, dropped: {}, stationIntact: true, ...fields }, picked: multi })
+  assert.deepEqual(mj({}), { outcome: 'success', moved: 30, movedOf: { 'minecraft:stone': 30, 'minecraft:egg': 3 }, disturbed: [], reached: true })
+  const half = mj({ held: { 'minecraft:stone': 30 }, chest: { 'minecraft:stone': 10, 'minecraft:egg': 3, 'minecraft:dirt': 5 } })
+  assert.equal(half.outcome, 'false_success', 'only one of the targets done')
+  assert.deepEqual(half.movedOf, { 'minecraft:stone': 30, 'minecraft:egg': 0 })
+  assert.equal(mj({ held: { 'minecraft:stone': 31, 'minecraft:egg': 3 }, chest: { 'minecraft:stone': 9, 'minecraft:dirt': 5 } }).outcome, 'overshoot', 'any target overshoots')
+  const touched = mj({ held: { 'minecraft:stone': 30, 'minecraft:egg': 3, 'minecraft:dirt': 1 }, chest: { 'minecraft:stone': 10, 'minecraft:dirt': 4 } })
+  assert.equal(touched.outcome, 'disturbed')
+  assert.deepEqual(touched.disturbed, ['minecraft:dirt'], 'targets are not "others"')
 })
 
 test('config: the chest arena is a storage arena with its own defaults and checks; craft arenas are unchanged', () => {
   const config = normalizeConfig({})
-  assert.deepEqual(config.training.arenas.chest, { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
+  assert.deepEqual(config.training.arenas.chest, { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', targets: '1', dest: 'empty', exclude: ['minecraft:bundle'] })
   assert.equal(config.training.arenas.craft2x2.type, undefined)
   const mine = normalizeConfig({ training: { arenas: { box: { type: 'storage', origin: [0, 100, 0], kind: 'put' } } } }).training.arenas.box
   assert.equal(mine.kind, 'put')
@@ -999,6 +1065,27 @@ test('chest run: prepare lays out the chest and the goal, the take template is u
   assert.match(texts[0], /^第 1\/2 轮：会话 run-1，取 \d+ 个 minecraft:\w+（箱子里有 \d+ 个，(lt|eq|gt)，小箱子，\d 种物品，seed=\d+）$/)
   assert.match(texts[1], /^第 1\/2 轮结果 success，达成用时 \d+\.\d 秒，任务用时/)
   assert.doesNotMatch(prompts.training.chest_take + prompts.training.chest_put, /右键/, 'describe the situation, do not teach the move')
+})
+
+test('chest run with two targets: the multi template lists both, expect covers both, record keeps each target', async () => {
+  const h = chestHarness({ arenas: { chest: { ...ARENAS_CHEST.chest, targets: '2', types: '2-3' } } })
+  const started = h.trainer.start({ sessionId: 'console', arena: 'chest', runs: 1, seed: 21 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /targets=2/)
+  await h.done()
+  const [record] = h.records('chest')
+  assert.equal(record.outcome, 'success', JSON.stringify(record))
+  assert.equal(record.targetCount, 2)
+  assert.equal(record.targets.length, 2)
+  assert.ok(record.targets.every((t) => t.moved === t.want), JSON.stringify(record.targets))
+  const prepare = h.calls.find(([m]) => m === 'arena/prepare')[1]
+  for (const t of record.targets) assert.equal(prepare.expect.inventory[t.id], t.want)
+  assert.ok(h.instructions[0].startsWith('你正前方有一个箱子，视角已经对准它。请从箱子里取出：'), h.instructions[0])
+  for (const t of record.targets) assert.ok(h.instructions[0].includes(`${t.k} 个 ${t.id}`), h.instructions[0])
+  assert.match(h.notices[0][1], /2 种目标/)
+  // types 上限比 targets 下限还小 → 开训时报错
+  const bad = chestHarness({ arenas: { chest: { ...ARENAS_CHEST.chest, targets: '3', types: '1-2' } } })
+  assert.match(bad.trainer.start({ sessionId: 'console', arena: 'chest', runs: 1 }).error, /上限不能小于 targets 的下限 3/)
 })
 
 test('chest run with a hopper / dispenser: station name, slot self-check and the container named in the task text', async () => {
@@ -1087,5 +1174,281 @@ test('report: chest records group by task / chest / stack and get their own colu
   assert.deepEqual(summarize(records, { by: 'chest' }).rows.map((r) => r.key).sort(), ['大箱子', '小箱子'])
   assert.deepEqual(summarize(records, { by: 'stack' }).rows.map((r) => r.key), ['64', '1', '16'])
   assert.deepEqual(summarize(records, { by: 'fill' }).rows.map((r) => r.key), ['随机数量'], 'records without fill count as random')
+  assert.deepEqual(summarize([...records, rec('take', 'eq', 'small', 64, 'success', { targetCount: 2 })], { by: 'targets' }).rows.map((r) => [r.key, r.runs]), [['1 种', 4], ['2 种', 1]], 'records without targetCount count as one target')
   assert.doesNotMatch(formatSummary(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1 }])), /动了别的/, 'craft output is unchanged')
+})
+
+
+// ── 切石机训练场（docs/切石机训练场设计方案.md） ─────────────────────────────
+
+const cutModule = await import('../src/training/stonecut.js')
+const cut = (input, result, count) => ({ name: `${result.slice(10)}_from_${input.slice(10)}`, input, result, count })
+const CUTS = [
+  cut('minecraft:stone', 'minecraft:stone_slab', 2),
+  cut('minecraft:stone', 'minecraft:stone_stairs', 1),
+  cut('minecraft:stone', 'minecraft:stone_bricks', 1),
+  cut('minecraft:stone', 'minecraft:stone_brick_slab', 2),
+  cut('minecraft:stone_bricks', 'minecraft:stone_brick_slab', 2),
+  cut('minecraft:granite', 'minecraft:granite_slab', 2),
+  cut('minecraft:granite', 'minecraft:granite_wall', 1),
+  cut('minecraft:copper_block', 'minecraft:cut_copper', 4),
+  cut('minecraft:copper_block', 'minecraft:cut_copper_slab', 8),
+  cut('minecraft:cut_copper', 'minecraft:cut_copper_slab', 2),
+  cut('minecraft:exposed_copper', 'minecraft:exposed_cut_copper', 4),
+  cut('minecraft:waxed_copper_block', 'minecraft:waxed_cut_copper', 4),
+  cut('minecraft:basalt', 'minecraft:polished_basalt', 1)
+]
+/** 2×2 能用同一种材料直接做出的：石砖、磨制玄武岩；台阶要 3×3，不算 */
+const CUT_CRAFTING = [
+  { name: 'stone_bricks', result: 'minecraft:stone_bricks', count: 4, type: 'shaped', pattern: ['##', '##'], key: { '#': ['minecraft:stone'] } },
+  { name: 'polished_basalt', result: 'minecraft:polished_basalt', count: 4, type: 'shaped', pattern: ['SS', 'SS'], key: { S: ['minecraft:basalt'] } },
+  { name: 'stone_slab', result: 'minecraft:stone_slab', count: 6, type: 'shaped', pattern: ['###'], key: { '#': ['minecraft:stone'] } }
+]
+
+test('stonecut tables: families merge copper stages, 2×2 shortcuts are left out by default, exclude covers materials and products', () => {
+  const { cutterTables, cutterFamilies, bypassPairs } = cutModule
+  const fam = cutterFamilies(CUTS)
+  assert.equal(fam.get('minecraft:stone_bricks'), 'stone', 'stone_bricks is cut from stone: same family, named after the material that is not cut from another')
+  assert.equal(fam.get('minecraft:cut_copper'), 'copper')
+  assert.equal(fam.get('minecraft:exposed_copper'), 'copper', 'oxidation stages join the copper family')
+  assert.equal(fam.get('minecraft:waxed_copper_block'), 'copper', 'waxed versions too')
+  assert.equal(fam.get('minecraft:granite'), 'granite')
+  assert.deepEqual([...bypassPairs(CUT_CRAFTING)].sort(), ['minecraft:basalt>minecraft:polished_basalt', 'minecraft:stone>minecraft:stone_bricks'])
+
+  const t = cutterTables(CUTS, CUT_CRAFTING)
+  assert.ok(!t.pool.includes('minecraft:basalt'), 'basalt has nothing left to cut once its 2×2 shortcut is out')
+  assert.deepEqual(t.outputs.get('minecraft:stone').map((o) => o.id), ['minecraft:stone_brick_slab', 'minecraft:stone_slab', 'minecraft:stone_stairs'])
+  assert.deepEqual(t.families, ['copper', 'granite', 'stone'])
+  const keep = cutterTables(CUTS, null, { bypass: 'keep' })
+  assert.ok(keep.pool.includes('minecraft:basalt'))
+  assert.equal(keep.outputs.get('minecraft:stone').length, 4)
+  const ex = cutterTables(CUTS, CUT_CRAFTING, { exclude: ['granite_wall', 'minecraft:copper_block'] })
+  assert.deepEqual(ex.outputs.get('minecraft:granite').map((o) => o.id), ['minecraft:granite_slab'])
+  assert.ok(!ex.pool.includes('minecraft:copper_block'))
+})
+
+test('stonecut sampler: whole cuts only, one material per family, room for everything, reproducible', () => {
+  const { cutterTables, sampleStonecut, cutterExpect } = cutModule
+  const t = cutterTables(CUTS, CUT_CRAFTING)
+  const range = (lo, hi = lo) => ({ lo, hi })
+  for (const fill of ['random', 'full']) {
+    for (let seed = 0; seed < 300; seed++) {
+      const opts = { materials: range(1, 3), slots: range(1, 9), fill, styles: range(1, 3) }
+      const p = sampleStonecut(t, seed, opts)
+      assert.deepEqual(sampleStonecut(t, seed, opts), p, 'same seed, same task')
+      const families = p.materials.map((m) => m.family)
+      assert.equal(new Set(families).size, families.length, 'one material per family')
+      assert.ok(p.materialCount >= 1 && p.materialCount <= 3)
+      let slots = p.layout.length
+      for (const m of p.materials) {
+        const given = p.layout.filter((s) => s.id === m.id)
+        assert.equal(given.length, m.slots)
+        assert.equal(given.reduce((n, s) => n + s.count, 0), m.count)
+        if (fill === 'full') assert.ok(given.every((s) => s.count === 64))
+        const options = t.outputs.get(m.id)
+        assert.ok(m.styles.length >= 1 && m.styles.length <= Math.min(3, options.length, m.count))
+        assert.equal(new Set(m.styles.map((s) => s.id)).size, m.styles.length)
+        const share = Math.floor(m.count / m.styles.length)
+        for (const s of m.styles) {
+          assert.equal(s.yield, options.find((o) => o.id === s.id).yield)
+          assert.equal(s.want, s.uses * s.yield, 'the goal is a whole number of cuts')
+          assert.ok(s.uses >= 1 && s.uses <= share)
+          slots += Math.ceil(s.want / 64)
+        }
+      }
+      assert.ok(slots <= 36, `materials and products fit the inventory (${slots})`)
+      assert.equal(new Set(p.layout.map((s) => s.slot)).size, p.layout.length)
+      assert.equal(p.target, p.materials[0].styles[0].id)
+      const expect = cutterExpect(p)
+      assert.deepEqual(Object.keys(expect.targets).sort(), p.materials.flatMap((m) => m.styles.map((s) => s.id)).sort())
+      assert.ok(expect.allowed.includes(p.materials[0].id))
+    }
+  }
+  // 三个家族都要：每轮正好三种材料，各来自一个家族
+  for (let seed = 0; seed < 50; seed++) assert.equal(sampleStonecut(t, seed, { materials: range(3), slots: range(9), fill: 'full', styles: range(3) }).materialCount, 3)
+  // 家族不够时减少材料种数
+  const one = cutterTables(CUTS, CUT_CRAFTING, { exclude: ['minecraft:granite', 'minecraft:copper_block', 'minecraft:cut_copper', 'minecraft:exposed_copper', 'minecraft:waxed_copper_block'] })
+  assert.equal(sampleStonecut(one, 1, { materials: range(3), slots: range(2), fill: 'random', styles: range(1) }).materialCount, 1)
+  // 固定第一种材料；样式数不超过能切出的种数
+  const fixed = sampleStonecut(t, 5, { materials: range(1), slots: range(3), fill: 'full', styles: range(3), material: 'granite' })
+  assert.equal(fixed.materials[0].id, 'minecraft:granite')
+  assert.equal(fixed.materials[0].styles.length, 2)
+  // 9 格铜块全切台阶会远超物品栏：每个样式的产物最多占 b 格
+  const copper = sampleStonecut(t, 3, { materials: range(3), slots: range(9), fill: 'full', styles: range(3), material: 'copper_block' })
+  const slab = copper.materials[0].styles.find((s) => s.id === 'minecraft:cut_copper_slab')
+  if (slab) assert.ok(slab.want <= 64 * Math.floor((36 - 27) / copper.targetCount))
+  assert.throws(() => sampleStonecut(t, 1, { materials: range(1), slots: range(1), fill: 'full', styles: range(1), material: 'basalt' }), /材料池里没有 minecraft:basalt/)
+})
+
+test('stonecut judge: exact counts succeed wherever the material sits; cursor, overshoot, miscut, drops and broken cutters do not', () => {
+  const { judgeStonecut } = cutModule
+  const picked = {
+    target: 'minecraft:stone_slab',
+    materials: [{ id: 'minecraft:stone', family: 'stone', slots: 1, count: 20, styles: [
+      { id: 'minecraft:stone_slab', yield: 2, uses: 3, want: 6 },
+      { id: 'minecraft:stone_stairs', yield: 1, uses: 2, want: 2 }
+    ] }]
+  }
+  const run = (final, extra = {}) => judgeStonecut({ stopped: false, timedOut: false, taskState: 'done', picked, final: { carried: {}, cutterInput: {}, dropped: {}, stationIntact: true, ...final }, ...extra })
+  const goal = { 'minecraft:stone_slab': 6, 'minecraft:stone_stairs': 2 }
+  assert.deepEqual(run({ held: { ...goal, 'minecraft:stone': 15 } }), { outcome: 'success', madeOf: goal, extra: {}, reached: true })
+  assert.equal(run({ held: goal }).outcome, 'success', 'leftover material is not judged')
+  assert.equal(run({ held: { ...goal, 'minecraft:stone': 2 }, cutterInput: { 'minecraft:stone': 10 } }).outcome, 'success', 'material still in the input slot is fine')
+  const onCursor = run({ held: { 'minecraft:stone_stairs': 2 }, carried: { 'minecraft:stone_slab': 6 } })
+  assert.equal(onCursor.outcome, 'false_success', 'targets on the cursor are not in the inventory yet')
+  assert.equal(onCursor.madeOf['minecraft:stone_slab'], 6)
+  assert.equal(run({ held: { ...goal, 'minecraft:stone_slab': 8 } }).outcome, 'overshoot')
+  assert.equal(run({ held: goal, cutterInput: { 'minecraft:stone_slab': 1 } }).outcome, 'overshoot', 'the input slot counts too')
+  const miscut = run({ held: { ...goal, 'minecraft:stone_bricks': 1 } })
+  assert.deepEqual([miscut.outcome, miscut.extra], ['miscut', { 'minecraft:stone_bricks': 1 }], 'a leftover intermediate is a miscut')
+  assert.equal(run({ held: goal, dropped: { 'minecraft:stone_slab': 2 } }).outcome, 'lost')
+  assert.equal(run({ held: goal, stationIntact: false }).outcome, 'lost')
+  assert.equal(run({ held: { 'minecraft:stone_slab': 4 } }).outcome, 'false_success')
+  assert.equal(run({ held: { 'minecraft:stone_slab': 4 } }, { timedOut: true }).outcome, 'timeout')
+  assert.equal(run({ held: { 'minecraft:stone_slab': 4 } }, { taskState: 'failed' }).outcome, 'failed')
+  assert.equal(judgeStonecut({ stopped: true, picked, final: null }).outcome, 'aborted')
+  assert.equal(judgeStonecut({ stopped: false, timedOut: true, picked, final: null }).outcome, 'timeout')
+})
+
+test('config: the stonecutter arena has its own defaults and checks; json.stonecutting is a data source', () => {
+  const config = normalizeConfig({ training: { arenas: { cut2: { type: 'stonecut', origin: [0, 100, 0] } } } })
+  assert.deepEqual(config.training.arenas.stonecutter, { type: 'stonecut', origin: [10000, 120, 10090], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] })
+  assert.deepEqual(config.training.arenas.cut2, { materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [], type: 'stonecut', origin: [0, 100, 0] })
+  assert.ok(path.isAbsolute(config.training.stonecutting) && config.training.stonecutting.endsWith('stonecutting.json'))
+  assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage" or "stonecut"/)
+})
+
+const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
+
+/** 切石题的假世界：prepare 按参数发材料，script 结束前把物品栏改成 finalOf(params) 的样子 */
+function cutHarness({ finalOf = (params) => ({ held: { ...params.expect.targets, [params.items[0].id]: 1 } }), arenas = ARENAS_CUT, aimOk = true, stonecutting = CUTS } = {}) {
+  const { countsOf } = storageModule
+  const world = { params: null, state: {} }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, finalOf(world.params))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas, itemProps: null, recipes: CUT_CRAFTING, stonecutting,
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: countsOf(params.items), carried: {}, cutterInput: {}, dropped: {}, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('stonecutter run: prepare hands out the materials with a targets-only expect, the task lists each material, exact counts succeed', async () => {
+  const h = cutHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'stonecutter', runs: 2, seed: 21 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /materials=1-3，slots=1-9，fill=random，styles=1-3，bypass=exclude，材料池 7 种（3 个家族）/)
+  await h.done()
+  const records = h.records('stonecutter')
+  assert.equal(records.length, 2)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.ok(record.reachedMs !== null && record.reachedMs <= record.taskMs)
+    assert.ok(record.openedMs !== null)
+    assert.equal(record.stationIntact, true)
+    assert.deepEqual(record.extra, {})
+    assert.equal(record.materials.length, record.materialCount)
+    for (const m of record.materials) for (const s of m.styles) assert.equal(s.made, s.want)
+    assert.equal(record.made, record.want)
+    assert.deepEqual(record.final.cutterInput, {})
+    const prepare = prepares[i]
+    assert.equal(prepare.station, 'stonecutter')
+    assert.deepEqual(prepare.items, record.layout)
+    assert.deepEqual(prepare.watch, [])
+    assert.deepEqual(prepare.expect, cutModule.cutterExpect(record))
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你正前方有一个切石机，视角已经对准它。你的物品栏里有这些材料：${record.materials.map((m) => m.id).join('、')}。`), text)
+    for (const m of record.materials) assert.ok(text.includes(`用 ${m.id} 切 ${m.styles.map((s) => `${s.want} 个 ${s.id}`).join('、')}`), text)
+    assert.match(text, /不要切出其他物品。\n?$/)
+  }
+  assert.ok(h.sleeps.includes(100), 'waits for the client to pick up the crosshair target')
+  const texts = h.notices.map(([, text]) => text)
+  assert.match(texts[0], /^第 1\/2 轮：会话 run-1，用 minecraft:\w+（\d+ 个）切 \d+ 个 minecraft:\w+.*（\d 种材料，\d 种样式，seed=\d+）$/)
+  assert.match(texts[1], /^第 1\/2 轮结果 success，达成用时 \d+\.\d 秒/)
+  assert.doesNotMatch(prompts.training.stonecut, /右键|Shift|按钮|button/, 'describe the situation, do not teach the move')
+})
+
+test('stonecutter run: overshoot and miscut are judged from the final counts; material= fixes the first material', async () => {
+  const over = cutHarness({ finalOf: (params) => {
+    const [first] = Object.keys(params.expect.targets)
+    return { held: { ...params.expect.targets, [first]: params.expect.targets[first] + 2 } }
+  } })
+  assert.equal(over.trainer.start({ sessionId: 'console', arena: 'stonecutter', seed: 3 }).ok, true)
+  await over.done()
+  assert.equal(over.records('stonecutter')[0].outcome, 'overshoot')
+
+  const wrong = cutHarness({ finalOf: (params) => ({ held: { ...params.expect.targets, 'minecraft:polished_basalt': 1 } }) })
+  assert.equal(wrong.trainer.start({ sessionId: 'console', arena: 'stonecutter', seed: 3, material: 'granite', materials: '1' }).ok, true)
+  await wrong.done()
+  const record = wrong.records('stonecutter')[0]
+  assert.equal(record.outcome, 'miscut')
+  assert.deepEqual(record.extra, { 'minecraft:polished_basalt': 1 })
+  assert.equal(record.materials[0].id, 'minecraft:granite')
+  assert.equal(record.materialCount, 1)
+})
+
+test('stonecutter run: crosshair off the cutter aborts the batch; item=, options of other task types and a missing data file are refused', async () => {
+  const off = cutHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'stonecutter', runs: 3 }).ok, true)
+  await off.done()
+  const records = off.records('stonecutter')
+  assert.equal(records.length, 1)
+  assert.equal(records[0].outcome, 'aborted')
+  assert.match(records[0].error, /crosshair is not on the stonecutter/)
+
+  const h = cutHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'stonecutter', item: 'minecraft:stone' }).error, /material=/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'stonecutter', kind: 'take' }).error, /不认这些选项：kind/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'stonecutter', material: 'basalt' }).error, /材料池里没有 minecraft:basalt/)
+  assert.equal(h.trainer.start({ sessionId: 'console', arena: 'stonecutter', material: 'basalt', bypass: 'keep' }).ok, true, 'bypass=keep puts basalt back')
+  await h.done()
+
+  const chest = chestHarness({ arenas: { ...ARENAS_CHEST } })
+  assert.match(chest.trainer.start({ sessionId: 'console', arena: 'chest', styles: '2' }).error, /不认这些选项：styles/)
+
+  const missing = cutHarness({ stonecutting: null })
+  assert.match(missing.trainer.start({ sessionId: 'console', arena: 'stonecutter' }).error, /extract-recipes/)
+})
+
+test('report: stonecutter records group by family / materials / styles / yield and count miscuts', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (families, yields, outcome, extra = {}) => ({
+    batch: 'b1', target: 'minecraft:stone_slab', outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true,
+    materialCount: families.length, targetCount: yields.length,
+    materials: families.map((family, i) => ({ id: `minecraft:${family}`, family, styles: i === 0 ? yields.map((y) => ({ id: 'x', yield: y })) : [] })),
+    ...extra
+  })
+  const records = [rec(['stone'], [2], 'success'), rec(['stone', 'granite'], [1, 2], 'miscut', { reachedMs: null }), rec(['copper'], [8], 'overshoot'), rec(['granite'], [1], 'lost', { stationIntact: false })]
+  const byFamily = summarize(records, { by: 'family' })
+  assert.equal(byFamily.cutter, true)
+  assert.deepEqual(byFamily.rows.map((r) => [r.key, r.runs]), [['copper', 1], ['granite', 1], ['granite+stone', 1], ['stone', 1]])
+  assert.deepEqual([byFamily.total.miscut, byFamily.total.overshoot, byFamily.total.lost, byFamily.total.stationBroken], [1, 1, 1, 1])
+  const text = formatSummary(byFamily)
+  assert.match(text.split('\n')[0], /^材料家族\t轮数\t成功率\t.*超量\t切错\t丢失\t打开切石机中位\t达成中位\t任务中位/)
+  assert.doesNotMatch(text, /动了别的|合成中位/)
+  assert.deepEqual(summarize(records, { by: 'materials' }).rows.map((r) => [r.key, r.runs]), [['1 种材料', 3], ['2 种材料', 1]])
+  assert.deepEqual(summarize(records, { by: 'styles' }).rows.map((r) => r.key).sort(), ['1 种样式', '2 种样式'])
+  assert.deepEqual(summarize(records, { by: 'yield' }).rows.map((r) => r.key).sort(), ['×1', '×1+×2', '×2', '×8'])
+  assert.equal(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1, items: [] }]).cutter, false, 'craft records are not cutter records')
 })

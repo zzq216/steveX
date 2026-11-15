@@ -7,6 +7,7 @@ import path from 'node:path'
  * 以及每轮引用了哪些在本场地第一轮之前就有的胶囊（W10）。
  * 箱子场地（箱子训练场设计方案 C12）：按 取放 × 数量关系、箱子大小、堆叠上限分组；多出"动了别的""丢失"两种结果，
  * 用时看"打开箱子""达成"（恰好搬完的那一刻）与任务用时。
+ * 切石机场地（切石机训练场设计方案 Q10）：按材料种数、样式数、每次产出、材料家族分组；多出"切错"（miscut）。
  */
 
 export function readRecords(file) {
@@ -26,9 +27,9 @@ const secs = (ms) => (ms === null ? '-' : `${(ms / 1000).toFixed(1)}s`)
 
 /**
  * @param {object[]} records
- * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack'|'fill' }} [filter]
- * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean }}
- *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）
+ * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack'|'fill'|'targets'|'materials'|'styles'|'yield'|'family' }} [filter]
+ * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean, cutter: boolean }}
+ *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）；cutter = 切石题的记录
  */
 export function summarize(records, { last = null, batch = null, by = 'target' } = {}) {
   let picked = batch ? records.filter((r) => r.batch === batch) : records
@@ -36,6 +37,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   const station = picked.some((r) => r.stationIntact !== null && r.stationIntact !== undefined)
   const multi = picked.some((r) => r.single === false)
   const storage = picked.some((r) => r.kind === 'take' || r.kind === 'put')
+  const cutter = picked.some(isCutterRecord)
   // 任务历史（任务历史方案 H10）：记录里有 assessed 字段才显示这几列
   const historyCols = picked.some((r) => r.assessed !== undefined)
   const group = (list) => {
@@ -53,6 +55,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       overshoot: count('overshoot'),
       disturbed: count('disturbed'),
       lost: count('lost'),
+      miscut: count('miscut'),
       assessed: list.filter((r) => r.assessed).length,
       withIssues: list.filter((r) => r.assessed && r.issues > 0).length,
       withPredecessor: list.filter((r) => (r.predecessors ?? []).length > 0).length,
@@ -75,8 +78,11 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, historyCols }
 }
+
+/** 切石题的记录：materials 是 [{ id, family, styles }]（合成题的材料字段叫 items） */
+const isCutterRecord = (r) => Array.isArray(r.materials)
 
 const CHEST_NAMES = { small: '小箱子', large: '大箱子', hopper: '漏斗', dispenser: '发射器' }
 const FILL_NAMES = { random: '随机数量', full: '每格满' }
@@ -89,6 +95,13 @@ function groupKey(r, by) {
   if (by === 'stack') return Number.isInteger(r.stackClass) ? String(r.stackClass) : null
   // 加 fill 之前的箱子记录都是随机数量
   if (by === 'fill') return r.kind ? FILL_NAMES[r.fill ?? 'random'] : null
+  // 加 targets 之前的箱子记录都是一种目标（§9 C26）
+  if (by === 'targets') return r.kind ? `${r.targetCount ?? 1} 种` : null
+  // 切石题（Q10）
+  if (by === 'materials') return isCutterRecord(r) ? `${r.materialCount} 种材料` : null
+  if (by === 'styles') return isCutterRecord(r) ? `${r.targetCount} 种样式` : null
+  if (by === 'yield') return isCutterRecord(r) ? [...new Set(r.materials.flatMap((m) => m.styles.map((s) => s.yield)))].sort((a, b) => a - b).map((y) => `×${y}`).join('+') : null
+  if (by === 'family') return isCutterRecord(r) ? r.materials.map((m) => m.family).sort().join('+') : null
   return r.target
 }
 
@@ -98,10 +111,11 @@ function portionsKey(r) {
   return Number.isInteger(r.portions) && Number.isInteger(r.crafts) ? `${r.portions}/${r.crafts}` : null
 }
 
-const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量' }
+const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族' }
 
-export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, historyCols = false }) {
+export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, historyCols = false }) {
   if (total.runs === 0) return '没有训练记录'
+  if (cutter) return formatCutter({ rows, total, by, historyCols })
   if (storage) return formatStorage({ rows, total, by, historyCols })
   const head = [BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '做出但报失败', '失败', '超时', '中止', ...(multi ? ['超量'] : []),
     ...(station ? ['打开工作台中位'] : []), '合成中位', ...(multi ? ['做够中位'] : []), '任务中位', 'token中位', '用过chat/send', ...(station ? ['工作台被挖'] : []),
@@ -119,6 +133,17 @@ function formatStorage({ rows, total, by, historyCols }) {
     '打开箱子中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '箱子被挖',
     ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
   const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.disturbed, r.lost,
+    secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/** 切石题的表（Q10）："切错" = 出现了题目没要的产物；达成中位 = 恰好切完那一刻（只算成功轮） */
+function formatCutter({ rows, total, by, historyCols }) {
+  const head = [BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '失败', '超时', '中止', '超量', '切错', '丢失',
+    '打开切石机中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '切石机被挖',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.miscut, r.lost,
     secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
     ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
   return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
