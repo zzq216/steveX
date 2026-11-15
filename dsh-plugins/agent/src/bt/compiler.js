@@ -43,7 +43,9 @@ export function compileTree(authored, { kind = 'task', rootId = 'n1' } = {}) {
 
   function compile(node, id) {
     if (node === null || typeof node !== 'object' || Array.isArray(node)) {
-      throw new CompileError(`[${id}] node must be an object`)
+      // 报出实际收到的类型：把子树写成 JSON 文本（字符串）时，只说"必须是对象"看不出错在哪（2026-11-15 复盘 c5）
+      const got = node === null ? 'null' : Array.isArray(node) ? 'an array' : typeof node === 'string' ? `a string ${JSON.stringify(node.length > 40 ? `${node.slice(0, 40)}…` : node)}` : `a ${typeof node}`
+      throw new CompileError(`[${id}] node must be an object (got ${got})`)
     }
     if (typeof node.type === 'string') return compileExecution(node, id)
 

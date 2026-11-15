@@ -211,27 +211,27 @@ const METHODS = [
 
   // ── 训练场（4，docs/训练场设计方案.md）：只供 DSH 训练器调用，不登记给 agent（raw_commands.js 跳过）；需要单人世界 ──
   { method: 'arena/build', category: 'arena', description: 'Build a training arena (idempotent)',
-    zh: '幂等搭建训练场（场内地板 + 屏障墙、可选的工作站、场外平台 + 告示牌）并登记位置；params 填 { arena, origin?, station? }：arena=场地名，origin=[x,y,z] 场内地板中心（已登记的场地可省略），station=工作站（"crafting_table" / "chest" / "large_chest" 或 null；省略时用已登记的。大箱子多占 origin 前方 +z 两格再往 +x 一格）',
+    zh: '幂等搭建训练场（场内地板 + 屏障墙、可选的工作站、场外平台 + 告示牌）并登记位置；params 填 { arena, origin?, station? }：arena=场地名，origin=[x,y,z] 场内地板中心（已登记的场地可省略），station=工作站（"crafting_table" / "chest" / "large_chest" / "hopper" / "dispenser" 或 null；省略时用已登记的。大箱子多占 origin 前方 +z 两格再往 +x 一格；漏斗正下方的地板换成红石块把它锁住，不推送、不吸掉落物）',
     paramDefs: [
       { name: 'arena', type: 'string', required: true, hint: '场地名（[a-z0-9_]）', sample: 'craft2x2' },
       { name: 'origin', type: 'json', hint: '[x, y, z]，场内地板中心方块', sample: [10000, 120, 10000] },
-      { name: 'station', type: 'string', hint: '工作站：crafting_table / chest / large_chest（放在 origin 前方 +z 两格，箱子朝向玩家）；省略 = 已登记的', sample: 'crafting_table' }
+      { name: 'station', type: 'string', hint: '工作站：crafting_table / chest / large_chest / hopper / dispenser（放在 origin 前方 +z 两格，箱子、发射器朝向玩家）；省略 = 已登记的', sample: 'crafting_table' }
     ] },
   { method: 'arena/prepare', category: 'arena', description: 'Reset the player and start a training run',
-    zh: '开始一轮：关界面、清空物品栏与光标、补回工作站、传送进场（有工作站时俯角对准它）、清场内掉落物与敌对生物、回满状态、白天晴天、重置配方书、发放材料（超过堆叠上限的堆按 seed 拆到空槽），并开始监测 watch 中物品的 crafted 统计；箱子工作站另外先清空箱子再放进 chestItems（不拆堆，超过堆叠上限报错），给了 expect 就在每个 tick 检测是否恰好达到目标计数；已有进行中的一轮时报错；params 填 { arena, origin?, station?, items, chestItems?, seed?, watch?, expect?, dayTime? }（items 与 chestItems 不能都为空）。返回 { arena, startedAtMs, baseline, given[{slot,id,count}]＝实际发放, inventory }，有工作站时另有 { station, pitch, aimOk }（aimOk＝服务器射线检测准星命中工作站），箱子另有 { chestSlots（27/54，大箱子没连上时是 27）, chest{id:n} }',
+    zh: '开始一轮：关界面、清空物品栏与光标、补回工作站、传送进场（有工作站时俯角对准它）、清场内掉落物与敌对生物、回满状态、白天晴天、重置配方书、发放材料（超过堆叠上限的堆按 seed 拆到空槽），并开始监测 watch 中物品的 crafted 统计；容器工作站（箱子、大箱子、漏斗、发射器）另外先清空容器再放进 chestItems（不拆堆，超过堆叠上限报错），给了 expect 就在每个 tick 检测是否恰好达到目标计数；已有进行中的一轮时报错；params 填 { arena, origin?, station?, items, chestItems?, seed?, watch?, expect?, dayTime? }（items 与 chestItems 不能都为空）。返回 { arena, startedAtMs, baseline, given[{slot,id,count}]＝实际发放, inventory }，有工作站时另有 { station, pitch, aimOk }（aimOk＝服务器射线检测准星命中工作站），容器工作站另有 { chestSlots（容器格数：27/54/5/9，大箱子没连上时是 27）, chest{id:n} }',
     paramDefs: [
       { name: 'arena', type: 'string', required: true, hint: '场地名', sample: 'craft2x2' },
       { name: 'origin', type: 'json', hint: '[x, y, z]（已登记的场地可省略）', sample: [10000, 120, 10000] },
       { name: 'station', type: 'string', hint: '工作站：crafting_table；省略 = 已登记的', sample: 'crafting_table' },
       { name: 'items', type: 'json', required: true, hint: '[{ slot: 0-35, id, count }]，可以为空列表', sample: [{ slot: 4, id: 'minecraft:oak_planks', count: 2 }] },
-      { name: 'chestItems', type: 'json', hint: '箱子工作站：[{ slot: 0-26 / 0-53（合并容器的格号，与界面一致）, id, count ≤ 堆叠上限 }]', sample: [{ slot: 3, id: 'minecraft:cobblestone', count: 20 }] },
+      { name: 'chestItems', type: 'json', hint: '容器工作站：[{ slot: 0 到格数−1（小箱子 27、大箱子 54（合并容器的格号，与界面一致）、漏斗 5、发射器 9）, id, count ≤ 堆叠上限 }]', sample: [{ slot: 3, id: 'minecraft:cobblestone', count: 20 }] },
       { name: 'seed', type: 'int', def: 0, hint: '兜底拆堆选空槽用的种子', sample: 81723 },
       { name: 'watch', type: 'json', hint: '要监测 crafted 统计的物品 id 列表；省略 = 不监测', sample: ['minecraft:stick'] },
-      { name: 'expect', type: 'json', hint: '箱子工作站：本轮的目标计数 { inventory: {id:n}, container: {id:n} }；物品栏（不含光标）与箱子恰好如此、光标为空的第一个 tick 记为 reachedAtMs', sample: { inventory: { 'minecraft:cobblestone': 20 }, container: {} } },
+      { name: 'expect', type: 'json', hint: '容器工作站：本轮的目标计数 { inventory: {id:n}, container: {id:n} }；物品栏（不含光标）与容器恰好如此、光标为空的第一个 tick 记为 reachedAtMs', sample: { inventory: { 'minecraft:cobblestone': 20 }, container: {} } },
       { name: 'dayTime', type: 'int', def: 1000, hint: '本轮开始时设置的时间（tick）', sample: 1000 }
     ] },
   { method: 'arena/status', category: 'arena', description: 'Current training run state',
-    zh: '当前一轮的状态：{ active, arena, startedAtMs, craftedAtMs, craftedItem, craftedDelta{id:n}, inventory{id:n}, insideArena, playerOnline }，有工作站时另有 { openedAtMs（第一次打开工作站界面的时刻，没打开过为 null）, stationIntact（大箱子要两半都在） }；给过 expect 时另有 reachedAtMs；箱子工作站另有 { chestSlots, chest{id:n}（箱子不在了为 null）, held{id:n}（物品栏，不含光标）, carried{id:n}（光标）, dropped{id:n}（场内地上的掉落物） }；没有进行中的一轮时只有 active:false，无参数',
+    zh: '当前一轮的状态：{ active, arena, startedAtMs, craftedAtMs, craftedItem, craftedDelta{id:n}, inventory{id:n}, insideArena, playerOnline }，有工作站时另有 { openedAtMs（第一次打开工作站界面的时刻，没打开过为 null）, stationIntact（大箱子要两半都在，漏斗下面的红石块也要在） }；给过 expect 时另有 reachedAtMs；容器工作站另有 { chestSlots, chest{id:n}（容器不在了为 null）, held{id:n}（物品栏，不含光标）, carried{id:n}（光标）, dropped{id:n}（场内地上的掉落物） }；没有进行中的一轮时只有 active:false，无参数',
     paramDefs: [] },
   { method: 'arena/finish', category: 'arena', description: 'End the training run and teleport outside',
     zh: '结束本轮：返回与 arena/status 相同的最终状态后关界面、传送到场外平台；没有进行中的一轮时只传送；params 填 { arena, origin? }',

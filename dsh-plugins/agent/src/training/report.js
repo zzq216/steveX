@@ -26,7 +26,7 @@ const secs = (ms) => (ms === null ? '-' : `${(ms / 1000).toFixed(1)}s`)
 
 /**
  * @param {object[]} records
- * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack' }} [filter]
+ * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack'|'fill' }} [filter]
  * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean }}
  *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）
  */
@@ -78,7 +78,8 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, historyCols }
 }
 
-const CHEST_NAMES = { small: '小箱子', large: '大箱子' }
+const CHEST_NAMES = { small: '小箱子', large: '大箱子', hopper: '漏斗', dispenser: '发射器' }
+const FILL_NAMES = { random: '随机数量', full: '每格满' }
 
 function groupKey(r, by) {
   if (by === 'shape') return r.shape
@@ -86,6 +87,8 @@ function groupKey(r, by) {
   if (by === 'task') return r.kind && r.rel ? `${r.kind}/${r.rel}` : null
   if (by === 'chest') return CHEST_NAMES[r.chest] ?? null
   if (by === 'stack') return Number.isInteger(r.stackClass) ? String(r.stackClass) : null
+  // 加 fill 之前的箱子记录都是随机数量
+  if (by === 'fill') return r.kind ? FILL_NAMES[r.fill ?? 'random'] : null
   return r.target
 }
 
@@ -95,7 +98,7 @@ function portionsKey(r) {
   return Number.isInteger(r.portions) && Number.isInteger(r.crafts) ? `${r.portions}/${r.crafts}` : null
 }
 
-const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限' }
+const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量' }
 
 export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, historyCols = false }) {
   if (total.runs === 0) return '没有训练记录'

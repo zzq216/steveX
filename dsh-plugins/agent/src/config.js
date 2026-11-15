@@ -4,7 +4,7 @@ import { DEFAULT_OBSERVE_BY_COMMAND } from './bt/observe.js'
 import { STORAGE_CHOICES, parseTypesSpec } from './training/storage.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
-const STORAGE_ARENA_DEFAULTS = Object.freeze({ kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
+const STORAGE_ARENA_DEFAULTS = Object.freeze({ kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
 
 const steveXRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -127,14 +127,15 @@ export const DEFAULTS = Object.freeze({
      * 工作台训练场见 docs/工作台训练场设计方案.md
      *
      * type 选题型（箱子训练场设计方案 C11）：不写 = 'craft'（上面这些字段）；'storage' = 箱子存取，字段是
-     *   { origin, kind: take | put | mix, rel: lt | eq | gt | mix, chest: small | large | mix, stack: 64 | 16 | 1 | mix,
+     *   { origin, kind: take | put | mix, rel: lt | eq | gt | mix, chest: small | large | hopper | dispenser | mix（大小箱子）| all（四种）, stack: 64 | 16 | 1 | mix,
+     *     fill: random（每格数量在 [1, 堆叠上限] 随机）| full（每格取满）| mix,
      *     types: 物品种类数（含目标）"k" | "a-b"（1–9）, dest: 'empty'（C6，partial 暂不开放）, exclude: 不抽的物品 id,
      *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/箱子训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
       craft3x3: { origin: [10000, 120, 10030], mode: 'named', grid: 3, station: 'crafting_table', exclude: [], timeoutSec: 900 },
-      chest: { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] }
+      chest: { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] }
     }
   },
   planner: {

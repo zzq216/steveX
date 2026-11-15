@@ -67,12 +67,15 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 })
 
 test('parseTrainArgs', () => {
-  const none = { kind: null, rel: null, chest: null, stack: null, types: null }
+  const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
-  assert.deepEqual(parseTrainArgs(['chest', 'kind=take', 'rel=lt', 'chest=large', 'stack=16', 'types=2-3']),
-    { ok: true, arena: 'chest', item: null, runs: 1, seed: null, portions: null, crafts: null, kind: 'take', rel: 'lt', chest: 'large', stack: '16', types: '2-3' })
+  assert.deepEqual(parseTrainArgs(['chest', 'kind=take', 'rel=lt', 'chest=large', 'stack=16', 'fill=full', 'types=2-3']),
+    { ok: true, arena: 'chest', item: null, runs: 1, seed: null, portions: null, crafts: null, kind: 'take', rel: 'lt', chest: 'large', stack: '16', fill: 'full', types: '2-3' })
+  assert.match(parseTrainArgs(['chest', 'fill=half']).error, /random \/ full \/ mix/)
+  assert.equal(parseTrainArgs(['chest', 'chest=hopper']).chest, 'hopper')
+  assert.match(parseTrainArgs(['chest', 'chest=barrel']).error, /small \/ large \/ hopper \/ dispenser \/ mix \/ all/)
   assert.match(parseTrainArgs(['chest', 'kind=swap']).error, /take \/ put \/ mix/)
   assert.match(parseTrainArgs(['chest', 'stack=32']).error, /64 \/ 16 \/ 1/)
   assert.match(parseTrainArgs(['chest', 'types=10']).error, /1–9/)
@@ -839,6 +842,51 @@ test('storage sampler: layout within half the source, rel gives k, reproducible,
     assert.equal(t.stackClass, 1)
     assert.ok(t.n >= 2 && t.k < t.n)
   }
+  // fill=full：每格都满一组（干扰物品也满），n = 目标格数 × 堆叠上限；fill=mix 两种都出
+  const fills = new Set()
+  for (let seed = 0; seed < 100; seed++) {
+    const t = sampleStorage(pool, SPROPS, seed, { fill: 'full', types: { lo: 1, hi: 4 } })
+    const source = t.kind === 'take' ? t.layout.chest : t.layout.inventory
+    assert.equal(t.fill, 'full')
+    assert.ok(source.every((s) => s.count === SPROPS[s.id].maxStack), JSON.stringify(source))
+    assert.equal(t.n, source.filter((s) => s.id === t.target).length * t.stackClass)
+    if (t.rel === 'lt') assert.ok(t.k >= 1 && t.k < t.n)
+    fills.add(sampleStorage(pool, SPROPS, seed, { fill: 'mix' }).fill)
+  }
+  assert.deepEqual([...fills].sort(), ['full', 'random'])
+  assert.equal(sampleStorage(pool, SPROPS, 5).fill, 'random', 'fill defaults to random')
+  // §8：漏斗、发射器。容量 5 / 9；种类数 ≤ 一半 − 目标最少格数 + 1；放进题目标最多占容器的格数
+  const sizes = { mix: new Set(), all: new Set() }
+  for (let seed = 0; seed < 400; seed++) {
+    sizes.mix.add(sampleStorage(pool, SPROPS, seed, { chest: 'mix' }).chest)
+    sizes.all.add(sampleStorage(pool, SPROPS, seed, { chest: 'all' }).chest)
+    for (const chest of ['hopper', 'dispenser']) {
+      const t = sampleStorage(pool, SPROPS, seed, { chest, types: { lo: 1, hi: 9 } })
+      const slots = { hopper: 5, dispenser: 9 }[chest]
+      assert.equal(t.chestSlots, slots)
+      const capacity = t.kind === 'take' ? slots : 36
+      const source = t.kind === 'take' ? t.layout.chest : t.layout.inventory
+      const half = Math.floor(capacity / 2)
+      assert.ok(source.length >= t.types && source.length <= half, `${chest} ${t.kind}: ${source.length} slots, half ${half}`)
+      assert.ok(source.every((x) => x.slot >= 0 && x.slot < capacity), JSON.stringify(source))
+      assert.equal(new Set(source.map((x) => x.id)).size, t.types)
+      if (t.kind === 'put') {
+        assert.ok(source.filter((x) => x.id === t.target).length <= slots, 'put: the target fits into the container')
+        assert.ok(t.want <= slots * t.stackClass)
+      }
+      if (t.rel === 'lt') assert.ok(t.k >= 1 && t.k < t.n)
+    }
+    // 漏斗取物、lt、不可堆叠：一半只有 2 格，目标要占 2 格 → 只有 1 种物品
+    const tight = sampleStorage(pool, SPROPS, seed, { kind: 'take', chest: 'hopper', rel: 'lt', stack: '1', types: { lo: 1, hi: 9 } })
+    assert.equal(tight.types, 1)
+    assert.equal(tight.layout.chest.length, 2)
+    assert.ok(tight.n === 2 && tight.k === 1)
+    // 放进漏斗、要求全部、每格满：n 一定装得下
+    const full = sampleStorage(pool, SPROPS, seed, { kind: 'put', chest: 'hopper', rel: 'gt', fill: 'full', types: { lo: 1, hi: 1 } })
+    assert.ok(full.n <= 5 * full.stackClass && full.layout.inventory.length <= 5)
+  }
+  assert.deepEqual([...sizes.mix].sort(), ['large', 'small'], 'mix stays with the two chests (old seeds unchanged)')
+  assert.deepEqual([...sizes.all].sort(), ['dispenser', 'hopper', 'large', 'small'])
   const fixed = sampleStorage(pool, SPROPS, 3, { item: 'egg', kind: 'put', chest: 'large' })
   assert.equal(fixed.target, 'minecraft:egg')
   assert.ok(fixed.layout.inventory.length > 0 && fixed.layout.chest.length === 0)
@@ -876,7 +924,7 @@ test('storage expect and judge: exact counts succeed; overshoot, disturbed, lost
 
 test('config: the chest arena is a storage arena with its own defaults and checks; craft arenas are unchanged', () => {
   const config = normalizeConfig({})
-  assert.deepEqual(config.training.arenas.chest, { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
+  assert.deepEqual(config.training.arenas.chest, { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', dest: 'empty', exclude: ['minecraft:bundle'] })
   assert.equal(config.training.arenas.craft2x2.type, undefined)
   const mine = normalizeConfig({ training: { arenas: { box: { type: 'storage', origin: [0, 100, 0], kind: 'put' } } } }).training.arenas.box
   assert.equal(mine.kind, 'put')
@@ -891,7 +939,7 @@ test('config: the chest arena is a storage arena with its own defaults and check
 const ARENAS_CHEST = { chest: { type: 'storage', origin: [0, 100, 60], timeoutSec: 600, kind: 'take', rel: 'mix', chest: 'small', stack: 'mix', types: '1-3', dest: 'empty', exclude: ['minecraft:bundle'] } }
 
 /** 箱子题的假世界：prepare 按参数布置，script 结束前把计数改成 finalOf(params) 的样子 */
-function chestHarness({ finalOf = (params) => ({ held: params.expect.inventory, chest: params.expect.container }), chestSlots = (station) => (station === 'large_chest' ? 54 : 27), arenas = ARENAS_CHEST } = {}) {
+function chestHarness({ finalOf = (params) => ({ held: params.expect.inventory, chest: params.expect.container }), chestSlots = (station) => ({ large_chest: 54, hopper: 5, dispenser: 9 })[station] ?? 27, arenas = ARENAS_CHEST } = {}) {
   const { countsOf } = storageModule
   const world = { params: null, state: {} }
   const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
@@ -951,6 +999,26 @@ test('chest run: prepare lays out the chest and the goal, the take template is u
   assert.match(texts[0], /^第 1\/2 轮：会话 run-1，取 \d+ 个 minecraft:\w+（箱子里有 \d+ 个，(lt|eq|gt)，小箱子，\d 种物品，seed=\d+）$/)
   assert.match(texts[1], /^第 1\/2 轮结果 success，达成用时 \d+\.\d 秒，任务用时/)
   assert.doesNotMatch(prompts.training.chest_take + prompts.training.chest_put, /右键/, 'describe the situation, do not teach the move')
+})
+
+test('chest run with a hopper / dispenser: station name, slot self-check and the container named in the task text', async () => {
+  for (const [chest, name, slots] of [['hopper', '漏斗', 5], ['dispenser', '发射器', 9]]) {
+    const h = chestHarness({ arenas: { chest: { ...ARENAS_CHEST.chest, chest } } })
+    assert.equal(h.trainer.start({ sessionId: 'console', arena: 'chest', runs: 1, seed: 5 }).ok, true)
+    await h.done()
+    const [record] = h.records('chest')
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.equal(record.chest, chest)
+    assert.equal(record.chestSlots, slots)
+    assert.equal(h.calls.find(([m]) => m === 'arena/prepare')[1].station, chest)
+    assert.ok(h.instructions[0].startsWith(`你正前方有一个${name}，视角已经对准它。请从${name}里取出 `), h.instructions[0])
+    assert.ok(h.notices[0][1].includes(`${name}里有 `) && h.notices[0][1].includes(`，${name}，`), h.notices[0][1])
+  }
+  // 容器格数不对（比如漏斗没放上）→ 本轮 aborted
+  const wrong = chestHarness({ arenas: { chest: { ...ARENAS_CHEST.chest, chest: 'hopper' } }, chestSlots: () => 27 })
+  wrong.trainer.start({ sessionId: 'console', arena: 'chest', runs: 1, seed: 5 })
+  await wrong.done()
+  assert.equal(wrong.records('chest')[0].outcome, 'aborted')
 })
 
 test('chest run: a large chest that did not connect aborts the batch before planning; options of the other task type are refused', async () => {
@@ -1018,5 +1086,6 @@ test('report: chest records group by task / chest / stack and get their own colu
   assert.doesNotMatch(text, /合成|工作台/)
   assert.deepEqual(summarize(records, { by: 'chest' }).rows.map((r) => r.key).sort(), ['大箱子', '小箱子'])
   assert.deepEqual(summarize(records, { by: 'stack' }).rows.map((r) => r.key), ['64', '1', '16'])
+  assert.deepEqual(summarize(records, { by: 'fill' }).rows.map((r) => r.key), ['随机数量'], 'records without fill count as random')
   assert.doesNotMatch(formatSummary(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1 }])), /动了别的/, 'craft output is unchanged')
 })

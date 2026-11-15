@@ -2,18 +2,23 @@ import { renderTemplate } from '../llm/prompts.js'
 import { rng } from './sampler.js'
 
 /**
- * 存取题型（docs/箱子训练场设计方案.md）：正前方一个小箱子或大箱子，在箱子和物品栏之间搬指定数量的指定物品。
+ * 存取题型（docs/箱子训练场设计方案.md）：正前方一个容器（小箱子、大箱子；§8 起还有漏斗、发射器），在容器和物品栏之间搬指定数量的指定物品。
  *
  * - 取（take）：东西在箱子里，搬进物品栏；放（put）：东西在物品栏里，搬进箱子（C1–C6）
- * - 来源方占 [types, ⌊容量/2⌋] 格；目标物品 T 和 types−1 种干扰物品，每格数量在 [1, 堆叠上限] 里均匀随机（C4、C5）
+ * - 来源方占 [types, ⌊容量/2⌋] 格；目标物品 T 和 types−1 种干扰物品，每格数量在 [1, 堆叠上限] 里均匀随机（C4、C5）；
+ *   fill=full 时每格都取满堆叠上限（练整组搬运）
  * - 要求 k 个由 rel 生成：lt → [1, n−1]，eq → n，gt → [n+1, ⌊容量/2⌋ × T 的堆叠上限]；应搬 want = min(k, n)
  * - 目标方开局为空（C6 方案 A；dest=partial 暂不开放）
+ * - 容量规则（§8 C17）：种类数 ≤ 一半 − 目标最少格数 + 1；放进题目标物品最多占容器的格数，保证要求全部放入时装得下。
+ *   这两条在小箱子、大箱子上都不会起作用，同种子出题不变
  * - 判定按任务结束时两边的计数（C8）：lost → overshoot → disturbed → timeout → success / false_success / failed
  * - reachedMs 由 mod 在 tick 里检测"恰好达到目标计数"的第一刻（C9），不打断 agent
  */
 
 export const INVENTORY_SLOTS = 36
-export const CHEST_SLOTS = { small: 27, large: 54 }
+export const CHEST_SLOTS = { small: 27, large: 54, hopper: 5, dispenser: 9 }
+/** 本轮容器 → mod 的工作站名 */
+export const STATION_OF = { small: 'chest', large: 'large_chest', hopper: 'hopper', dispenser: 'dispenser' }
 /** types 的上限：来源方最少 13 格（小箱子的一半），留出余量 */
 export const MAX_TYPES = 9
 export const STACK_CLASSES = [64, 16, 1]
@@ -21,8 +26,9 @@ export const STACK_CLASSES = [64, 16, 1]
 export const STORAGE_CHOICES = Object.freeze({
   kind: ['take', 'put', 'mix'],
   rel: ['lt', 'eq', 'gt', 'mix'],
-  chest: ['small', 'large', 'mix'],
-  stack: ['64', '16', '1', 'mix']
+  chest: ['small', 'large', 'hopper', 'dispenser', 'mix', 'all'],
+  stack: ['64', '16', '1', 'mix'],
+  fill: ['random', 'full', 'mix']
 })
 
 const pickOne = (random, list) => list[Math.floor(random() * list.length)]
@@ -66,10 +72,11 @@ function shuffle(random, list) {
  * @param {string[]} pool   storagePool()
  * @param {object} props    item-props.json 的 items（id → { maxStack }）
  * @param {number} seed
- * @param {{ kind, rel, chest, stack, types: {lo,hi}, item }} options  kind/rel/chest/stack 可为 'mix'
- * @returns {{ kind, chest, chestSlots, rel, target, stackClass, n, k, want, types, distractors, layout: { chest, inventory } }}
+ * @param {{ kind, rel, chest, stack, fill, types: {lo,hi}, item }} options  kind/rel/chest/stack/fill 可为 'mix'；fill 缺省 random；
+ *   chest=mix 只在小箱子、大箱子之间抽（旧种子不变），chest=all 在四种容器之间抽
+ * @returns {{ kind, chest, chestSlots, rel, fill, target, stackClass, n, k, want, types, distractors, layout: { chest, inventory } }}
  */
-export function sampleStorage(pool, props, seed, { kind = 'mix', rel = 'mix', chest = 'mix', stack = 'mix', types = { lo: 1, hi: 4 }, item = null } = {}) {
+export function sampleStorage(pool, props, seed, { kind = 'mix', rel = 'mix', chest = 'mix', stack = 'mix', fill = 'random', types = { lo: 1, hi: 4 }, item = null } = {}) {
   const random = rng(seed)
   const maxStack = (id) => {
     const p = props[id]
@@ -77,8 +84,10 @@ export function sampleStorage(pool, props, seed, { kind = 'mix', rel = 'mix', ch
     return p.maxStack
   }
   const task = kind === 'mix' ? pickOne(random, ['take', 'put']) : kind
-  const size = chest === 'mix' ? pickOne(random, ['small', 'large']) : chest
+  const size = chest === 'mix' ? pickOne(random, ['small', 'large']) : chest === 'all' ? pickOne(random, ['small', 'large', 'hopper', 'dispenser']) : chest
   const relation = rel === 'mix' ? pickOne(random, ['lt', 'eq', 'gt']) : rel
+  // fill 只在 mix 时消耗随机数：fill=random 的题和加这个选项之前同种子同题
+  const filling = fill === 'mix' ? pickOne(random, ['random', 'full']) : fill
   const chestSlots = CHEST_SLOTS[size]
   const capacity = task === 'take' ? chestSlots : INVENTORY_SLOTS
   const half = Math.floor(capacity / 2)
@@ -94,8 +103,11 @@ export function sampleStorage(pool, props, seed, { kind = 'mix', rel = 'mix', ch
     target = pickOne(random, choices)
   }
 
-  // 种类数（含目标物品）：每种至少 1 格
-  const typeCount = between(random, Math.min(types.lo, half), Math.min(types.hi, half))
+  // lt 而目标不可堆叠时目标至少 2 格（n ≥ 2 才有 k < n）
+  const minTarget = relation === 'lt' && maxStack(target) === 1 ? 2 : 1
+  // 种类数（含目标物品）：每种至少 1 格，合起来不超过一半（§8 C17：漏斗的一半只有 2 格）
+  const typeCap = half - minTarget + 1
+  const typeCount = between(random, Math.min(types.lo, typeCap), Math.min(types.hi, typeCap))
   const others = pool.filter((id) => id !== target)
   if (others.length < typeCount - 1) throw new Error(`物品池里不够 ${typeCount - 1} 种干扰物品`)
   const distractors = []
@@ -104,17 +116,22 @@ export function sampleStorage(pool, props, seed, { kind = 'mix', rel = 'mix', ch
     if (!distractors.includes(id)) distractors.push(id)
   }
 
-  // 占用格数 s：lt 而目标不可堆叠时目标至少 2 格（n ≥ 2 才有 k < n）
-  const minTarget = relation === 'lt' && maxStack(target) === 1 ? 2 : 1
+  // 占用格数 s。放进题：目标物品最多占容器的格数，n ≤ 格数 × 堆叠上限，要求全部放入时装得下（§8 C17）
+  const targetCap = task === 'put' ? chestSlots : capacity
   const floor = typeCount - 1 + minTarget
-  const slotsUsed = between(random, floor, half)
+  const slotsUsed = between(random, floor, Math.min(half, typeCount - 1 + targetCap))
   const ids = [target, ...distractors]
   const slotsOf = ids.map((_, i) => (i === 0 ? minTarget : 1))
-  for (let extra = slotsUsed - floor; extra > 0; extra--) slotsOf[Math.floor(random() * ids.length)]++
+  for (let extra = slotsUsed - floor; extra > 0; extra--) {
+    let i = Math.floor(random() * ids.length)
+    // 目标已满上限就改分给干扰物品（只有上限真起作用时才多用一次随机数）
+    if (i === 0 && slotsOf[0] >= targetCap) i = 1 + Math.floor(random() * (ids.length - 1))
+    slotsOf[i]++
+  }
 
   const stacks = []
   ids.forEach((id, i) => {
-    for (let j = 0; j < slotsOf[i]; j++) stacks.push({ id, count: between(random, 1, maxStack(id)) })
+    for (let j = 0; j < slotsOf[i]; j++) stacks.push({ id, count: filling === 'full' ? maxStack(id) : between(random, 1, maxStack(id)) })
   })
   // lt 要 n ≥ 2：目标只有 1 格且只有 1 个时，把这一格重抽到 [2, 上限]
   let n = stacks.filter((s) => s.id === target).reduce((sum, s) => sum + s.count, 0)
@@ -133,7 +150,7 @@ export function sampleStorage(pool, props, seed, { kind = 'mix', rel = 'mix', ch
   else k = between(random, n + 1, Math.max(half * maxStack(target), n + 1))
 
   return {
-    kind: task, chest: size, chestSlots, rel: relation, target, stackClass: maxStack(target), n, k, want: Math.min(k, n),
+    kind: task, chest: size, chestSlots, rel: relation, fill: filling, target, stackClass: maxStack(target), n, k, want: Math.min(k, n),
     types: typeCount, distractors,
     layout: { chest: task === 'take' ? source : [], inventory: task === 'put' ? source : [] }
   }
@@ -195,17 +212,19 @@ export function judgeStorage({ stopped, timedOut, taskState, final, picked }) {
 }
 
 const KIND_TEXT = { take: '取', put: '放' }
-const CHEST_TEXT = { small: '小箱子', large: '大箱子' }
+const CHEST_TEXT = { small: '小箱子', large: '大箱子', hopper: '漏斗', dispenser: '发射器' }
+/** 文案里的容器名（C18）：大小箱子都叫箱子 */
+const CONTAINER_TEXT = { small: '箱子', large: '箱子', hopper: '漏斗', dispenser: '发射器' }
 
 export const storage = {
   type: 'storage',
-  options: ['item', 'kind', 'rel', 'chest', 'stack', 'types'],
+  options: ['item', 'kind', 'rel', 'chest', 'stack', 'fill', 'types'],
 
   setup(trainer, arena, arenaConfig, args) {
     const props = trainer.itemProps()
     if (!props) throw new Error(`箱子题需要 ${trainer.config.itemProps}（在 dsh-plugins/agent 里运行 npm run extract-item-props）`)
     const pick = (key) => args[key] ?? arenaConfig[key] ?? 'mix'
-    const options = { kind: pick('kind'), rel: pick('rel'), chest: pick('chest'), stack: String(pick('stack')), types: parseTypesSpec(args.types ?? arenaConfig.types ?? '1-4'), item: args.item ?? null }
+    const options = { kind: pick('kind'), rel: pick('rel'), chest: pick('chest'), stack: String(pick('stack')), fill: args.fill ?? arenaConfig.fill ?? 'random', types: parseTypesSpec(args.types ?? arenaConfig.types ?? '1-4'), item: args.item ?? null }
     for (const [key, choices] of Object.entries(STORAGE_CHOICES)) {
       if (!choices.includes(options[key])) throw new Error(`${key} 只能是 ${choices.join(' / ')}，收到 "${options[key]}"`)
     }
@@ -219,7 +238,7 @@ export const storage = {
 
   startText(ctx) {
     const o = ctx.options
-    return `${o.item ? `目标 ${fullId(o.item)}，` : ''}kind=${o.kind}，rel=${o.rel}，chest=${o.chest}，stack=${o.item ? '随目标' : o.stack}，types=${o.types.lo === o.types.hi ? o.types.lo : `${o.types.lo}-${o.types.hi}`}`
+    return `${o.item ? `目标 ${fullId(o.item)}，` : ''}kind=${o.kind}，rel=${o.rel}，chest=${o.chest}，stack=${o.item ? '随目标' : o.stack}，fill=${o.fill}，types=${o.types.lo === o.types.hi ? o.types.lo : `${o.types.lo}-${o.types.hi}`}`
   },
 
   batchFields() {
@@ -231,13 +250,13 @@ export const storage = {
   },
 
   label(ctx, picked, seed) {
-    const where = picked.kind === 'take' ? '箱子里' : '物品栏里'
-    return `${KIND_TEXT[picked.kind]} ${picked.k} 个 ${picked.target}（${where}有 ${picked.n} 个，${picked.rel}，${CHEST_TEXT[picked.chest]}，${picked.types} 种物品，seed=${seed}）`
+    const where = picked.kind === 'take' ? `${CONTAINER_TEXT[picked.chest]}里` : '物品栏里'
+    return `${KIND_TEXT[picked.kind]} ${picked.k} 个 ${picked.target}（${where}有 ${picked.n} 个，${picked.rel}，${CHEST_TEXT[picked.chest]}，${picked.types} 种物品${picked.fill === 'full' ? '，每格满' : ''}，seed=${seed}）`
   },
 
   record(ctx, picked) {
     return {
-      kind: picked.kind, rel: picked.rel, chest: picked.chest, chestSlots: null, stackClass: picked.stackClass,
+      kind: picked.kind, rel: picked.rel, chest: picked.chest, fill: picked.fill, chestSlots: null, stackClass: picked.stackClass,
       target: picked.target, n: picked.n, k: picked.k, want: picked.want, types: picked.types, distractors: picked.distractors,
       layout: picked.layout, final: null, moved: null, disturbed: [], reached: false, reachedMs: null
     }
@@ -245,7 +264,7 @@ export const storage = {
 
   prepareParams(ctx, picked, seed) {
     return {
-      station: picked.chest === 'large' ? 'large_chest' : 'chest',
+      station: STATION_OF[picked.chest],
       items: picked.layout.inventory, chestItems: picked.layout.chest,
       seed, watch: [], expect: expectedCounts(picked), dayTime: 1000
     }
@@ -253,15 +272,15 @@ export const storage = {
 
   afterPrepare(ctx, picked, data) {
     const fields = { chestSlots: data?.chestSlots ?? null }
-    const station = picked.chest === 'large' ? 'large_chest' : 'chest'
+    const station = STATION_OF[picked.chest]
     if (data?.aimOk !== true) return { error: `arena/prepare: crosshair is not on the ${station} (aimOk=${data?.aimOk}); check the arena origin`, fields }
-    // 大箱子没连上时容量是 27（C2 自检）
+    // 大箱子没连上时容量是 27（C2 自检）；漏斗 5、发射器 9
     if (data?.chestSlots !== picked.chestSlots) return { error: `arena/prepare: the ${station} has ${data?.chestSlots} slots, expected ${picked.chestSlots}`, fields }
     return { fields }
   },
 
   instruction(ctx, picked, prompts) {
-    return renderTemplate(prompts.training[`chest_${picked.kind}`], { target: picked.target, k: picked.k })
+    return renderTemplate(prompts.training[`chest_${picked.kind}`], { target: picked.target, k: picked.k, container: CONTAINER_TEXT[picked.chest] })
   },
 
   finish(ctx, picked, { final, stopped, timedOut, taskState, t0 }) {

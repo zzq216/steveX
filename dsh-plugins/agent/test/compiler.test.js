@@ -38,6 +38,10 @@ test('编译：执行格式节点原样保留，缺 id 的按位置补；ensure 
   const spec = compileTree({ seq: 'x', do: [{ type: 'Action', cmd: 'key/drop' }, { type: 'Action', id: 'keep', cmd: 'key/drop' }] })
   assert.deepEqual(spec.children.map((c) => c.id), ['n1.1', 'keep'])
   assert.throws(() => compileTree({ ensure: 'stick' }), /unrecognised node/)
+  // 不是对象时报出实际收到的类型（子树写成 JSON 文本时一眼看出）
+  assert.throws(() => compileTree('{"seq": "x", "do": []}'), /\[n1\] node must be an object \(got a string "\{\\"seq\\": \\"x\\", \\"do\\": \[\]\}"\)/)
+  assert.throws(() => compileTree({ seq: 'x', do: [null] }), /\[n1\.1\] node must be an object \(got null\)/)
+  assert.throws(() => compileTree({ seq: 'x', do: [['wait', 100]] }), /\[n1\.1\] node must be an object \(got an array\)/)
 })
 
 test('校验：未知命令、错参数、Steps 里的读取、Repeat 规则都报到节点上', () => {

@@ -462,6 +462,20 @@ export class Bridge {
       return { ok: false, errors: [`replaces given, but there is no ${key} in the library yet`] }
     }
 
+    // 子树的 body 写成了 JSON 文本（同一个参数存代码胶囊时就是源码字符串，容易混）：能解析成对象就照常用，
+    // 解析不了就直接说明收到的是字符串（2026-11-15 复盘 c5：23 次字符串 body 都被当成"节点格式不对"）
+    if (folder === 'trees' && typeof body === 'string') {
+      let parsed
+      try {
+        parsed = JSON.parse(body)
+      } catch (error) {
+        return { ok: false, errors: [`body is a string that is not valid JSON (${error.message}); for trees, pass the subtree object itself (authoring format), not JSON text`] }
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false, errors: ['body is a string; for trees, pass the subtree object itself (authoring format), not JSON text'] }
+      }
+      body = parsed
+    }
     const entry = { name, description: description.trim(), signature, body, ...(preconditions ? { preconditions } : {}) }
     let fromInfo = null
     let draft = null

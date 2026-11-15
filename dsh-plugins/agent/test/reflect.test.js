@@ -128,7 +128,12 @@ test('capsule_save：草稿转正；子树里的 task/ 引用自动改写；写�
   assert.match(literal.errors.join('\n'), /c\.2\.params\.value = 42: same as 黑板 goal\.value/)
   assert.match(literal.errors.join('\n'), /keepLiterals with every hit .*\{"c\.2\.params\.value":"<why this is a constant>"\}/)
 
-  const kept = save({ folder: 'trees', name: 'calc.answer', description: '算两倍并确认', from: 'n1.2.1', signature: CAPSULE_SIGNATURE, body: CAPSULE_BODY, keepLiterals: { 'c.2.params.value': '演示：目标值本来就是 42' } })
+  // 子树写成 JSON 文本：解析不了 / 解析出来不是对象 → 明说收到的是字符串；能解析成对象 → 照常存（下面的 kept）
+  const broken = save({ folder: 'trees', name: 'calc.answer', description: '算两倍并确认', from: 'n1.2.1', signature: CAPSULE_SIGNATURE, body: '{"seq": "x", "do": [' })
+  assert.match(broken.errors.join('\n'), /body is a string that is not valid JSON .*pass the subtree object itself/)
+  const scalar = save({ folder: 'trees', name: 'calc.answer', description: '算两倍并确认', from: 'n1.2.1', signature: CAPSULE_SIGNATURE, body: '"seq"' })
+  assert.match(scalar.errors.join('\n'), /body is a string; for trees, pass the subtree object itself/)
+  const kept = save({ folder: 'trees', name: 'calc.answer', description: '算两倍并确认', from: 'n1.2.1', signature: CAPSULE_SIGNATURE, body: JSON.stringify(CAPSULE_BODY), keepLiterals: { 'c.2.params.value': '演示：目标值本来就是 42' } })
   assert.equal(kept.ok, true, JSON.stringify(kept))
   assert.deepEqual(kept.rewritten.map((r) => [r.id, r.to]), [['c.1', code.ref]])
   assert.deepEqual(kept.from, { node: 'n1.2.1', runs: 1, successes: 1 })

@@ -26,6 +26,8 @@ import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.CraftingMenu;
+import net.minecraft.world.inventory.DispenserMenu;
+import net.minecraft.world.inventory.HopperMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
@@ -33,6 +35,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.HopperBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.SignText;
@@ -60,6 +63,8 @@ import net.minecraft.world.phys.Vec3;
  * <p>箱子场地（docs/箱子训练场设计方案.md）：工作站是小箱子（{@code chest}）或大箱子（{@code large_chest}，
  * 多占 (ox+1, oy+1, oz+2) 一格），每轮按本轮的大小重搭；prepare 清空并布置箱子、登记本轮的目标计数
  * （{@link Expect}），tick 里记第一次恰好达到目标的时刻（C9）；status 另报箱子、物品栏、光标、地上掉落物的计数（C8）。
+ * 同一场地也可以换成漏斗（{@code hopper}，正下方地板换成红石块把它锁住，方案 C15）或发射器（{@code dispenser}），
+ * 下文"容器工作站"指这四种。
  */
 public final class ArenaManager {
 
@@ -68,11 +73,13 @@ public final class ArenaManager {
     /** 一块场地：origin + 工作站名（null = 没有工作站）。 */
     public record Site(BlockPos origin, String station) {}
 
-    /** 工作站名 → 方块：工作台（W2）；小箱子、大箱子（箱子方案 C2，大箱子是两块 CHEST）。 */
+    /** 工作站名 → 方块：工作台（W2）；小箱子、大箱子（箱子方案 C2，大箱子是两块 CHEST）；漏斗、发射器（方案 §8）。 */
     private static final Map<String, Block> STATIONS = Map.of(
             "crafting_table", Blocks.CRAFTING_TABLE,
             "chest", Blocks.CHEST,
-            "large_chest", Blocks.CHEST);
+            "large_chest", Blocks.CHEST,
+            "hopper", Blocks.HOPPER,
+            "dispenser", Blocks.DISPENSER);
 
     /** 已知场地：名字 → Site。arena/build 会登记或更新；/arena 命令按这里传送。 */
     private static final Map<String, Site> KNOWN = new ConcurrentHashMap<>(Map.of(
@@ -98,7 +105,7 @@ public final class ArenaManager {
         final List<Watch> watch;
         final long startedAtMs;
         final String stationName; // 没有工作站时为 null
-        final List<BlockPos> stationPositions; // 工作站占的方块（大箱子两格）；没有工作站时为空
+        final Map<BlockPos, Block> stationBlocks; // 工作站占的各格应有的方块（大箱子两格，漏斗连同下面的红石块）；没有工作站时为空
         final Block station;
         final Expect expect; // 没有目标计数时为 null
         Long craftedAtMs;
@@ -113,7 +120,9 @@ public final class ArenaManager {
             this.watch = watch;
             this.startedAtMs = startedAtMs;
             this.stationName = stationName;
-            this.stationPositions = List.copyOf(stationStates(stationName, origin).keySet());
+            Map<BlockPos, Block> blocks = new LinkedHashMap<>();
+            stationStates(stationName, origin).forEach((pos, state) -> blocks.put(pos, state.getBlock()));
+            this.stationBlocks = Collections.unmodifiableMap(blocks);
             this.station = station;
             this.expect = expect;
         }
@@ -144,13 +153,21 @@ public final class ArenaManager {
         return new BlockPos(o.getX(), o.getY() + 1, o.getZ() + 2);
     }
 
-    public static boolean isChest(String station) {
-        return "chest".equals(station) || "large_chest".equals(station);
+    /** 容器工作站：小箱子、大箱子、漏斗、发射器（箱子方案、§8）。 */
+    public static boolean isStorage(String station) {
+        return storageCapacity(station) > 0;
     }
 
-    /** 箱子工作站的格数：小箱子 27、大箱子 54；不是箱子 → 0。 */
-    public static int chestCapacity(String station) {
-        return "large_chest".equals(station) ? 54 : "chest".equals(station) ? 27 : 0;
+    /** 容器工作站的格数：小箱子 27、大箱子 54、漏斗 5、发射器 9；不是容器工作站 → 0。 */
+    public static int storageCapacity(String station) {
+        if (station == null) return 0;
+        return switch (station) {
+            case "chest" -> 27;
+            case "large_chest" -> 54;
+            case "hopper" -> 5;
+            case "dispenser" -> 9;
+            default -> 0;
+        };
     }
 
     /**
@@ -160,6 +177,11 @@ public final class ArenaManager {
      * （{@code ChestBlock.updateShape} 只在邻居已经是 LEFT/RIGHT 时才跟着连，{@code ChestBlock.java:170-180}），
      * 所以两半显式设 TYPE。{@code getConnectedDirection}：LEFT 连向 FACING 的顺时针方向，朝北时是东，
      * 故 LEFT 在 (ox, oz+2)、RIGHT 在 (ox+1, oz+2)。准星对着 LEFT 那一半。
+     *
+     * <p>漏斗（§8 C15）：正下方的地板换成红石块。漏斗的 ENABLED 在放置、邻居变化时按红石信号重设
+     * （{@code HopperBlock.java:99-125}），只有真的有信号才锁得住，锁住后不推送、不吸掉落物。
+     * 状态里也写 ENABLED=false：同一块漏斗重搭时状态相同就不动它，不会被写回"启用"。
+     * 搭建时同一列先放地板再放工作站，所以换成发射器时红石块先变回石头，发射器不会被触发。
      */
     private static Map<BlockPos, BlockState> stationStates(String station, BlockPos o) {
         Map<BlockPos, BlockState> out = new LinkedHashMap<>();
@@ -171,6 +193,10 @@ public final class ArenaManager {
                 out.put(at, chestState(ChestType.LEFT));
                 out.put(at.east(), chestState(ChestType.RIGHT));
             }
+            case "hopper" -> {
+                out.put(at, Blocks.HOPPER.defaultBlockState().setValue(HopperBlock.ENABLED, false));
+                out.put(at.below(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+            }
             default -> out.put(at, station(station).defaultBlockState());
         }
         return out;
@@ -181,14 +207,20 @@ public final class ArenaManager {
     }
 
     /**
-     * 工作站箱子的容器。大箱子取合并容器，格号与界面一致（RIGHT 那半在前，{@code ChestBlock.combine}）；
-     * 只剩一半时就是那一半。那一格不是箱子（被挖掉了）→ null。
+     * 容器工作站的容器。大箱子取合并容器，格号与界面一致（RIGHT 那半在前，{@code ChestBlock.combine}）；
+     * 只剩一半时就是那一半。漏斗、发射器就是方块实体本身。那一格不是这种容器（被挖掉了）→ null。
      */
-    private static Container stationContainer(ServerLevel level, BlockPos o) {
+    private static Container stationContainer(ServerLevel level, BlockPos o, String station) {
         BlockPos at = stationPos(o);
         BlockState state = level.getBlockState(at);
-        if (!(state.getBlock() instanceof ChestBlock chest)) return null;
-        return ChestBlock.getContainer(chest, state, level, at, true);
+        if (state.getBlock() instanceof ChestBlock chest && state.is(Blocks.CHEST) && ("chest".equals(station) || "large_chest".equals(station))) {
+            return ChestBlock.getContainer(chest, state, level, at, true);
+        }
+        Block block = STATIONS.get(station);
+        if ((block == Blocks.HOPPER || block == Blocks.DISPENSER) && state.is(block) && level.getBlockEntity(at) instanceof Container container) {
+            return container;
+        }
+        return null;
     }
 
     /** 世界关闭时丢掉进行中的状态，避免带进下一个世界。 */
@@ -210,7 +242,9 @@ public final class ArenaManager {
         // 换箱子大小时，多出来的那半随场内清空改回空气
         for (int dx = -5; dx <= 5; dx++) {
             for (int dz = -5; dz <= 5; dz++) {
-                placed += set(level, new BlockPos(ox + dx, oy, oz + dz), Blocks.STONE.defaultBlockState());
+                // 地板也从工作站表里取（漏斗下面的红石块），同一列先放地板再放工作站（§8 C15）
+                BlockPos floor = new BlockPos(ox + dx, oy, oz + dz);
+                placed += set(level, floor, stationAt.getOrDefault(floor, Blocks.STONE.defaultBlockState()));
                 boolean wall = Math.abs(dx) == 5 || Math.abs(dz) == 5;
                 for (int dy = 1; dy <= 3; dy++) {
                     BlockPos pos = new BlockPos(ox + dx, oy + dy, oz + dz);
@@ -350,8 +384,8 @@ public final class ArenaManager {
                                               Expect expect, long dayTime) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         Block stationBlock = station(station);
-        checkChestItems(chestItems, chestCapacity(station));
-        if (expect != null && !isChest(station)) throw new IllegalArgumentException("expect needs a chest station");
+        checkChestItems(chestItems, storageCapacity(station));
+        if (expect != null && !isStorage(station)) throw new IllegalArgumentException("expect needs a container station (chest, large_chest, hopper, dispenser)");
         List<Give> items = split(requested, seed);
         List<ItemStack> stacks = new ArrayList<>();
         for (Give g : items) stacks.add(new ItemStack(item(g.id()), g.count()));
@@ -391,9 +425,9 @@ public final class ArenaManager {
         player.inventoryMenu.broadcastChanges();
         // 8. 箱子：先清空（上一轮剩下的不能留），再放本轮的
         Container chest = null;
-        if (isChest(station)) {
-            chest = stationContainer(level, o);
-            if (chest == null) throw new IllegalStateException("no chest at " + stationPos(o) + " after building the arena");
+        if (isStorage(station)) {
+            chest = stationContainer(level, o, station);
+            if (chest == null) throw new IllegalStateException("no " + station + " at " + stationPos(o) + " after building the arena");
             chest.clearContent();
             for (Give g : chestItems) chest.setItem(g.slot(), new ItemStack(item(g.id()), g.count()));
             chest.setChanged();
@@ -451,9 +485,9 @@ public final class ArenaManager {
         out.put("craftedDelta", delta);
         out.put("inventory", inventory(player, active.watch));
         out.put("insideArena", inside(server, player, active.origin));
-        if (isChest(active.stationName)) {
-            // 箱子方案 C8：四处分开计数——物品栏（不含光标）、箱子、光标、场内地上
-            Container chest = stationContainer(level, active.origin);
+        if (isStorage(active.stationName)) {
+            // 箱子方案 C8：四处分开计数——物品栏（不含光标）、容器、光标、场内地上
+            Container chest = stationContainer(level, active.origin, active.stationName);
             out.put("chestSlots", chest != null ? chest.getContainerSize() : null);
             out.put("chest", chest != null ? counts(chest) : null);
             out.put("held", counts(player.getInventory()));
@@ -463,9 +497,9 @@ public final class ArenaManager {
         return out;
     }
 
-    /** 工作站的每一格都还是那种方块（大箱子要两半都在）。 */
+    /** 工作站的每一格都还是应有的方块（大箱子要两半都在，漏斗下面的红石块也要在，§8 S22）。 */
     private static boolean stationIntact(ServerLevel level, Run run) {
-        for (BlockPos pos : run.stationPositions) if (!level.getBlockState(pos).is(run.station)) return false;
+        for (Map.Entry<BlockPos, Block> e : run.stationBlocks.entrySet()) if (!level.getBlockState(e.getKey()).is(e.getValue())) return false;
         return true;
     }
 
@@ -506,15 +540,23 @@ public final class ArenaManager {
         }
     }
 
-    /** 当前界面是不是这个工作站的界面：工作台 → CraftingMenu（物品栏的 2×2 是 InventoryMenu，不会误记）；箱子 → ChestMenu。 */
+    /**
+     * 当前界面是不是这个工作站的界面：工作台 → CraftingMenu（物品栏的 2×2 是 InventoryMenu，不会误记）；
+     * 箱子 → ChestMenu；漏斗 → HopperMenu；发射器 → DispenserMenu。
+     */
     private static boolean opensStation(String station, AbstractContainerMenu menu) {
-        return isChest(station) ? menu instanceof ChestMenu : menu instanceof CraftingMenu;
+        return switch (station) {
+            case "chest", "large_chest" -> menu instanceof ChestMenu;
+            case "hopper" -> menu instanceof HopperMenu;
+            case "dispenser" -> menu instanceof DispenserMenu;
+            default -> menu instanceof CraftingMenu;
+        };
     }
 
-    /** 箱子方案 C9：物品栏（不含光标）与箱子的计数恰好等于 expect，且光标为空。箱子不在了 → 否。 */
+    /** 箱子方案 C9：物品栏（不含光标）与容器的计数恰好等于 expect，且光标为空。容器不在了 → 否。 */
     private static boolean reached(ServerLevel level, ServerPlayer player, Run run) {
         if (!player.containerMenu.getCarried().isEmpty()) return false;
-        Container chest = stationContainer(level, run.origin);
+        Container chest = stationContainer(level, run.origin, run.stationName);
         return chest != null && counts(player.getInventory()).equals(run.expect.inventory()) && counts(chest).equals(run.expect.container());
     }
 

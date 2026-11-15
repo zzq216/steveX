@@ -39,21 +39,21 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const seconds = (label, ms) => (ms === null || ms === undefined ? '' : `，${label} ${(ms / 1000).toFixed(1)} 秒`)
 
 /** 题型选项的命令行名 → start() 的参数名（n、m 是合成题的份数与次数） */
-const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', types: 'types' }
+const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types' }
 
 /**
  * `/bt train` 的参数：`<场地> [item=…] [runs=…] [seed=…]`，合成题另有 `[n=…] [m=…]`，箱子题另有
- * `[kind=…] [rel=…] [chest=…] [stack=…] [types=…]`。这里只查写法；哪个场地认哪些选项由 start 按题型查。
+ * `[kind=…] [rel=…] [chest=…] [stack=…] [fill=…] [types=…]`。这里只查写法；哪个场地认哪些选项由 start 按题型查。
  * n、m、types 原样留成字符串（"4" / "2-5"），start 里解析。
- * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, types } | { ok: false, error }}
+ * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types } | { ok: false, error }}
  */
 export function parseTrainArgs(words) {
   const [arena, ...options] = words
   if (!arena) return { ok: false, error: '缺场地名，例如 /bt train craft2x2' }
-  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, types: null }
+  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null }
   for (const option of options) {
-    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|types)=(.+)$/.exec(option)
-    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / types=）` }
+    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types)=(.+)$/.exec(option)
+    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types=）` }
     const [, key, value] = match
     if (key === 'n' || key === 'm' || key === 'types') {
       try {
