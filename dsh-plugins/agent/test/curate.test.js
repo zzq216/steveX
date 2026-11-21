@@ -110,9 +110,9 @@ test('capsule_retire：reason 必填；下架后搜索不出、get 能取、带�
   assert.deepEqual([done.op, done.key, done.after.supersededBy, done.after.by], ['retire', 'code/test.has-item', 'code/test.air-below', 'k1'])
   assert.match(text('capsule_retire', {}, done), /已下架：code\/test\.has-item（取代者 code\/test\.air-below）/)
 
-  assert.ok(!(await call('capsule_search', {})).some((r) => r.ref === refs['test.has-item']))
+  assert.ok(!(await call('capsule_search', {})).items.some((r) => r.ref === 'code/test.has-item'))
   const withRetired = await call('capsule_search', { query: 'has-item', includeRetired: true })
-  assert.equal(withRetired[0].retired.reason, '被 air-below 取代（演示）')
+  assert.deepEqual(withRetired.items[0], { ref: 'code/test.has-item', kind: 'condition', retired: 'code/test.air-below' }, '只给名字、种类与取代者')
   assert.equal((await call('capsule_get', { ref: 'code/test.has-item' })).retired.supersededBy, 'code/test.air-below')
 
   // 带哈希的引用照常装载；新树引用下架的名字 → 警告，不拦
@@ -159,7 +159,7 @@ test('capsule_describe：不换哈希、文件与 manifest 一起改；内置不
   assert.match(text('capsule_describe', {}, changed), /原来：氧气低于 value\n现在：条件：玩家氧气低于/)
   assert.equal(library.readManifest()['code/test.air-below'].hash, before, '不产生新版本')
   assert.equal(library.get(refs['test.air-below']).description, '条件：玩家氧气低于 params.value（溺水前的守卫）', '条目文件也改了，哈希仍对得上')
-  assert.match((await call('capsule_search', { query: '溺水' }))[0].ref, /test\.air-below/)
+  assert.equal((await call('capsule_search', { query: '溺水' })).items[0].ref, 'code/test.air-below', '说明里命中也能搜到')
 
   assert.match((await call('bt_curate_done', { requestId: 'k1', reason: '' })).error, /reason is required/)
   const finished = await call('bt_curate_done', { requestId: 'k1', reason: '补了一条说明' })

@@ -457,3 +457,25 @@ test('capsule_repin：存新版代码后列出还钉着旧版的子树；换引�
   assert.ok(done.saved.includes(inner2.ref) && done.saved.includes(outer2.ref))
   assert.match(prompts.skills.review, /要让库里某棵树改用新版，用 `capsule_repin`/)
 })
+
+test('capsule_save 的命名规则（2026-11-21）：新名字要写成"领域.做什么"，不能用临时领域；已有名字替换时不查', async () => {
+  const { capsuleNameProblem } = await import('../src/capsules/save.js')
+  for (const ok of ['craft.plan-batch-fill', 'anvil.slot0-has-item', 'trees.x-y', 'inv.lost-exact-others-unchanged']) assert.equal(capsuleNameProblem(ok), null, ok)
+  assert.match(capsuleNameProblem('anvil-prep'), /must read "<domain>\.<what-it-does>"/)
+  assert.match(capsuleNameProblem('double'), /must read/)
+  assert.match(capsuleNameProblem('tmp.test-tree4'), /uses "tmp" as its domain/)
+  assert.match(capsuleNameProblem('test.parse-probe'), /uses "test" as its domain/)
+
+  const { bridge } = await finished()
+  const save = (args) => bridge.saveCapsule({ sessionId: 's1', requestId: 'c1', ...args })
+  assert.match(save({ folder: 'code', name: 'double', description: '乘 2', from: 'task/double' }).errors[0], /must read "<domain>\.<what-it-does>"/)
+  assert.equal(save({ folder: 'code', name: 'math.double', description: '乘 2', from: 'task/double' }).ok, true)
+})
+
+test('hasQueuedRequest（2026-11-21）：发给会话、还没绑到回合的开着的请求算排队；绑上回合、或者结束了就不算', async () => {
+  const { bridge, claim } = await finished()
+  assert.equal(bridge.hasQueuedRequest('s1'), true, '复盘请求 c1 发出来了、还没开回合')
+  assert.equal(bridge.hasQueuedRequest('s2'), false, '别的会话没有')
+  claim(3)
+  assert.equal(bridge.hasQueuedRequest('s1'), false, '绑到回合上了')
+})

@@ -33,7 +33,6 @@ export function knowledgeTools({ registry, library, stats = null, history = null
   const notesOf = (ref) => history?.notesFor(ref) ?? []
   // 使用统计（整理方案 §4）：只展示，不参与排序；没有数据写"尚无记录"（没用过 ≠ 没用）
   const keyOf = (ref) => ref.slice(0, ref.lastIndexOf('@'))
-  const usageOf = (ref, kind) => stats ? usageSummary(stats.byName(keyOf(ref))?.total ?? null, kind, keyOf(ref)) : '（没有统计）'
   const usageDetail = (ref, entry) => {
     const key = keyOf(ref)
     const kind = entry.signature.returns === 'bool' ? 'condition' : 'compute'
@@ -104,7 +103,9 @@ export function knowledgeTools({ registry, library, stats = null, history = null
    */
   const JSON_NOTES = {
     recipes: 'key / ingredients 里的标签已经展开成具体物品 id（数据里没有 #minecraft:… 形式的标签）；shaped 的 pattern 按配方生成器里的写法原样保留，可能带空格组成的空列或空行（如 [" M ", " M "]）。',
-    stonecutting: '切石机配方（minecraft:stonecutting）：input 是单个物品 id，result 是产物，count 是切一次（消耗 1 个 input）得到的产物个数。'
+    stonecutting: '切石机配方（minecraft:stonecutting）：input 是单个物品 id，result 是产物，count 是切一次（消耗 1 个 input）得到的产物个数。',
+    cooking: '烹饪配方：type 是 smelting（熔炉）/ blasting（高炉）/ smoking（烟熏炉）/ campfire_cooking（营火）；input 是能用的原料 id 列表（标签已展开），任选一种；result 是产物，count 是烧一个原料得到的产物个数；time 是烧一个所需的 tick 数。',
+    items: '物品属性，每条一个物品：id；maxStack 是堆叠上限；remainder 是合成后留在格子里的剩余物；burn 是当燃料时在熔炉里燃烧的 tick 数（只有燃料才有这一项）；enchantable 是可附魔程度（只有能上附魔台的物品才有这一项），enchantingTable: false 表示附魔台给它出不了附魔。只收了配方表、烹饪配方里出现过的物品、全部燃料和全部可附魔物品。高炉、烟熏炉里的燃烧时长是 burn 的一半（整数除法，BlastFurnaceBlockEntity / SmokerBlockEntity 的 getBurnDuration）。'
   }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),
@@ -196,46 +197,48 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     {
       name: 'capsule_search',
       description: [
-        '查胶囊库：可复用的条件代码（cond）、Compute 代码（compute）、子树（use），以及本任务的代码草稿（task/）。',
-        '给 query = 按空白拆成几个词，引用名或说明里含任一词就返回，含的词越多越靠前；不给 = 全部。返回每条的引用、种类、说明、输入 / 输出名与使用统计（usage，同名各版本加总；只是记录，不影响排序）；要看完整契约、正文与统计明细用 capsule_get。',
-        '已下架的条目默认不返回；includeRetired = true 时一起返回，并带 retired（下架理由与取代者）。',
-        'knownIssues = 以往任务复盘时记下、还待验证（open）或受现有能力限制（blocked）的问题条数（内容用 capsule_get 看）。',
-        'versions = 同名版本数（≥2 才有）；untested = 列出的这一版还没在任务里执行过；olderBetterWhen = 替换时记下的"旧版在什么情况下更好"的判断（最多 2 条，带旧版哈希、实测 / 推测与核对状态；要用旧版就写带 @hash 的引用）。版本链用 capsule_get 看'
+        '查胶囊库：可复用的条件代码（condition）、Compute 代码（compute）、子树（tree），以及本任务的代码草稿（task/）。',
+        '给 query = 按空白拆成几个词，名字或说明里含任一词就返回；名字里命中的排在前面，含的词越多越靠前；不给 = 全部。',
+        '只返回每条的名字（不带 @hash = 最新版）与种类；说明、契约（输入 / 输出）、正文、使用统计、已知问题、版本链都用 capsule_get 按名字取。名字写的是"领域.做什么"，先按名字挑出候选，再 capsule_get 看清楚再用。',
+        `分页：一页 limit 条（默认 ${CAPSULE_SEARCH_LIMIT}，最多 ${CAPSULE_SEARCH_MAX}），total = 命中总数，后面的用 offset 接着取（结果里的 next 就是下一页的 offset）。`,
+        '已下架的条目默认不返回；includeRetired = true 时一起返回，带 retired（取代者的名字；没有取代者就是 true）。'
       ].join('\n'),
       parameters: {
         query: { type: 'string', description: '一个或几个词（空白分隔），不区分大小写' },
-        includeRetired: { type: 'boolean', description: '也返回已下架的条目（默认 false）' }
+        includeRetired: { type: 'boolean', description: '也返回已下架的条目（默认 false）' },
+        limit: { type: 'integer', description: `一页几条（1–${CAPSULE_SEARCH_MAX}，默认 ${CAPSULE_SEARCH_LIMIT}）` },
+        offset: { type: 'integer', description: '从第几条起（0 起算，默认 0）' }
       },
       output: { schema: JSON_OUTPUT, render },
       isConcurrencySafe: () => true,
       async execute(args) {
         const words = (args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean)
-        const hits = (row) => words.filter((w) => row.ref.toLowerCase().includes(w) || row.description.toLowerCase().includes(w)).length
-        return library.list()
+        // 名字里命中的词记 2 分、只在说明里命中的记 1 分：结果只给名字，名字里看得出相关的排前面
+        const score = (row) => {
+          const name = keyOf(row.ref).toLowerCase()
+          const text = row.description.toLowerCase()
+          return words.reduce((n, w) => n + (name.includes(w) ? 2 : text.includes(w) ? 1 : 0), 0)
+        }
+        const rows = library.list()
           .filter((row) => args.includeRetired || !row.retired)
-          .map((row) => ({ row, n: words.length ? hits(row) : 1 }))
+          .map((row) => ({ row, n: words.length ? score(row) : 1 }))
           .filter(({ n }) => n > 0)
-          .sort((a, b) => b.n - a.n)
-          .map(({ row }) => {
-            const entry = library.tryGet(row.ref)
-            return {
-              ref: row.ref, kind: row.kind, description: row.description,
-              inputs: Object.keys(entry?.signature.inputs ?? {}),
-              ...(entry?.signature.outputs ? { outputs: Object.keys(entry.signature.outputs) } : {}),
-              ...(row.draft ? {} : { usage: usageOf(row.ref, row.kind) }),
-              ...(!row.draft && notesOf(row.ref).length ? { knownIssues: notesOf(row.ref).length } : {}),
-              ...(!row.draft && !row.builtin ? versionInfo(row.ref) : {}),
-              ...(row.locked ? { locked: true } : {}),
-              ...(row.draft ? { draft: true } : {}),
-              ...(row.retired ? { retired: row.retired } : {})
-            }
-          })
+          .sort((a, b) => b.n - a.n || keyOf(a.row.ref).localeCompare(keyOf(b.row.ref)))
+        const max = Math.min(CAPSULE_SEARCH_MAX, Math.max(1, Number.isInteger(args.limit) ? args.limit : CAPSULE_SEARCH_LIMIT))
+        const from = Number.isInteger(args.offset) && args.offset > 0 ? args.offset : 0
+        const items = rows.slice(from, from + max).map(({ row }) => ({
+          ref: keyOf(row.ref), kind: row.kind,
+          ...(row.draft ? { draft: true } : {}),
+          ...(row.retired ? { retired: row.retired.supersededBy ?? true } : {})
+        }))
+        const next = from + items.length
+        return { total: rows.length, offset: from, items, ...(next < rows.length ? { next } : {}) }
       }
     },
     {
       name: 'capsule_get',
       description: [
-        '取一个胶囊条目的完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字、在几种参数组合上成功过与没成功过的组合）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions。',
+        '取一个胶囊条目的说明（做什么、什么前提下用）、完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字、在几种参数组合上成功过与没成功过的组合）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions；versions = 同名版本数（≥2 才有），untested = 这一版还没在任务里执行过，olderBetterWhen = 替换时记下的"旧版在什么情况下更好"（最多 2 条；要用旧版就写带 @hash 的引用）。',
         '正文按行号列在最后（子树按 JSON 分行）；放不下时只列前面能放下的行，并写明共几行——后面的用 start（从第几行起）/ lines（读几行）接着读，这时只返回那一段正文。只要契约与统计、不要正文：withBody: false。'
       ].join('\n'),
       parameters: {
@@ -263,6 +266,7 @@ export function knowledgeTools({ registry, library, stats = null, history = null
           ...(info && info.hash !== entry.hash ? { latest: `${key}@${info.hash}` } : {}),
           ...(stats ? { usage: usageDetail(ref, entry) } : {}),
           ...(notesOf(ref).length ? { knownIssues: notesOf(ref).map((n) => ({ ...n, version: n.hash === entry.hash ? '这个版本' : n.hash ? `针对 @${n.hash}` : '版本未知' })) } : {}),
+          ...(!host && info ? versionInfo(ref) : {}),
           ...(!host && info ? chainFields(key, info.hash, entry) : {}),
           ...(host ? { host: true, note: '宿主实现的内置查询：参数只许字面量' } : { body: entry.body })
         }
@@ -270,6 +274,10 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     }
   ]
 }
+
+/** capsule_search 每页缺省 / 最多几条（2026-11-21：结果只给名字） */
+export const CAPSULE_SEARCH_LIMIT = 30
+export const CAPSULE_SEARCH_MAX = 100
 
 /** capsule_get 一页正文的默认行数与上限 */
 const BODY_PAGE_LINES = 300

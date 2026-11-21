@@ -2,7 +2,7 @@ import path from 'node:path'
 import { TreeError } from '../bt/executor.js'
 import { renderTree, ancestorsOf } from '../bt/overview.js'
 import { renderDirectory, buildReflectDirectory, renderReflectDirectory } from '../bt/evidence.js'
-import { repinTree, saveCapsule, saveDraft } from '../capsules/save.js'
+import { capsuleNameProblem, repinTree, saveCapsule, saveDraft } from '../capsules/save.js'
 import { CapsuleVersions } from '../capsules/versions.js'
 import { collectEvidence, checkLiterals, addShownValues, addSnapshotValues, seenLiteralHits, valueKey } from '../capsules/literals.js'
 import { walkSpec } from '../bt/build.js'
@@ -46,7 +46,7 @@ export const SOURCE_KIND = 'stevex-bt'
 /**
  * 事实库与 MC 源码（P5-D11）：接口知识，不是此刻的世界状态，进所有回合（含 fact_write：查了源码就要补事实库，§4.4）。
  */
-export const FACT_TOOLS = Object.freeze(['fact_search', 'mc_source_search', 'mc_source_read', 'fact_write'])
+export const FACT_TOOLS = Object.freeze(['fact_search', 'fact_get', 'mc_source_search', 'mc_source_read', 'fact_write'])
 export const KNOWLEDGE_TOOLS = Object.freeze(['command_docs', 'data_shapes', 'capsule_search', 'capsule_get', ...FACT_TOOLS])
 /**
  * 修复请求（P2）：多一个 bt_inspect——能看自己的状态与树自己的执行过程（快照、事件、黑板值、现场读取），
@@ -449,6 +449,9 @@ export class Bridge {
 
     const key = `${folder}/${name}`
     const existing = this.library.readManifest()[key]
+    // 命名规则（2026-11-21）：新名字要写成"领域.做什么"；已有的名字替换时不查
+    const nameProblem = existing ? null : capsuleNameProblem(name)
+    if (nameProblem) return { ok: false, errors: [nameProblem] }
     if (existing) {
       if (existing.locked) return { ok: false, errors: [`${key} is locked (a hand-made base entry) and cannot be replaced; pick another name`] }
       const current = this.library.tryGet(`${key}@${existing.hash}`)
@@ -1167,6 +1170,18 @@ export class Bridge {
       warnings.push(`[${node.id}] ${key} is retired (${retired.reason})${retired.supersededBy ? `; superseded by ${retired.supersededBy}` : ''}. The tree still runs — this is only a warning`)
     })
     return warnings.length ? { warnings } : {}
+  }
+
+  /**
+   * 有没有已经发给这个会话、还在排队等新回合的请求（开着、还没绑到任何回合）。
+   * 回合要结束时，"查了源码没写事实"的提醒先给它让路（2026-11-21，task-20261121063943-1：修复请求在提醒那一步后面排了 41 秒）。
+   */
+  hasQueuedRequest(sessionId) {
+    const bound = new Set(this.turns.values())
+    for (const req of this.requests.values()) {
+      if (req.sessionId === sessionId && this.isOpen(req) && !bound.has(req.requestId)) return true
+    }
+    return false
   }
 
   isOpen(req) {

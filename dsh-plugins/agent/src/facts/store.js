@@ -18,6 +18,11 @@ import { SourceError } from './source.js'
 const NAME = /^[a-z0-9][a-z0-9._-]*$/
 const MAX_STATEMENT = 500
 
+/** fact_search 每页缺省 / 最多几条（2026-11-21：结果只给名字，一页可以多给） */
+export const SEARCH_LIMIT = 30
+export const SEARCH_MAX = 100
+export const GET_MAX = 10
+
 export class FactStore {
   /**
    * @param {object} options
@@ -176,9 +181,10 @@ export class FactStore {
 
   /**
    * fact_search（P5-D7）：多词任一命中（name / statement / tags），命中词越多越靠前。
-   * @returns {{ total: number, facts: object[] }}  每条带 refs（不带源码正文）；失效的引用标 stale
+   * 分页（2026-11-21）：offset 起取 limit 条（1–100，缺省 30），total 是命中总数——宽泛的查询也能一页页翻到底。
+   * @returns {{ total: number, offset: number, facts: object[] }}  每条带 refs（不带源码正文）；失效的引用标 stale
    */
-  search({ query = '', tags = [], limit = 20 } = {}) {
+  search({ query = '', tags = [], limit = SEARCH_LIMIT, offset = 0 } = {}) {
     const terms = queryTerms(query)
     const wanted = Array.isArray(tags) ? tags : []
     const rows = []
@@ -189,17 +195,29 @@ export class FactStore {
       rows.push({ fact, score })
     }
     rows.sort((a, b) => b.score - a.score || a.fact.name.localeCompare(b.fact.name))
-    const max = Math.min(50, Math.max(1, Number.isInteger(limit) ? limit : 20))
+    const max = Math.min(SEARCH_MAX, Math.max(1, Number.isInteger(limit) ? limit : SEARCH_LIMIT))
+    const from = Number.isInteger(offset) && offset > 0 ? offset : 0
     return {
       total: rows.length,
-      facts: rows.slice(0, max).map(({ fact }) => ({
-        name: fact.name,
-        statement: fact.statement,
-        refs: fact.refs.map((ref) => (this.refStatus(ref) === 'ok' ? { file: ref.file, lines: ref.lines } : { file: ref.file, lines: ref.lines, stale: this.refStatus(ref) })),
-        ...(fact.tags ? { tags: fact.tags } : {}),
-        rev: fact.rev
-      }))
+      offset: from,
+      facts: rows.slice(from, from + max).map(({ fact }) => this.view(fact))
     }
+  }
+
+  /** 一条事实给大模型看的样子：名字、陈述、引用（失效的标 stale）、标签、修订号 */
+  view(fact) {
+    return {
+      name: fact.name,
+      statement: fact.statement,
+      refs: fact.refs.map((ref) => (this.refStatus(ref) === 'ok' ? { file: ref.file, lines: ref.lines } : { file: ref.file, lines: ref.lines, stale: this.refStatus(ref) })),
+      ...(fact.tags ? { tags: fact.tags } : {}),
+      rev: fact.rev
+    }
+  }
+
+  /** fact_get：按名字取；合并掉的旧名字（aliases）也认，返回合并后的那条。找不到 → null */
+  find(name) {
+    return this.get(name) ?? this.list().find((fact) => (fact.aliases ?? []).includes(name)) ?? null
   }
 
   /**

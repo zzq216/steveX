@@ -5,6 +5,10 @@ import { loadItemProps, loadRecipes, parseCountSpec } from './sampler.js'
 import { craft, judge, resolveCounts } from './craft.js'
 import { STORAGE_CHOICES, parseTargetsSpec, parseTypesSpec, storage } from './storage.js'
 import { STONECUT_CHOICES, loadStonecutting, parseMaterialsSpec, parseSlotsSpec, parseStylesSpec, stonecut } from './stonecut.js'
+import { COOK_CHOICES, cook, loadCooking, parseCookSlotsSpec, parseTotalSpec } from './cook.js'
+import { enchant, parseBookshelves, parseXpLevel } from './enchant.js'
+import { beacon, parseAmplifier, parseBeaconCountSpec, parseLevelSpec } from './beacon.js'
+import { ANVIL_CHOICES, anvil, parseEnchantsSpec } from './anvil.js'
 
 export { judge, resolveCounts }
 
@@ -20,13 +24,15 @@ export { judge, resolveCounts }
  *   → arena/finish（读最终状态、传送出场）→ 判定 → 等本轮会话空闲（复盘结束）→ 统计回合与 token → 追加一行 jsonl
  *
  * 题型（箱子训练场设计方案 C11）：场地配置的 type 选题型模块——craft（craft.js，合成，缺省）、storage（storage.js，
- * 箱子存取）、stonecut（stonecut.js，切石机，docs/切石机训练场设计方案.md）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
+ * 箱子存取）、stonecut（stonecut.js，切石机，docs/切石机训练场设计方案.md）、cook（cook.js，熔炉 / 高炉 / 烟熏炉，docs/熔炉训练场设计方案.md）、enchant（enchant.js，附魔台，docs/附魔台训练场设计方案.md）、beacon（beacon.js，信标，docs/信标训练场设计方案.md）、anvil（anvil.js，铁砧，docs/铁砧训练场设计方案.md）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
  * 有工作站的场地：prepare 的服务器射线自检不过（题型的 afterPrepare 报错）时本轮记 aborted 并停止整组（W2）；
  * 记录里有 openedMs、stationIntact（W8、W9）。
+ * 题型可选的异步钩子（信标训练场设计方案 G2、G6）：ready 在 afterPrepare 之后、发任务之前等场地真正就绪（信标数出底座等级），
+ * 报错时本轮 aborted 并停止整组；settle 在 arena/finish 之前等场地稳定下来（扔出的付款物品被捡回）。
  */
 
 /** 场地配置的 type → 题型模块 */
-const TASK_TYPES = { craft, storage, stonecut }
+const TASK_TYPES = { craft, storage, stonecut, cook, enchant, beacon, anvil }
 /** prepare 之后等客户端更新准星目标（W2）：客户端要过 1 个 tick 才知道准星指着工作站 */
 const AIM_SETTLE_MS = 100
 /** 中止之后等任务真正停下的上限 */
@@ -40,23 +46,26 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const seconds = (label, ms) => (ms === null || ms === undefined ? '' : `，${label} ${(ms / 1000).toFixed(1)} 秒`)
 
 /** 题型选项的命令行名 → start() 的参数名（n、m 是合成题的份数与次数） */
-const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types', targets: 'targets', materials: 'materials', slots: 'slots', styles: 'styles', bypass: 'bypass', material: 'material' }
+const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types', targets: 'targets', materials: 'materials', slots: 'slots', styles: 'styles', bypass: 'bypass', material: 'material', station: 'station', raw: 'raw', fuel: 'fuel', rawSlots: 'rawSlots', fuelSlots: 'fuelSlots', input: 'input', fuelItem: 'fuelItem', bookshelves: 'bookshelves', xpLevel: 'xpLevel', effect: 'effect', amplifier: 'amplifier', primary: 'primary', level: 'level', payment: 'payment', count: 'count', task: 'task', second: 'second', enchants: 'enchants', curses: 'curses' }
 /** 写成 k 或 a-b 的选项 → 校验函数（原样留成字符串，start 里解析） */
-const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSpec(v, 'm'), types: parseTypesSpec, targets: parseTargetsSpec, materials: parseMaterialsSpec, slots: parseSlotsSpec, styles: parseStylesSpec }
+const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSpec(v, 'm'), types: parseTypesSpec, targets: parseTargetsSpec, materials: parseMaterialsSpec, slots: parseSlotsSpec, styles: parseStylesSpec, raw: (v) => parseTotalSpec('raw', v), fuel: (v) => parseTotalSpec('fuel', v), rawSlots: (v) => parseCookSlotsSpec('rawSlots', v), fuelSlots: (v) => parseCookSlotsSpec('fuelSlots', v), level: parseLevelSpec, count: parseBeaconCountSpec, enchants: parseEnchantsSpec }
 
 /**
  * `/bt train` 的参数：`<场地> [item=…] [runs=…] [seed=…]`，合成题另有 `[n=…] [m=…]`，箱子题另有
- * `[kind=…] [rel=…] [chest=…] [stack=…] [fill=…] [types=…] [targets=…]`，切石题另有 `[materials=…] [slots=…] [fill=…] [styles=…] [bypass=…] [material=…]`。
- * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles 原样留成字符串（"4" / "2-5"），start 里解析。
- * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types, targets, materials, slots, styles, bypass, material } | { ok: false, error }}
+ * `[kind=…] [rel=…] [chest=…] [stack=…] [fill=…] [types=…] [targets=…]`，切石题另有 `[materials=…] [slots=…] [fill=…] [styles=…] [bypass=…] [material=…]`，
+ * 熔炉题另有 `[station=…] [raw=…] [fuel=…] [rawSlots=…] [fuelSlots=…] [n=…] [m=…] [input=…] [fuelItem=…]`，
+ * 附魔台题另有 `[item=…] [bookshelves=…] [xpLevel=…]`，信标题另有 `[effect=…] [amplifier=…] [primary=…] [level=…] [payment=…] [count=…]`（信标训练场设计方案 §5），
+ * 铁砧题另有 `[task=…] [second=…] [item=…] [enchants=…] [curses=…] [xpLevel=…]`（铁砧训练场设计方案 §5）。
+ * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles、raw、fuel、rawSlots、fuelSlots、level、count、enchants 原样留成字符串（"4" / "2-5"），start 里解析。
+ * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types, targets, materials, slots, styles, bypass, material, station, raw, fuel, rawSlots, fuelSlots, input, fuelItem, bookshelves, xpLevel, effect, amplifier, primary, level, payment, count, task, second, enchants, curses } | { ok: false, error }}
  */
 export function parseTrainArgs(words) {
   const [arena, ...options] = words
   if (!arena) return { ok: false, error: '缺场地名，例如 /bt train craft2x2' }
-  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null }
+  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null, station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null, effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null }
   for (const option of options) {
-    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types|targets|materials|slots|styles|bypass|material)=(.+)$/.exec(option)
-    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=）` }
+    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types|targets|materials|slots|styles|bypass|material|station|raw|fuel|rawSlots|fuelSlots|input|fuelItem|bookshelves|xpLevel|effect|amplifier|primary|level|payment|count|task|second|enchants|curses)=(.+)$/.exec(option)
+    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=；熔炉题 station= / raw= / fuel= / rawSlots= / fuelSlots= / n= / m= / input= / fuelItem=；附魔台题 item= / bookshelves= / xpLevel=；信标题 effect= / amplifier= / primary= / level= / payment= / count=；铁砧题 task= / second= / item= / enchants= / curses= / xpLevel=）` }
     const [, key, value] = match
     if (RANGE_OPTIONS[key]) {
       try {
@@ -71,8 +80,26 @@ export function parseTrainArgs(words) {
     } else if (STONECUT_CHOICES[key]) {
       if (!STONECUT_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${STONECUT_CHOICES[key].join(' / ')}` }
       out[key] = value
-    } else if (key === 'item' || key === 'material') {
-      if (!/^([a-z0-9_.-]+:)?[a-z0-9_/.-]+$/.test(value)) return { ok: false, error: `${key} 不像物品 id：${value}` }
+    } else if (COOK_CHOICES[key]) {
+      if (!COOK_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${COOK_CHOICES[key].join(' / ')}` }
+      out[key] = value
+    } else if (ANVIL_CHOICES[key]) {
+      if (!ANVIL_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${ANVIL_CHOICES[key].join(' / ')}` }
+      out[key] = value
+    } else if (key === 'amplifier') {
+      try {
+        out[key] = parseAmplifier(value)
+      } catch (error) {
+        return { ok: false, error: error.message }
+      }
+    } else if (key === 'bookshelves' || key === 'xpLevel') {
+      try {
+        out[key] = key === 'bookshelves' ? parseBookshelves(value) : parseXpLevel(value)
+      } catch (error) {
+        return { ok: false, error: error.message }
+      }
+    } else if (key === 'item' || key === 'material' || key === 'input' || key === 'fuelItem' || key === 'payment' || key === 'effect' || key === 'primary') {
+      if (!/^([a-z0-9_.-]+:)?[a-z0-9_/.-]+$/.test(value)) return { ok: false, error: `${key} 不像${key === 'effect' || key === 'primary' ? '效果' : '物品'} id：${value}` }
       out[key] = value
     } else {
       const n = Number(value)
@@ -271,7 +298,13 @@ export class Trainer {
     return this.cutting
   }
 
-  /** data/item-props.json（合成题的多份模式、箱子题要用）；文件不在 → null */
+  /** data/cooking.json（熔炉题出题用）；没配置或文件不在 → null */
+  cooking() {
+    if (this.cookingRecipes === undefined) this.cookingRecipes = this.config.cooking && fs.existsSync(this.config.cooking) ? loadCooking(this.config.cooking) : null
+    return this.cookingRecipes
+  }
+
+  /** data/item-props.json（合成题的多份模式、箱子题、熔炉题要用）；文件不在 → null */
   itemProps() {
     if (this.props === undefined) this.props = loadItemProps(this.config.itemProps)
     return this.props
@@ -321,6 +354,14 @@ export class Trainer {
       // 出不了题（合成题换了几次配方都放不下，T14）：本轮记 aborted 并停止整组
       return { arena, run, batch: batch.id, seed, ...task.batchFields(ctx), outcome: 'aborted', error: `sample: ${error.message}`, setupFailed: true }
     }
+    // 出题的第二步（附魔台训练场设计方案 N5）：题型要先问 mod 才能定题的（附魔台三档预览），在这里补全
+    if (task.preview) {
+      try {
+        picked = await task.preview(ctx, picked, seed, (method, params) => this.game.mod.call(method, params))
+      } catch (error) {
+        return { arena, run, batch: batch.id, seed, ...task.batchFields(ctx), outcome: 'aborted', error: `preview: ${error.message}`, setupFailed: true }
+      }
+    }
     const label = task.label(ctx, picked, seed)
     const current = { run, seed, label, phase: '等空闲', t0: null, sessionId: null, taskId: null }
     batch.current = current
@@ -358,6 +399,15 @@ export class Trainer {
       // 场地自检不过（准星没对准、大箱子没连上）：场地坐标出了问题，本轮记 aborted 并停止整组（W2、箱子方案 C2）
       await this.game.mod.call('arena/finish', { arena, origin })
       return finishRecord({ outcome: 'aborted', error: checked.error, setupFailed: true })
+    }
+    if (task.ready) {
+      current.phase = '等场地就绪'
+      const ready = await task.ready(ctx, picked, this.hookHelpers())
+      finishRecord(ready.fields ?? {})
+      if (ready.error) {
+        await this.game.mod.call('arena/finish', { arena, origin })
+        return finishRecord({ outcome: 'aborted', error: ready.error, setupFailed: true })
+      }
     }
     if (params.station) await this.sleep(AIM_SETTLE_MS)
 
@@ -444,6 +494,7 @@ export class Trainer {
       }
 
       current.phase = '结束本轮'
+      if (task.settle) await task.settle(ctx, picked, this.hookHelpers())
       const finished = await this.game.mod.call('arena/finish', { arena, origin })
       const final = finished?.ok ? finished.data : lastStatus
       if (!finished?.ok) record.error ??= `arena/finish: ${finished?.error ?? 'no response'}`
@@ -494,6 +545,11 @@ export class Trainer {
       })
     }
     return record
+  }
+
+  /** 题型异步钩子（ready、settle）用的工具：mod 调用、等待、当前时刻 */
+  hookHelpers() {
+    return { call: (method, params) => this.game.mod.call(method, params), sleep: (ms) => this.sleep(ms), now: () => this.now() }
   }
 
   /** 本任务有没有在等 LLM 回合：规划 / 展开 / 修补请求开着（复盘、整理不算）。 */

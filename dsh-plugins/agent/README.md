@@ -22,6 +22,10 @@ steveX 的行为树执行器、胶囊库与 Compute 沙箱，以及让大模型�
 | **训练场** | `/bt train`：2×2 合成专项训练（每轮重置、随机配方发 1 份材料、发任务、按 `crafted` 统计判定、记回合与 token）；mod 侧 `arena/*`（不给 agent）与游戏内 `/arena`；`npm run training-report` | **已实现**；游戏内验收通过（[训练场设计方案.md](../../docs/训练场设计方案.md) §7） |
 | **工作台训练场** | `/bt train craft3x3`：场内放工作台、准星对准它，只抽 3×3 配方（按形状分组），记打开工作台的时刻与工作台是否被挖；报告按形状汇总、列出引用的旧胶囊 | **已实现**，单元测试通过；待游戏内验收（[工作台训练场设计方案.md](../../docs/工作台训练场设计方案.md) §6） |
 | **切石机训练场** | `/bt train stonecutter`：场内放切石机，每轮把 1–3 种材料各切成指定数量的几种样式，不多不少；同一家族最多一种材料，目标是单次产出的整数倍；按物品栏、光标、输入格、地上的计数判定，多切、切错、丢失各自记 | **已实现**，单元测试通过；待游戏内验收（[切石机训练场设计方案.md](../../docs/切石机训练场设计方案.md) §6） |
+| **熔炉训练场** | `/bt train furnace`：场内放熔炉、高炉或烟熏炉（每轮随机），把 n 个原料放进原料格、m 个燃料放进燃料格，然后关掉炉子界面；炉子按原版速度工作，不要求等它烧完、不要求拿产物；按物品栏少了多少判定放料，放多、放错、丢失各自记；`prepare` 时和服务器端的真实数值核对数据 | **已实现**，单元测试通过；待游戏内验收（[熔炉训练场设计方案.md](../../docs/熔炉训练场设计方案.md) §6） |
+| **信标训练场** | `/bt train beacon`：信标下的铁块底座埋在地板下，层数每轮随机；每轮给一格付款物品，要求让信标提供指定的效果（含 II 级；再生题另要求一个主效果）后关掉界面；等信标数出底座等级再发任务；判定要求设置是原版界面能设出来的，多付、设错过、越界各自记 | **已实现**，单元测试通过；待游戏内验收（[信标训练场设计方案.md](../../docs/信标训练场设计方案.md) §7） |
+| **铁砧训练场** | `/bt train anvil`：三种任务等概率——合并附魔、改名、合并加改名。出题前用原版铁砧算法预览，保证做得出来、产物分得清；只写目标物品，不说放哪一格；判定看物品类型、附魔、名字三项，多次取出、多花经验、名字错各自记 | **已实现**，单元测试通过；待游戏内验收（[铁砧训练场设计方案.md](../../docs/铁砧训练场设计方案.md) §7） |
+| **附魔台训练场** | `/bt train enchanting`：场内放附魔台和 15 个书架，每轮给一件可附魔物品和青金石，要求附魔成带有指定附魔的物品后关掉界面；出题前用原版算法预览三档、选唯一的提示附魔作为目标，`prepare` 时用真实菜单核对；附错、丢失各自记 | **已实现**，单元测试通过；待游戏内验收（[附魔台训练场设计方案.md](../../docs/附魔台训练场设计方案.md) §6） |
 | **箱子训练场** | `/bt train chest`：场内放小箱子或大箱子，每轮"从箱子取 k 个"或"往箱子放 k 个"，k 与实有数量的关系可控（lt / eq / gt）；按两边的计数判定，多拿、动了别的、丢失各自记；mod 在 tick 里记恰好搬完的时刻 | **已实现**，单元测试通过；待游戏内验收（[箱子训练场设计方案.md](../../docs/箱子训练场设计方案.md) §6） |
 | **胶囊换引用** | 复盘工具 `capsule_repin { tree, refs }`：把库里子树最新版中指定的引用换成最新版、存成新版本（版本说明自动生成，照常校验，不自动往上换）；`capsule_save` 存同名新版时列出还钉着旧版的子树 | **已实现**，单元测试通过（[胶囊换引用设计方案.md](../../docs/胶囊换引用设计方案.md)） |
 | **整理** | 胶囊库整理：使用统计（`stats.json`，`capsule_search` / `capsule_get` 展示）、`/bt curate` 整理回合（`capsule_retire` / `capsule_describe` / `bt_curate_done`）、`curate.everyTasks` 自动触发（默认 0）、离线 GC 与脚本 | **已实现**，单元测试通过；待 DSH 内验收（[胶囊库整理设计方案.md](../../docs/胶囊库整理设计方案.md) §10.3） |
@@ -48,7 +52,9 @@ prompts/
   skills/           慢树大纲 / 慢树展开（由代码按请求放进消息，不让大模型自己挑）
   requests/         规划 / 展开 / 提醒 / 任务结束 的消息模板（{{变量}}）
 scripts/
-  extract-recipes.js  从 MC jar 生成 data/recipes.json（JSON 查询的默认数据源）和 data/stonecutting.json（切石配方）
+  extract-recipes.js  从 MC jar 生成 data/recipes.json（JSON 查询的默认数据源）、data/stonecutting.json（切石配方）和 data/cooking.json（烹饪配方）
+  extract-item-props.js  从 1.21.11 源码生成 data/item-props.json（堆叠上限、合成剩余物、燃料时长、可附魔程度；训练器用）和 data/items.json（同样内容的数组形式，json.items）
+  lib/jar.js          读 jar、展开物品标签的共用代码
   capsule-save.js     把一个胶囊条目存进库（P4 的 capsule_save 工具走同一个 saveCapsule）
   bt-run.js           不启动 DSH、直连 mod 跑手写树
 examples/           手写树与示例胶囊
@@ -137,7 +143,7 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 | `mod_query` | 透传 mod 的只读方法（`player` / `inventory` / `f3` / `container/get` …），有作用的方法一律拒绝 |
 | `nbt_query` / `json_query` | 记忆世界 NBT / 白名单 JSON（配方）；参数与树里 `code/core.*.query` 相同，按任务钉数据快照 |
 | `command_docs` | 命令注册表：名字、说明、参数 schema |
-| `capsule_search` / `capsule_get` | 胶囊库（含本任务草稿）：契约与正文 |
+| `capsule_search` / `capsule_get` | 胶囊库（含本任务草稿）。`capsule_search` 只给名字与种类，分页（`limit` 默认 30、最多 100，`offset`）；说明、契约、正文、统计、已知问题、版本信息都在 `capsule_get` 里（2026-11-21） |
 | `bt_view` | 当前树（id + 返回码）、黑板、在飞请求、草稿 |
 | `bt_submit_tree` / `bt_submit_expansion` | 提交大纲 / 展开；可带 `code`：任务内代码草稿，树里用 `task/<名字>` 引用 |
 | `bt_abort_task` | 放弃规划或任务 |
@@ -191,7 +197,8 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
 
 | 工具（所有回合） | 作用 |
 |---|---|
-| `fact_search` | `{ query?, tags?, limit? }`：多词任一命中；只给引用，失效的标 `stale` |
+| `fact_search` | `{ query?, tags?, limit?, offset? }`：多词任一命中；只给名字、标签，引用失效的标 `stale`；一页默认 30 条、最多 100，`next` 是下一页的 `offset`（2026-11-21） |
+| `fact_get` | `{ names }`（1–10 个）：陈述、源码引用（失效的标 `stale`）、标签、修订号；合并掉的旧名字也认 |
 | `fact_write` | `{ name, statement, refs, tags?, replaces? }`；写入后附至多 3 条相近事实 |
 | `mc_source_search` | `{ pattern, fixed?, path?, glob?, context?, limit? }` |
 | `mc_source_read` | `{ file, start?, end? }`，一次 ≤ `facts.readMaxLines` 行 |
@@ -262,5 +269,10 @@ DSH 里：按 `cordis.patch.yml` 装进 profile 后用 `/bt run <file>`、`/bt s
    - `prepare` 补回切石机、对准准星（`aimOk` 自检），登记只看目标的 `expect { targets, allowed }`
    - 判定：`success`（目标恰好都在物品栏里，光标为空，没有多余产物）、`overshoot`、`miscut`（出现题目没要的产物，包括没用完的中间产物）、`lost`（切石机被挖、地上有掉落物）、`false_success`、`failed`、`timeout`、`aborted`；剩多少材料不判
    - 记录多 `materialCount`、`targetCount`、`materials`（每种材料的家族、格数、数量和各样式的 `yield` / `uses` / `want` / `made`）、`layout`、`extra`、`final`（含 `cutterInput`）、`reachedMs`
-- 脚本：`npm run training-report -- [场地] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family] [--last N] [--batch <批次>]`；切石机场地缺省按 `family`（材料家族）分组，多一列"切错"；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"；箱子场地缺省按 `task`（取放 / 关系）分组，换一套列（超量、动了别的、丢失、打开箱子中位、达成中位、箱子被挖）
-- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`。箱子场地 `{type: 'storage', origin, kind, rel, chest, stack, fill, types, targets, dest: 'empty', exclude, timeoutSec?}`，chest 缺省 kind / rel / chest / stack 为 `mix`、`fill: 'random'`、`types: '1-4'`、`targets: '1'`。切石机场地 `{type: 'stonecut', origin, materials, slots, fill, styles, bypass, exclude, timeoutSec?}`，stonecutter 缺省 `materials: '1-3'`、`slots: '1-9'`、`fill: 'random'`、`styles: '1-3'`、`bypass: 'exclude'`、`timeoutSec: 900`；`training.stonecutting` 指向切石配方文件、排除 `minecraft:bundle`
+10. **熔炉场地 furnace**（[熔炉训练场设计方案.md](../../docs/熔炉训练场设计方案.md)）：场地配置 `type: 'cook'`，题型代码在 `src/training/cook.js`，出题用 `data/cooking.json` 和 `data/item-props.json`。
+   - 每轮按种子出题：炉子（`station`）→ 原料（按产物分组抽，16 种带釉陶瓦算一组）→ 燃料（按燃烧时长分档抽，不等于产物）→ 原料、燃料的总数和分格（`raw` / `fuel`、`rawSlots` / `fuelSlots`）→ n、m（不超过发下去的总数）；`input=` / `fuelItem=` 固定原料、燃料
+   - `prepare` 清空并重放炉子、对准准星，登记 `expect { cook }`；返回的服务器端数值和数据文件对不上时本轮 `aborted` 并停止整组（数据过期，重跑两个提取脚本）
+   - 判定：`success`（炉子界面已关闭，物品栏里原料、燃料恰好剩 R − n、F − m，原料格、燃料格里没有别的东西；产物拿不拿、炉子烧没烧完都不看）、`overshoot`（烧掉的原料或燃料超过要求）、`misplaced`（原料格 / 燃料格里有别的东西，或出现了额外物品）、`lost`（炉子被挖、地上有掉落物、产物数对不上）、`false_success`、`failed`、`timeout`、`aborted`；炉子里剩多少不判
+   - 记录多 `station`、`raw`、`fuel`（含 `burnTicks`、`band`）、`product`、`cookTicks`、`n`、`m`、`placedRaw` / `placedFuel` / `smelted` / `burned` / `produced`、`extra`、`final`（含 `furnace`、`containerOpen`）、`reachedMs`
+- 脚本：`npm run training-report -- [场地] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second] [--last N] [--batch <批次>]`；切石机场地缺省按 `family`（材料家族）分组，多一列"切错"；熔炉场地缺省按 `station`（炉子）分组，多"放多""放错"两列；附魔台场地缺省按 `kind`（物品类别）分组，多"附错""预览不一致"两列；信标场地缺省按 `effect`（目标效果）分组，多"多付""设错过""越界"三列；铁砧场地缺省按 `task`（任务）分组，也可按 `item`、`second`，多"多次取出""多花经验""名字错"三列；带工作站的场地另列"打开工作台中位""工作台被挖"，以及每轮引用了哪些在该场地第一轮之前就有的胶囊；有多份轮次时另列"超量""做够中位"；箱子场地缺省按 `task`（取放 / 关系）分组，换一套列（超量、动了别的、丢失、打开箱子中位、达成中位、箱子被挖）
+- 配置：`training.timeoutSec`（600）、`training.wallTimeoutSec`（2400）、`training.pollMs`（1000）、`training.itemProps`、`training.arenas.<场地>.{origin, mode: named|hidden, exclude, grid: 2|3, station: crafting_table|null, timeoutSec?, wallTimeoutSec?, portions?, crafts?}`；craft3x3 缺省 `grid: 3, station: crafting_table, timeoutSec: 900`。箱子场地 `{type: 'storage', origin, kind, rel, chest, stack, fill, types, targets, dest: 'empty', exclude, timeoutSec?}`，chest 缺省 kind / rel / chest / stack 为 `mix`、`fill: 'random'`、`types: '1-4'`、`targets: '1'`。切石机场地 `{type: 'stonecut', origin, materials, slots, fill, styles, bypass, exclude, timeoutSec?}`，stonecutter 缺省 `materials: '1-3'`、`slots: '1-9'`、`fill: 'random'`、`styles: '1-3'`、`bypass: 'exclude'`、`timeoutSec: 900`；`training.stonecutting` 指向切石配方文件。熔炉场地 `{type: 'cook', origin, station, raw, fuel, rawSlots, fuelSlots, n, m, exclude, timeoutSec?}`，furnace 缺省 `station: 'random'`、`raw` / `fuel` 为 `'64-128'`、`rawSlots` / `fuelSlots` 为 2、`n` / `m` 为 `'1-64'`、`timeoutSec: 600`；`training.cooking` 指向烹饪配方文件。附魔台场地 `{type: 'enchant', origin, bookshelves, xpLevel, exclude, timeoutSec?}`，enchanting 缺省 `bookshelves: 15`、`xpLevel: 30`、`timeoutSec: 600`。信标场地 `{type: 'beacon', origin, amplifier, count, exclude, timeoutSec?}`，beacon 缺省 `origin: [10100, 120, 10000]`、`amplifier: 'mix'`、`count: '32-64'`、`timeoutSec: 600`。铁砧场地 `{type: 'anvil', origin, xpLevel, enchants, curses, exclude, timeoutSec?}`，anvil 缺省 `origin: [10000, 120, 10180]`、`xpLevel: 216`、`enchants: '1-3'`、`curses: false`、`timeoutSec: 600`、排除 `minecraft:bundle`

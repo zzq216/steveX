@@ -60,7 +60,7 @@ test('改已经执行完的部分被拒，错误说明改法；不合法计次�
   const { executor, events, requestId } = await failedAt()
   const replaceDone = executor.submitPatch(requestId, [{ op: 'replace', id: 'n1.1', node: hotbar(9) }])
   assert.equal(replaceDone.ok, false)
-  assert.match(replaceDone.errors[0], /n1\.1 has already finished.*insert-before the current step insert-before n1\.2/)
+  assert.equal(replaceDone.errors[0], 'ops[0]: n1.1 has already finished; changing it will not make it run again. To do that work again, add a new node at the current position of n1: insert-before n1.2')
   assert.equal(replaceDone.attemptsLeft, 2)
 
   const insertBetween = executor.submitPatch(requestId, [{ op: 'insert-before', id: 'n1.1', node: hotbar(9) }])
@@ -123,4 +123,37 @@ test('空补丁 = 原树继续；continue 不再存在', async () => {
   assert.equal(executor.submitPatch(requestId, []).ok, true)
   await runUntil(executor, () => executor.task.state === 'done')
   assert.deepEqual(slots(mod), [1], '失败的条件原地重新求值，前一步不重跑')
+})
+
+// 2026-11-21（铁砧训练 task-20261121063943-1）：失败的节点在 sel 的最后一个备选里、前面的备选也都失败了。
+// 修复说明教"replace / insert-before 失败的节点"，原来的规则却把整个 sel 算成已经执行完、全部拒绝
+const exhaustedSel = { seq: 's', do: [hotbar(1), { sel: 'alt', do: [broken, { seq: 'b', do: [hotbar(2), broken] }] }, hotbar(3)] }
+
+test('sel 的备选全都失败：改最后一个备选里的节点（含失败的那个）照常接受并执行；前面失败过的备选、插在最后一个前面都被拒，拒绝信息给出能用的写法', async () => {
+  {
+    const { executor, mod, requestId } = await failedAt(exhaustedSel)
+    assert.equal(executor.pending?.evidence?.nodeId ?? executor.task.pending?.evidence?.nodeId, 'n1.2.2.2')
+    const result = executor.submitPatch(requestId, [{ op: 'replace', id: 'n1.2.2.2', node: hotbar(4) }])
+    assert.equal(result.ok, true, JSON.stringify(result.errors))
+    await runUntil(executor, () => executor.task.state === 'done')
+    assert.deepEqual(slots(mod), [1, 2, 4, 3], '换掉的失败节点接着跑，已完成的 hotbar(2) 不重跑')
+  }
+  {
+    const { executor, mod, requestId } = await failedAt(exhaustedSel)
+    const result = executor.submitPatch(requestId, [{ op: 'insert-before', id: 'n1.2.2.2', node: hotbar(5) }, { op: 'replace', id: 'n1.2.2.2', node: hotbar(6) }])
+    assert.equal(result.ok, true, JSON.stringify(result.errors))
+    await runUntil(executor, () => executor.task.state === 'done')
+    assert.deepEqual(slots(mod), [1, 2, 5, 6, 3], '补在失败节点前面的一步先跑')
+  }
+  {
+    const { executor, mod, requestId } = await failedAt(exhaustedSel)
+    const earlier = executor.submitPatch(requestId, [{ op: 'replace', id: 'n1.2.1', node: hotbar(7) }])
+    assert.match(earlier.errors[0], /n1\.2\.1 has already finished.*current position of n1\.2: insert-after n1\.2\.2 to add a new alternative, or change nodes inside n1\.2\.2/)
+    const before = executor.submitPatch(requestId, [{ op: 'insert-before', id: 'n1.2.2', node: hotbar(7) }])
+    assert.match(before.errors[0], /n1\.2 has already tried all its alternatives; only the last one \(n1\.2\.2\) is retried/)
+    const after = executor.submitPatch(requestId, [{ op: 'insert-after', id: 'n1.2.2', node: hotbar(8) }])
+    assert.equal(after.ok, true, JSON.stringify(after.errors))
+    await runUntil(executor, () => executor.task.state === 'done')
+    assert.deepEqual(slots(mod), [1, 2, 8, 3], '新备选接着跑')
+  }
 })

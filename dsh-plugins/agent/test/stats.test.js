@@ -174,14 +174,15 @@ test('端到端：节点退出事件带钉过哈希的 ref；任务结束并进�
   assert.equal(saved.ok, true, JSON.stringify(saved))
   assert.equal(stats.get(saved.ref).draft.calls, 1)
 
-  const listed = await call('capsule_search', {})
-  assert.deepEqual(listed.map((r) => r.ref), ctx.library.list().map((r) => r.ref), '排序不看统计')
-  assert.equal(listed.find((r) => r.ref === refs['test.has-item']).usage,
+  const listed = (await call('capsule_search', {})).items
+  assert.deepEqual(listed.map((r) => r.ref), ctx.library.list().map((r) => r.ref.slice(0, r.ref.lastIndexOf('@'))).sort(), '排序不看统计（不给 query 时按名字）')
+  assert.ok(listed.every((r) => r.usage === undefined), '搜索结果不带统计（2026-11-21：只给名字）')
+  assert.equal((await call('capsule_get', { ref: 'code/test.has-item' })).usage.allVersions,
     '用过 1 次 / 1 个任务（1 成 0 败），判真 0 / 判假 1 / 报错 0；跨实例：在 1 种参数组合上成功过（共 1 种），未跨实例验证')
   assert.deepEqual(condExit.args, { count: 999, item: 'diamond' }, '退出事件带实参指纹（2026-11-13）')
   assert.deepEqual(Object.keys(has.instances), ['{"count":999,"item":"diamond"}'])
-  assert.equal(listed.find((r) => r.ref === refs['test.air-below']).usage, '尚无记录')
-  assert.match(listed.find((r) => r.ref === saved.ref).usage, /^转正前（草稿）：用过 1 次/)
+  assert.equal((await call('capsule_get', { ref: 'code/test.air-below' })).usage.allVersions, '尚无记录')
+  assert.match((await call('capsule_get', { ref: saved.ref })).usage.allVersions, /^转正前（草稿）：用过 1 次/)
   const got = await call('capsule_get', { ref: 'code/test.has-item' })
   assert.equal(got.usage.thisVersion, got.usage.allVersions)
   assert.ok(got.usage.lastUsed)

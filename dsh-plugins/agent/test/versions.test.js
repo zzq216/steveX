@@ -88,7 +88,9 @@ test('版本说明全流程：capsule_search / capsule_get 显示版本与判断
   library.versions.record('code/v.cond', h2, { parent: h1, by: 'task-0', note: CapsuleVersions.check(NOTE).note })
 
   // V5：规划时的清单
-  const [row] = await call('capsule_search', { query: 'v.cond' })
+  const { items: [found] } = await call('capsule_search', { query: 'v.cond' })
+  assert.deepEqual(found, { ref: 'code/v.cond', kind: 'condition' }, '搜索只给名字（2026-11-21）；版本信息在 capsule_get 里')
+  const row = await call('capsule_get', { ref: 'code/v.cond', withBody: false })
   assert.equal(row.ref, v2)
   assert.equal(row.versions, 2)
   assert.equal(row.untested, true)
@@ -123,7 +125,7 @@ test('版本说明全流程：capsule_search / capsule_get 显示版本与判断
   assert.equal(after[1].reviews[0].evidence, '这次一整堆，新版也只调用一次')
 
   // 新版跑过了：不再 untested；被否定的旧版判断不再列出、GC 不再保护
-  const [row2] = await call('capsule_search', { query: 'v.cond' })
+  const row2 = await call('capsule_get', { ref: 'code/v.cond', withBody: false })
   assert.equal(row2.untested, undefined)
   assert.equal(row2.olderBetterWhen, undefined)
   assert.equal(planGc({ dir: library.dir, stats }).keep.get(v1), undefined)

@@ -8,6 +8,8 @@ import { renderTemplate } from './prompts.js'
  *   路由 fact handler 在人发起的回合里直接绑定（factInTurn）
  * - 提醒（P5-D10）：本回合用过 mc_source_* 却没有成功写过事实 → 回合要结束时 steer 一次「完善事实库」；
  *   每回合至多一次、不计次数，大模型说明理由后可以结束。请求的提醒优先（由适配层排先后）
+ * - 让路（2026-11-21）：回合要结束时已经有请求在排队等这个会话（如任务失败的修复请求），提醒推迟到下一个回合末尾——
+ *   先把请求处理掉，事实下个回合再写（task-20261121063943-1：修复请求在提醒那一步后面排了 41 秒，任务一直挂着）
  * - guard 拿不到回合号（P5 §12 #2）：pre-step 里记下每个会话的当前回合，工具按会话记账
  */
 export const FACT_SOURCE_KIND = 'stevex-fact'
@@ -33,6 +35,7 @@ export class FactTurns {
     this.current = new Map() // sessionId → 当前回合
     this.usage = new Map()   // "sessionId#turn" → { source, write, reminded }
     this.checks = new Set()  // 事实确认回合 "sessionId#turn"
+    this.deferred = new Set() // 提醒推迟到下一回合的会话
     this.seq = 0
   }
 
@@ -67,6 +70,12 @@ export class FactTurns {
   /** agent/pre-step：记当前回合；第一个 step 认出 /bt fact 的消息。 */
   onPreStep({ sessionId, turn, step, messages = [] }) {
     this.current.set(sessionId, turn)
+    // 上一回合推迟的提醒：记到这个回合上（这个回合写了事实就不用再提醒）
+    if (this.deferred.has(sessionId)) {
+      this.deferred.delete(sessionId)
+      const k = key(sessionId, turn)
+      this.usage.set(k, { ...(this.usage.get(k) ?? { write: false, reminded: false }), source: true, deferred: true })
+    }
     if (step === 1 && messages.some((m) => m?.source?.kind === FACT_SOURCE_KIND && m.source.reason === 'fact-check')) this.bind(sessionId, turn)
   }
 
@@ -92,14 +101,20 @@ export class FactTurns {
 
   /**
    * 回合要结束、且没有请求要提醒时：查了源码却没写事实 → 返回一条 steer 消息（每回合一次）。
+   * defer = 已经有请求在排队等这个会话：不提醒，推迟到下一个回合末尾。
    * @returns {null | { text, summary, source }}
    */
-  onTurnStopping({ sessionId, turn }) {
+  onTurnStopping({ sessionId, turn, defer = false }) {
     if (!this.remind) return null
     const row = this.usage.get(key(sessionId, turn))
     if (!row || !row.source || row.write || row.reminded) return null
+    if (defer) {
+      this.deferred.add(sessionId)
+      return null
+    }
     row.reminded = true
-    const text = renderTemplate(this.prompts.requests.fact_reminder, { skill: this.prompts.skills.fact_record })
+    const when = row.deferred ? '上一回合（以及本回合）' : '本回合'
+    const text = renderTemplate(this.prompts.requests.fact_reminder, { when, skill: this.prompts.skills.fact_record })
     return { text, summary: '提醒：本回合查了 MC 源码，还没有写事实', source: { kind: FACT_SOURCE_KIND, reason: 'fact-reminder' } }
   }
 
@@ -111,6 +126,7 @@ export class FactTurns {
 
   onSessionClosed(sessionId) {
     this.current.delete(sessionId)
+    this.deferred.delete(sessionId)
     for (const k of [...this.usage.keys()]) if (k.startsWith(`${sessionId}#`)) this.usage.delete(k)
     for (const k of [...this.checks]) if (k.startsWith(`${sessionId}#`)) this.checks.delete(k)
   }

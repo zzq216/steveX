@@ -3,11 +3,24 @@ import { fileURLToPath } from 'node:url'
 import { DEFAULT_OBSERVE_BY_COMMAND } from './bt/observe.js'
 import { STORAGE_CHOICES, parseTargetsSpec, parseTypesSpec } from './training/storage.js'
 import { STONECUT_CHOICES, parseMaterialsSpec, parseSlotsSpec, parseStylesSpec } from './training/stonecut.js'
+import { COOK_CHOICES, parseCookSlotsSpec, parseTotalSpec } from './training/cook.js'
+import { parseBookshelves, parseXpLevel } from './training/enchant.js'
+import { beaconPool, parseAmplifier, parseBeaconCountSpec } from './training/beacon.js'
+import { parseAnvilXpLevel, parseCurses, parseEnchantsSpec } from './training/anvil.js'
+import { parseCountSpec } from './training/sampler.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
 const STORAGE_ARENA_DEFAULTS = Object.freeze({ kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', targets: '1', dest: 'empty', exclude: ['minecraft:bundle'] })
 /** 用户自己加的切石机场地（type: 'stonecut'）没写的字段（切石机训练场设计方案 §5） */
 const STONECUT_ARENA_DEFAULTS = Object.freeze({ materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] })
+/** 用户自己加的熔炉场地（type: 'cook'）没写的字段（熔炉训练场设计方案 §5） */
+/** 用户自己加的附魔台场地（type: 'enchant'）没写的字段（附魔台训练场设计方案 §5） */
+const ENCHANT_ARENA_DEFAULTS = Object.freeze({ bookshelves: 15, xpLevel: 30, exclude: [] })
+/** 用户自己加的信标场地（type: 'beacon'）没写的字段（信标训练场设计方案 §6） */
+const BEACON_ARENA_DEFAULTS = Object.freeze({ amplifier: 'mix', count: '32-64', exclude: [] })
+/** 用户自己加的铁砧场地（type: 'anvil'）没写的字段（铁砧训练场设计方案 §6） */
+const ANVIL_ARENA_DEFAULTS = Object.freeze({ xpLevel: 216, enchants: '1-3', curses: false, exclude: [] })
+const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
 const steveXRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -25,7 +38,14 @@ export const DEFAULTS = Object.freeze({
   /** 任务历史的上限与淘汰阈值（H1、H9、H11） */
   history: { profileTop: 10, repeatMin: 3, reviewMax: 10, issuesMax: 5, treeChars: 8000, archiveUnseenDays: 30, maxActive: 500 },
   /** core.json.query 能读的数据源：标识 → 文件或目录（相对 steveX/）。不在这里的文件读不到 */
-  jsonSources: { recipes: 'dsh-plugins/agent/data/recipes.json', stonecutting: 'dsh-plugins/agent/data/stonecutting.json' },
+  jsonSources: {
+    recipes: 'dsh-plugins/agent/data/recipes.json',
+    stonecutting: 'dsh-plugins/agent/data/stonecutting.json',
+    /** 熔炉 / 高炉 / 烟熏炉 / 营火配方（熔炉训练场设计方案 K10） */
+    cooking: 'dsh-plugins/agent/data/cooking.json',
+    /** 物品的堆叠上限、合成剩余物、燃料时长（熔炉训练场设计方案 K10） */
+    items: 'dsh-plugins/agent/data/items.json'
+  },
   /** core.nbt.query 读的采集端落盘目录（相对 steveX/） */
   visionRoot: 'vendor/stevex-template-1.21.11/run/stevex/vision',
   /** 单次提交（大纲 / 展开 / 补丁）编译后的节点上限；2026-11-07 从 15 调到 25（第一次写批量合成时 15 太紧） */
@@ -125,6 +145,8 @@ export const DEFAULTS = Object.freeze({
     itemProps: 'dsh-plugins/agent/data/item-props.json',
     /** 切石配方（切石题出题用，切石机训练场设计方案 Q11；npm run extract-recipes 一并生成），相对 steveX/ */
     stonecutting: 'dsh-plugins/agent/data/stonecutting.json',
+    /** 烹饪配方（熔炉题出题用，熔炉训练场设计方案 K10；npm run extract-recipes 一并生成），相对 steveX/ */
+    cooking: 'dsh-plugins/agent/data/cooking.json',
     /**
      * 场地：名字 → { origin: 场内地板中心 [x,y,z], mode: named | hidden（T5）, exclude: 不抽的配方名,
      *   grid: 合成格边长 2 | 3（缺省 2）, station: 场内工作站 'crafting_table' | null（缺省 null）,
@@ -139,12 +161,26 @@ export const DEFAULTS = Object.freeze({
      * 'stonecut' = 切石机，字段是 { origin, materials: 材料种数 "k" | "a-b"（1–3）, slots: 每种材料占的格数（1–9）, fill: random | full | mix,
      *     styles: 每种材料切几种样式（1–3）, bypass: exclude（物品栏 2×2 就能直接做出的产物不出题）| keep, exclude: 不用的材料 / 产物 id,
      *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/切石机训练场设计方案.md
+     * 'cook' = 熔炉 / 高炉 / 烟熏炉，字段是 { origin, station: furnace | blast_furnace | smoker | random, raw / fuel: 原料、燃料总数 "k" | "a-b"（1–256）,
+     *     rawSlots / fuelSlots: 各占几格（1–4）, n / m: 要放进原料格、燃料格的个数（1–64）, exclude: 不用的原料 / 燃料 / 产物 id,
+     *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/熔炉训练场设计方案.md
+     * 'enchant' = 附魔台，字段是 { origin, bookshelves: 附魔台周围的书架数（0–15）, xpLevel: 每轮的经验等级, exclude: 不用的物品 id,
+     *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/附魔台训练场设计方案.md
+     * 'beacon' = 信标，字段是 { origin, amplifier: 1 | 2 | mix（目标级数；mix = 前 5 个效果 I、II 级各一半）, count: 付款物品数量 "k" | "a-b"（1–64）,
+     *     exclude: 不出的效果 id（也不当再生题的主效果）, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/信标训练场设计方案.md
+     * 'anvil' = 铁砧，字段是 { origin, xpLevel: 每轮的经验等级（39–1000）, enchants: 第二件物品带几个附魔 "k" | "a-b"（1–5）, curses: 第二件的附魔里能不能有诅咒,
+     *     exclude: 不用的物品 id, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/铁砧训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
       craft3x3: { origin: [10000, 120, 10030], mode: 'named', grid: 3, station: 'crafting_table', exclude: [], timeoutSec: 900 },
       chest: { type: 'storage', origin: [10000, 120, 10060], timeoutSec: 600, kind: 'mix', rel: 'mix', chest: 'mix', stack: 'mix', fill: 'random', types: '1-4', targets: '1', dest: 'empty', exclude: ['minecraft:bundle'] },
-      stonecutter: { type: 'stonecut', origin: [10000, 120, 10090], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] }
+      stonecutter: { type: 'stonecut', origin: [10000, 120, 10090], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] },
+      furnace: { type: 'cook', origin: [10000, 120, 10120], timeoutSec: 600, station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] },
+      enchanting: { type: 'enchant', origin: [10000, 120, 10150], timeoutSec: 600, bookshelves: 15, xpLevel: 30, exclude: [] },
+      // 信标场地换到 x = 10100（信标训练场设计方案 G1）：4 级信标的水平范围是 50 格，和其他场地要隔开 50 格以上
+      beacon: { type: 'beacon', origin: [10100, 120, 10000], timeoutSec: 600, amplifier: 'mix', count: '32-64', exclude: [] },
+      anvil: { type: 'anvil', origin: [10000, 120, 10180], timeoutSec: 600, xpLevel: 216, enchants: '1-3', curses: false, exclude: [] }
     }
   },
   planner: {
@@ -200,10 +236,55 @@ export function normalizeConfig(raw = {}) {
       throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
     }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
-      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'storage' || arena.type === 'stonecut' ? 'item ids' : 'recipe names'}`)
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil'].includes(arena.type) ? 'item ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage', 'stonecut'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage" or "stonecut"`)
+    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon" or "anvil"`)
+    if (type === 'anvil') {
+      try {
+        parseAnvilXpLevel(arena.xpLevel)
+        parseEnchantsSpec(arena.enchants)
+        parseCurses(arena.curses)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'beacon') {
+      try {
+        parseAmplifier(arena.amplifier)
+        parseBeaconCountSpec(arena.count)
+        beaconPool({ exclude: arena.exclude, amplifier: arena.amplifier, count: arena.count })
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'enchant') {
+      try {
+        parseBookshelves(arena.bookshelves)
+        parseXpLevel(arena.xpLevel)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'cook') {
+      for (const [key, choices] of Object.entries(COOK_CHOICES)) {
+        if (!choices.includes(String(arena[key]))) throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be one of ${choices.join(' | ')}`)
+      }
+      try {
+        parseTotalSpec('raw', arena.raw)
+        parseTotalSpec('fuel', arena.fuel)
+        parseCookSlotsSpec('rawSlots', arena.rawSlots)
+        parseCookSlotsSpec('fuelSlots', arena.fuelSlots)
+        parseCountSpec(arena.n, 'n')
+        parseCountSpec(arena.m, 'm')
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (type === 'stonecut') {
       for (const [key, choices] of Object.entries(STONECUT_CHOICES)) {
         if (!choices.includes(String(arena[key]))) throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be one of ${choices.join(' | ')}`)
@@ -245,6 +326,7 @@ export function normalizeConfig(raw = {}) {
   config.training.recipes = path.resolve(steveXRoot, config.training.recipes)
   config.training.itemProps = path.resolve(steveXRoot, config.training.itemProps)
   config.training.stonecutting = path.resolve(steveXRoot, config.training.stonecutting)
+  config.training.cooking = path.resolve(steveXRoot, config.training.cooking)
   for (const key of ['maxOutputChars', 'inspectMaxBytes']) {
     if (!(Number.isInteger(config.planner[key]) && config.planner[key] > 0)) throw new Error(`stevex-agent config: planner.${key} must be a positive integer`)
   }
@@ -266,6 +348,14 @@ function normalizeTraining(raw = {}) {
       ? { ...STORAGE_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
       : type === 'stonecut'
         ? { ...STONECUT_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+        : type === 'cook'
+          ? { ...COOK_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'enchant'
+            ? { ...ENCHANT_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'beacon'
+            ? { ...BEACON_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'anvil'
+            ? { ...ANVIL_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
         : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }

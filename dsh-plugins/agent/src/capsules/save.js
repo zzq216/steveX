@@ -6,6 +6,22 @@ import { parseRef } from './library.js'
 import { SandboxError } from './sandbox.js'
 
 /**
+ * 胶囊命名规则（2026-11-21）：capsule_search 只给名字，规划靠名字挑候选，名字要写成"领域.做什么"——
+ * 至少两段（点分隔），第一段是领域（字母数字），不能用 tmp / test 这类临时名当领域。只查新名字：已有的名字替换时不查（bridge.saveCapsule）。
+ * @returns {string|null} 不合规的理由
+ */
+export const CAPSULE_NAME_RULE = /^[a-z][a-z0-9]*(\.[a-z0-9][a-z0-9_-]*)+$/
+export const TEMP_DOMAINS = Object.freeze(['tmp', 'temp', 'test', 'tests', 'debug', 'draft', 'misc', 'new', 'foo', 'x'])
+export function capsuleNameProblem(name) {
+  if (typeof name !== 'string' || !CAPSULE_NAME_RULE.test(name)) {
+    return `name "${name}" must read "<domain>.<what-it-does>" (lowercase, dot-separated, e.g. "craft.plan-batch-fill", "anvil.slot0-has-item"): capsule_search returns names only, so the planner picks candidates by name`
+  }
+  const domain = name.slice(0, name.indexOf('.'))
+  if (TEMP_DOMAINS.includes(domain)) return `name "${name}" uses "${domain}" as its domain; name the area it works in (craft / container / inv / anvil / beacon …) so it can be found by name`
+  return null
+}
+
+/**
  * 保存一个胶囊条目（P1 的 capsule_save 工具、scripts/capsule-save.js 都走这里）。
  *
  * 落盘前的语义校验：

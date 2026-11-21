@@ -75,7 +75,7 @@ npm run extract-recipes    # 从 loom 缓存里的 MC jar 提取 → dsh-plugins
 cd ../..
 ```
 
-`recipes.json` 和 `item-props.json`（物品堆叠上限与合成剩余物，训练场多份模式用）已随仓库提交，clone 下来就能用。换 MC 版本或想重新生成时：`npm run extract-recipes`（读 loom 缓存里的 jar）、`npm run extract-item-props`（读下面的 `1.21.11_src/`）。
+`data/` 下的提取数据（配方 `recipes.json`、切石配方 `stonecutting.json`、烹饪配方 `cooking.json`、物品属性 `item-props.json` / `items.json`：堆叠上限、合成剩余物、燃料时长、可附魔程度）已随仓库提交，clone 下来就能用。换 MC 版本或想重新生成时，先 `npm run extract-recipes`（读 loom 缓存里的 jar），再 `npm run extract-item-props`（读下面的 `1.21.11_src/`，燃料表还要读 jar 里的物品标签）。
 
 ### 4. 准备源码基准 `1.21.11_src/`（可选）
 
@@ -195,7 +195,7 @@ npm run start:all
 | `/bt fact <陈述>` | 让 agent 查 MC 源码核实一句话，并写进事实库 |
 | `/bt facts [词]` / `/bt facts check` | 查事实库 / 重算引用、列出失效的事实 |
 | `/bt fast status \| log \| rollback <版本> \| reflect \| load <file>` | 快树（反射层）的状态、日志、回滚、反思 |
-| `/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>] [n=<份数>] [m=<次数>]` | 训练场：每轮新建一个会话（执行命令的会话只收进度通知）、重置 agent、发 n 份材料、要求合成 m 次的产物（不写时 n 在 1–64 随机，`n=1 m=1` 是单次模式；做多了判失败）、发任务、按 `crafted` 统计判定，记录写 `runtime/training/<场地>.jsonl`；`/bt train status` 看进度，`/bt train stop` 中止。需要关闭作弊的单人世界，游戏内 `/arena craft2x2` 传送到场外平台（[训练场设计方案](docs/训练场设计方案.md)）。场地 `craft3x3` 是工作台 3×3 合成（[工作台训练场设计方案](docs/工作台训练场设计方案.md)）；场地 `chest` 是箱子存取，选项换成 `kind=take|put|mix rel=lt|eq|gt|mix chest=small|large|hopper|dispenser|mix|all stack=64|16|1|mix fill=random|full|mix types=k|a-b targets=k|a-b`（[箱子训练场设计方案](docs/箱子训练场设计方案.md)）；场地 `stonecutter` 是切石机，选项是 `materials=k|a-b slots=k|a-b fill=random|full|mix styles=k|a-b bypass=exclude|keep material=<材料>`（[切石机训练场设计方案](docs/切石机训练场设计方案.md)） |
+| `/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>] [n=<份数>] [m=<次数>]` | 训练场：每轮新建一个会话（执行命令的会话只收进度通知）、重置 agent、发 n 份材料、要求合成 m 次的产物（不写时 n 在 1–64 随机，`n=1 m=1` 是单次模式；做多了判失败）、发任务、按 `crafted` 统计判定，记录写 `runtime/training/<场地>.jsonl`；`/bt train status` 看进度，`/bt train stop` 中止。需要关闭作弊的单人世界，游戏内 `/arena craft2x2` 传送到场外平台（[训练场设计方案](docs/训练场设计方案.md)）。场地 `craft3x3` 是工作台 3×3 合成（[工作台训练场设计方案](docs/工作台训练场设计方案.md)）；场地 `chest` 是箱子存取，选项换成 `kind=take|put|mix rel=lt|eq|gt|mix chest=small|large|hopper|dispenser|mix|all stack=64|16|1|mix fill=random|full|mix types=k|a-b targets=k|a-b`（[箱子训练场设计方案](docs/箱子训练场设计方案.md)）；场地 `stonecutter` 是切石机，选项是 `materials=k|a-b slots=k|a-b fill=random|full|mix styles=k|a-b bypass=exclude|keep material=<材料>`（[切石机训练场设计方案](docs/切石机训练场设计方案.md)）；场地 `furnace` 是熔炉 / 高炉 / 烟熏炉，选项是 `station=furnace|blast_furnace|smoker|random raw=k|a-b fuel=k|a-b rawSlots=k|a-b fuelSlots=k|a-b n=k|a-b m=k|a-b input=<原料> fuelItem=<燃料>`（[熔炉训练场设计方案](docs/熔炉训练场设计方案.md)）；场地 `enchanting` 是附魔台，选项是 `item=<物品> bookshelves=0-15 xpLevel=<等级>`（[附魔台训练场设计方案](docs/附魔台训练场设计方案.md)）；场地 `beacon` 是信标，选项是 `effect=<效果> amplifier=1|2|mix primary=<效果> level=k|a-b payment=<物品> count=k|a-b`（[信标训练场设计方案](docs/信标训练场设计方案.md) §5）；场地 `anvil` 是铁砧，选项是 `task=merge|rename|both second=same|book item=<物品> enchants=k|a-b curses=0|1 xpLevel=<等级>`（[铁砧训练场设计方案](docs/铁砧训练场设计方案.md) §5） |
 
 不启动 DSH 也能跑手写树：`cd dsh-plugins/agent && node scripts/bt-run.js examples/recipe_query.json`。
 

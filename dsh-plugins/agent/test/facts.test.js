@@ -253,3 +253,55 @@ test('FactTurns（P5 §2 / §7）：/bt fact 开回合并绑定工具；查了�
   assert.equal(turns.onTurnStopping({ sessionId: 's1', turn: 5 }), null, '写了事实不提醒')
   assert.equal(bound.length, 1, '不是事实确认的回合不绑定')
 })
+
+test('fact_search 只给名字、可以翻页；fact_get 按名字取全文，认合并掉的旧名字（2026-11-21）', async () => {
+  const { root } = fakeBaseline()
+  const source = new SourceTree({ root })
+  const store = new FactStore({ dir: tempDir('stevex-facts-'), source })
+  const ref = { file: 'net/minecraft/world/entity/Entity.java', lines: [10, 12] }
+  for (let i = 0; i < 35; i++) assert.equal(store.write({ name: `menu.fact-${String(i).padStart(2, '0')}`, statement: `第 ${i} 条菜单事实`, refs: [ref], tags: ['menu'] }).ok, true)
+  const tools = Object.fromEntries(factTools({ facts: { store, source }, maxOutputChars: 20000 }).map((t) => [t.name, t]))
+  const exec = { agent: { id: 's1' } }
+
+  const first = await tools.fact_search.execute({ query: 'menu' }, exec)
+  assert.deepEqual([first.total, first.offset, first.facts.length, first.next], [35, 0, 30, 30])
+  assert.deepEqual(first.facts[0], { name: 'menu.fact-00', tags: ['menu'] }, '只有名字与标签，没有陈述、引用、修订号')
+  const second = await tools.fact_search.execute({ query: 'menu', offset: first.next }, exec)
+  assert.deepEqual([second.offset, second.facts.length, second.next], [30, 5, undefined])
+  assert.equal(second.facts.at(-1).name, 'menu.fact-34', '翻到最后一条')
+  assert.equal((await tools.fact_search.execute({ query: 'menu', limit: 500 }, exec)).facts.length, 35, 'limit 上限 100')
+
+  const got = await tools.fact_get.execute({ names: ['menu.fact-03', 'nope'] }, exec)
+  assert.equal(got.ok, true)
+  assert.deepEqual(got.facts.map((f) => [f.name, f.statement, f.rev]), [['menu.fact-03', '第 3 条菜单事实', 1]])
+  assert.deepEqual(got.facts[0].refs, [{ file: ref.file, lines: ref.lines }])
+  assert.deepEqual(got.missing, ['nope'])
+  assert.equal((await tools.fact_get.execute({ names: [] }, exec)).ok, false)
+  assert.match((await tools.fact_get.execute({ names: Array.from({ length: 11 }, (_, i) => `x.${i}`) }, exec)).error, /1–10/)
+
+  assert.equal(store.merge({ keep: 'menu.fact-00', drop: ['menu.fact-01'], statement: '合并后的事实' }).ok, true)
+  const merged = await tools.fact_get.execute({ names: ['menu.fact-01'] }, exec)
+  assert.deepEqual(merged.facts.map((f) => [f.name, f.statement]), [['menu.fact-00', '合并后的事实']], '旧名字取到合并后的那条')
+})
+
+test('FactTurns 让路（2026-11-21）：回合结束时有请求在排队 → 不提醒，推迟到下一个回合末尾；下一回合写了事实就不再提醒', () => {
+  const turns = new FactTurns({ prompts, tools: [], deliver: () => true, onBind: () => {} })
+  turns.onPreStep({ sessionId: 's1', turn: 1, step: 1 })
+  turns.note('s1', 'source')
+  assert.equal(turns.onTurnStopping({ sessionId: 's1', turn: 1, defer: true }), null, '修复请求在排队：先让它开回合')
+  turns.endTurn('s1', 1)
+
+  turns.onPreStep({ sessionId: 's1', turn: 2, step: 1 })
+  const steer = turns.onTurnStopping({ sessionId: 's1', turn: 2 })
+  assert.match(steer.text, /^上一回合（以及本回合）查阅了 MC 源码[\s\S]*把上一回合（以及本回合）从源码里确认/)
+  assert.equal(turns.onTurnStopping({ sessionId: 's1', turn: 2 }), null, '只提醒一次')
+  turns.endTurn('s1', 2)
+
+  turns.onPreStep({ sessionId: 's1', turn: 3, step: 1 })
+  turns.note('s1', 'source')
+  turns.onTurnStopping({ sessionId: 's1', turn: 3, defer: true })
+  turns.endTurn('s1', 3)
+  turns.onPreStep({ sessionId: 's1', turn: 4, step: 1 })
+  turns.note('s1', 'write')
+  assert.equal(turns.onTurnStopping({ sessionId: 's1', turn: 4 }), null, '推迟后的回合里写了事实：不再提醒')
+})

@@ -152,22 +152,31 @@ public class ContainerApi {
                         // （4 组 2/2/1/1 共 6 个，BeaconBlockEntity.java:53-58），每个信标、每个存档都一样
                         // ⇒ **不需要服务端回读**，也不依赖 mc.level——与切石机 recipes / 织布机 patterns 的关键差别。
                         //
-                        // canBePrimary/canBeSecondary 复刻 GUI 门禁（BeaconScreen.java:69-101 + :216
-                        // `active = tier < levels`）：主效果列 = 四组全部，某效果可点 ⟺ tier < levels；
-                        // 副效果列**只放第 4 组**（即 regeneration），且 levels ≥ 4 时才有这一列。
-                        // 注意 tier 是**纯 UI 门禁**：服务端不过滤 tier
-                        // （BeaconBlockEntity.filterEffect:111 只按 VALID_EFFECTS 过滤，applyEffects:238
-                        // 只看 levels 决定范围/时长）⇒ container/beacon 能设出界面上点不到的效果，
-                        // 故这两个布尔是 agent 判断"界面允不允许"的唯一依据。
+                        // canBePrimary / canBeSecondary / canUpgrade 复刻 GUI 门禁（BeaconScreen.init:74-101 + :231
+                        // `active = tier < levels`）：
+                        //   - 主效果列**只放前 3 组**（init:74 `for i <= 2`），某效果可点 ⟺ tier ≤ 2 且 tier < levels；
+                        //     第 4 组（regeneration）不在主效果列（2026-11-20 修正：此前按 tier < levels 算，4 级时对再生误报 true）；
+                        //   - 副效果列只有第 4 组（init:88-97）和一个"主效果 II 级"按钮（init:99-103，BeaconUpgradePowerButton，
+                        //     把副效果设成当前的主效果），levels ≥ 4 时才能点；
+                        //   - canBeSecondary：界面能不能把它设成副效果。再生直接点；前 3 组经"II 级"按钮设上——
+                        //     点过之后再换主效果，副效果不跟着变（BeaconPowerButton.onPress 只改主效果），
+                        //     所以 levels ≥ 4 时 6 个效果都能当副效果（2026-11-20 修正：此前前 3 组一律报 false）；
+                        //   - canUpgrade：这个效果当主效果时，能不能再把副效果设成它自己、升到 II 级（只有前 3 组、levels ≥ 4）。
+                        // 注意这些是**纯 UI 门禁**：服务端不过滤（BeaconBlockEntity.filterEffect:111 只按 VALID_EFFECTS 过滤，
+                        // BeaconMenu.updateEffects:142 只看付款格）⇒ container/beacon 能设出界面上设不出的组合，
+                        // 故这几个布尔是 agent 判断"界面允不允许"的唯一依据。
                         final List<Map<String, Object>> beaconEffects = new ArrayList<>();
                         for (int tier = 0; tier < BeaconBlockEntity.BEACON_EFFECTS.size(); tier++) {
-                            final boolean canBeSecondary = tier == 3 && beaconLevels >= 4;
+                            final boolean canBePrimary = tier <= 2 && tier < beaconLevels;
+                            final boolean canBeSecondary = beaconLevels >= 4;
+                            final boolean canUpgrade = tier <= 2 && beaconLevels >= 4;
                             for (var effect : BeaconBlockEntity.BEACON_EFFECTS.get(tier)) {
                                 Map<String, Object> e = new LinkedHashMap<>();
                                 e.put("effect",         effect.getRegisteredName());
                                 e.put("tier",           tier);
-                                e.put("canBePrimary",   tier < beaconLevels);
+                                e.put("canBePrimary",   canBePrimary);
                                 e.put("canBeSecondary", canBeSecondary);
+                                e.put("canUpgrade",     canUpgrade);
                                 beaconEffects.add(e);
                             }
                         }

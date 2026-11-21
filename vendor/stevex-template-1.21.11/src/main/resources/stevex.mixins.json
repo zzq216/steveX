@@ -9,7 +9,12 @@
 		"SoundEngineAccessor",
 		"SoundManagerAccessor",
 		"AbstractSignEditScreenAccessor",
-		"BookEditScreenAccessor"
+		"BookEditScreenAccessor",
+		"PlayerAccessor",
+		"BeaconBlockEntityAccessor",
+		"BeaconPaymentMixin",
+		"AnvilTakeMixin",
+		"AnvilQuickMoveMixin"
 	],
 	"client": [
 		"LevelRendererMixin",

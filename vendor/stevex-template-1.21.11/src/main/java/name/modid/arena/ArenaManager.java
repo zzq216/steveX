@@ -29,6 +29,16 @@ import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.inventory.DispenserMenu;
 import net.minecraft.world.inventory.HopperMenu;
 import net.minecraft.world.inventory.StonecutterMenu;
+import net.minecraft.world.inventory.EnchantmentMenu;
+import net.minecraft.world.inventory.BeaconMenu;
+import net.minecraft.world.inventory.AnvilMenu;
+import net.minecraft.world.level.block.AnvilBlock;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.core.Holder;
+import net.minecraft.tags.ItemTags;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.level.block.entity.BeaconBlockEntity;
+import name.modid.mixin.PlayerAccessor;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
@@ -38,7 +48,15 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.HopperBlock;
 import net.minecraft.world.level.block.WallSignBlock;
+import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.AbstractFurnaceBlock;
+import net.minecraft.world.item.crafting.AbstractCookingRecipe;
+import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.item.crafting.SingleRecipeInput;
+import net.minecraft.world.inventory.BlastFurnaceMenu;
+import net.minecraft.world.inventory.FurnaceMenu;
+import net.minecraft.world.inventory.SmokerMenu;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
@@ -69,6 +87,26 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>切石机场地（docs/切石机训练场设计方案.md）：工作站是切石机（{@code stonecutter}，没有容器）。prepare 登记"只看目标"的
  * 目标计数（{@link Expect} 的 targets / allowed，Q9）；status 另报物品栏、光标、切石机输入格、地上掉落物的计数（Q8）。
+ *
+ * <p>熔炉场地（docs/熔炉训练场设计方案.md）：工作站是熔炉、高炉或烟熏炉（{@code furnace} / {@code blast_furnace} / {@code smoker}，
+ * 每轮由插件指定）。prepare 先清空并拆掉上一轮的炉子再放新的（K12），登记"炉子"写法的目标（{@link Cook}，K8），
+ * 返回服务器端的燃料时长、烧制时间、产物和堆叠上限供插件核对；炉子按原版速度工作（第二版不加速，K6）；
+ * status 另报物品栏、光标、炉子三格和点燃状态、地上掉落物的计数。
+ *
+ * <p>附魔台场地（docs/附魔台训练场设计方案.md）：工作站是附魔台加同层外圈的书架（{@code enchanting_table}，书架也算工作站）。
+ * arena/enchant-preview 按物品、附魔种子、书架数预览三档（{@link EnchantArena#preview}）；prepare 设经验等级和附魔种子，
+ * 用真实的附魔台菜单再算一遍三档供插件核对，登记"附魔"写法的目标（{@link Enchant}，N8）；status 另报物品栏、光标、附魔台两格、
+ * 地上掉落物、界面开没开、经验等级和那件物品现在的附魔。
+ *
+ * <p>信标场地（docs/信标训练场设计方案.md）：工作站是信标加埋在地板下的铁块底座（{@code beacon}，底座也算工作站，层数按轮设置，G1、G2）。
+ * prepare 拆掉旧信标再放新的（清空效果），按本轮等级铺底座、拆掉多余的层；登记"信标"写法的目标（{@link Beacon}，G7）；
+ * 付款由 {@code BeaconPaymentMixin} 报给 {@link #onBeaconPaid}；status 另报物品栏、光标、付款格、地上掉落物、界面开没开、
+ * 信标的等级和主副效果、付款记录；finish 读完状态后再拆掉信标重放、清掉玩家身上的效果（G10）。
+ *
+ * <p>铁砧场地（docs/铁砧训练场设计方案.md）：工作站是铁砧（{@code anvil}，朝东）。build 遇到开裂、损坏的铁砧会换回完好的，所以每轮 prepare 都是新铁砧（A1）；
+ * 开裂、损坏的铁砧也算工作站还在。arena/anvil-catalog、arena/anvil-preview 是出题用的只读接口（{@link AnvilArena}，A2、A4）；
+ * prepare 发带附魔的物品、设经验等级，登记"铁砧"写法的目标（{@link Anvil}，A7）；取出产物由 {@code AnvilTakeMixin} 报给 {@link #onAnvilTake}；
+ * status 另报物品栏、光标、铁砧两格、地上掉落物、界面开没开、铁砧的状态、经验等级、取出记录。
  */
 public final class ArenaManager {
 
@@ -78,20 +116,33 @@ public final class ArenaManager {
     public record Site(BlockPos origin, String station) {}
 
     /** 工作站名 → 方块：工作台（W2）；小箱子、大箱子（箱子方案 C2，大箱子是两块 CHEST）；漏斗、发射器（方案 §8）；切石机（切石机方案 Q1）。 */
-    private static final Map<String, Block> STATIONS = Map.of(
-            "crafting_table", Blocks.CRAFTING_TABLE,
-            "chest", Blocks.CHEST,
-            "large_chest", Blocks.CHEST,
-            "hopper", Blocks.HOPPER,
-            "dispenser", Blocks.DISPENSER,
-            "stonecutter", Blocks.STONECUTTER);
+    private static final Map<String, Block> STATIONS = Map.ofEntries(
+            Map.entry("crafting_table", Blocks.CRAFTING_TABLE),
+            Map.entry("chest", Blocks.CHEST),
+            Map.entry("large_chest", Blocks.CHEST),
+            Map.entry("hopper", Blocks.HOPPER),
+            Map.entry("dispenser", Blocks.DISPENSER),
+            Map.entry("stonecutter", Blocks.STONECUTTER),
+            Map.entry("furnace", Blocks.FURNACE),
+            Map.entry("blast_furnace", Blocks.BLAST_FURNACE),
+            Map.entry("smoker", Blocks.SMOKER),
+            Map.entry("enchanting_table", Blocks.ENCHANTING_TABLE),
+            Map.entry("beacon", Blocks.BEACON),
+            Map.entry("anvil", Blocks.ANVIL));
 
-    /** 已知场地：名字 → Site。arena/build 会登记或更新；/arena 命令按这里传送。 */
+    /**
+     * 已知场地：名字 → Site。arena/build 会登记或更新；/arena 命令按这里传送。
+     * 信标场地换到 x = 10100（信标方案 G1）：4 级信标的水平范围是 50 格，沿 z 轴每隔 30 格排会覆盖附魔台场地。
+     */
     private static final Map<String, Site> KNOWN = new ConcurrentHashMap<>(Map.of(
             "craft2x2", new Site(DEFAULT_ORIGIN, null),
             "craft3x3", new Site(new BlockPos(10000, 120, 10030), "crafting_table"),
             "chest", new Site(new BlockPos(10000, 120, 10060), "chest"),
-            "stonecutter", new Site(new BlockPos(10000, 120, 10090), "stonecutter")));
+            "stonecutter", new Site(new BlockPos(10000, 120, 10090), "stonecutter"),
+            "furnace", new Site(new BlockPos(10000, 120, 10120), "furnace"),
+            "enchanting", new Site(new BlockPos(10000, 120, 10150), "enchanting_table"),
+            "beacon", new Site(new BlockPos(10100, 120, 10000), "beacon"),
+            "anvil", new Site(new BlockPos(10000, 120, 10180), "anvil")));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -103,14 +154,79 @@ public final class ArenaManager {
      *   <li>箱子方案 C9（targets 为 null）：物品栏（不含光标）与工作站容器里各物品 id 的数量都恰好如此、且光标为空，就算到达；</li>
      *   <li>切石机方案 Q9（targets 不为 null）：只看目标——每个目标在物品栏里恰好是 n 个、在光标和切石机输入格里没有；
      *       光标为空；物品栏、光标、输入格里没有 allowed 以外的物品。剩多少材料不比较（走哪条路切，材料消耗都可能不同）。</li>
+     *   <li>熔炉方案 K8（cook 不为 null）：见 {@link Cook}。</li>
+     *   <li>附魔台方案 N8（enchant 不为 null）：见 {@link Enchant}。</li>
+     *   <li>信标方案 G7（beacon 不为 null）：见 {@link Beacon}。</li>
+     *   <li>铁砧方案 A7（anvil 不为 null）：见 {@link Anvil}。</li>
      * </ul>
      * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil) {
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
-            this(inventory, container, null, null);
+            this(inventory, container, null, null, null, null, null, null);
+        }
+
+        public Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
+            this(inventory, container, targets, allowed, null, null, null, null);
+        }
+
+        public Expect(Cook cook) {
+            this(Map.of(), Map.of(), null, null, cook, null, null, null);
+        }
+
+        public Expect(Enchant enchant) {
+            this(Map.of(), Map.of(), null, null, null, enchant, null, null);
+        }
+
+        public Expect(Beacon beacon) {
+            this(Map.of(), Map.of(), null, null, null, null, beacon, null);
+        }
+
+        public Expect(Anvil anvil) {
+            this(Map.of(), Map.of(), null, null, null, null, null, anvil);
         }
     }
+
+    /**
+     * 铁砧方案 A6、A7 的目标：玩家身上（不含光标）有一件物品，类型是 item，附魔恰好是 enchantments（附魔书读存储的附魔），
+     * 自定义名字逐字是 name（null = 没有自定义名字），就算到达。不要求关界面。
+     */
+    public record Anvil(String item, Map<String, Integer> enchantments, String name) {}
+
+    /** 信标要给的一个效果：注册名 + 级数（1 = I，2 = II）。 */
+    public record Want(String effect, int amplifier) {}
+
+    /**
+     * 信标方案 G7 的目标：付款物品 payment，信标要给 effects 里的每一项（再生题两项，主效果在前）。
+     * 同时满足以下几条算到达：容器界面已关闭；光标为空，场内地上没有物品；主副效果是界面能设出来的、实际给的效果里有每一项
+     * （{@link BeaconArena#satisfies}）；物品栏里除了 payment 没有别的东西。
+     */
+    public record Beacon(String payment, List<Want> effects) {}
+
+    /** 信标底座的层数（信标方案 G2）：prepare 按本轮设置改，build 和工作站完好检查都按它；缺省 4。 */
+    private static int beaconLevel = BeaconArena.MAX_LEVEL;
+
+    /**
+     * 附魔台方案 N8 的目标：原材料 item 附魔成 result（书变附魔书，其余同 item），带有 enchantment 且等级是 level。
+     * 同时满足以下几条算到达：容器界面已关闭；物品栏里恰好有一件 result，它的附魔（附魔书读存储的附魔）里有 enchantment、等级是 level；
+     * 物品栏里除了它和青金石没有别的东西。
+     */
+    public record Enchant(String item, String result, String enchantment, int level) {}
+
+    /**
+     * 附魔台工作站这一轮的设置（附魔台方案 N2、N4）：书架数、初始经验等级、附魔种子。null = 不设（书架用默认 15 个，经验和种子不动）。
+     */
+    public record EnchantSetup(Integer bookshelves, Integer xpLevel, Integer seed) {}
+
+    /** 附魔台周围摆几个书架（N2）：prepare 按本轮设置改，build 和工作站完好检查都按它；缺省 15。 */
+    private static int shelfCount = EnchantArena.MAX_SHELVES;
+
+    /**
+     * 熔炉方案 K8 的目标（第二版）：物品栏里原料恰好剩 rawLeft、燃料恰好剩 fuelLeft，即 n 个原料、m 个燃料放进了炉子。
+     * 同时满足以下几条算到达：光标为空；物品栏里 raw、fuel 的数量恰好如此，且没有这三种以外的物品（product 可有可无）；
+     * 原料格空或只有 raw，燃料格空或只有 fuel。不看产物格，也不看炉子烧没烧完（K5）。
+     */
+    public record Cook(String raw, int rawLeft, String fuel, int fuelLeft, String product) {}
 
     /** 进行中的一轮；null = 没有进行中的训练。 */
     private static final class Run {
@@ -127,6 +243,11 @@ public final class ArenaManager {
         String craftedItem;
         Long openedAtMs;
         Long reachedAtMs;
+        // 信标方案 G7：付了几次、每次设的主副效果（BeaconPaymentMixin 报来）
+        int paid;
+        final List<Map<String, Object>> beaconSets = new ArrayList<>();
+        // 铁砧方案 A7：每次取出产物的花费、产物和时刻（AnvilTakeMixin 报来）
+        final List<Map<String, Object>> anvilTakes = new ArrayList<>();
 
         Run(String arena, BlockPos origin, UUID player, List<Watch> watch, long startedAtMs, String stationName, Block station, Expect expect) {
             this.arena = arena;
@@ -178,6 +299,149 @@ public final class ArenaManager {
         return "stonecutter".equals(station);
     }
 
+    /** 炉子工作站（熔炉方案）：熔炉、高炉、烟熏炉。容器是方块实体本身，关界面后东西留在炉子里（F11）。 */
+    public static boolean isFurnace(String station) {
+        return "furnace".equals(station) || "blast_furnace".equals(station) || "smoker".equals(station);
+    }
+
+    /** 附魔台工作站（附魔台方案）：附魔台加周围的书架，没有方块实体里的物品（关界面时退回物品栏，E8）。 */
+    public static boolean isEnchanter(String station) {
+        return "enchanting_table".equals(station);
+    }
+
+    /** 信标工作站（信标方案）：信标加埋在地板下的底座。 */
+    public static boolean isBeacon(String station) {
+        return "beacon".equals(station);
+    }
+
+    /** 铁砧工作站（铁砧方案）：没有方块实体，关界面时两个输入格退回物品栏（F11）。 */
+    public static boolean isAnvil(String station) {
+        return "anvil".equals(station);
+    }
+
+    /**
+     * 铁砧方案 A7：玩家即将从铁砧取出产物（{@code AnvilTakeMixin} 调用，服务器线程；此时还没扣经验）。
+     * 本轮的玩家在铁砧场地取的才记：花费、产物的附魔和名字、时刻。
+     */
+    public static void onAnvilTake(ServerPlayer player, int cost, ItemStack result) {
+        ItemStack noted = player.getUUID().equals(anvilResultOwner) ? anvilResult : ItemStack.EMPTY;
+        anvilResultOwner = null;
+        anvilResult = ItemStack.EMPTY;
+        Run run = active;
+        if (run == null || !isAnvil(run.stationName) || !player.getUUID().equals(run.player)) return;
+        // Shift 点击取出时 onTake 拿到的是已经移空的叠，改用 quickMoveStack 开头复制的那份（AnvilQuickMoveMixin）
+        if (result.isEmpty()) result = noted;
+        Map<String, Object> take = new LinkedHashMap<>();
+        take.put("cost", cost);
+        take.put("enchantments", AnvilArena.enchantments(result));
+        take.put("name", AnvilArena.customName(result));
+        take.put("atMs", System.currentTimeMillis());
+        run.anvilTakes.add(take);
+    }
+
+    /** Shift 点击铁砧产物格时，移走之前的产物副本（AnvilQuickMoveMixin 记，onAnvilTake 取用后清掉；服务器线程，不加锁） */
+    private static UUID anvilResultOwner;
+    private static ItemStack anvilResult = ItemStack.EMPTY;
+
+    /** AnvilQuickMoveMixin：quickMoveStack 开头、对铁砧产物格的那一次，记下产物的副本。 */
+    public static void noteAnvilResult(ServerPlayer player, ItemStack result) {
+        anvilResultOwner = player.getUUID();
+        anvilResult = result.copy();
+    }
+
+    /** 铁砧方案 A2：物品池和每件物品能附的附魔（只读）。 */
+    public static Map<String, Object> anvilCatalog(MinecraftServer server) {
+        return AnvilArena.catalog(server.registryAccess());
+    }
+
+    /** 铁砧方案 A4：按原版算法预览产物和花费（只读；玩家会被设成生存模式）。right 为 null = 右格空着。 */
+    public static Map<String, Object> anvilPreview(MinecraftServer server, ServerPlayer player, Give left, Give right, String name) {
+        ItemStack l = AnvilArena.stack(server.registryAccess(), item(left.id()), left.count(), left.enchantments());
+        ItemStack r = right == null ? null : AnvilArena.stack(server.registryAccess(), item(right.id()), right.count(), right.enchantments());
+        return AnvilArena.preview(player, l, r, name);
+    }
+
+    /** 当前界面是铁砧时两个输入格：{ left, right }（各是物品摘要或 null）；不是铁砧界面 → null。 */
+    private static Map<String, Object> anvilSlots(AbstractContainerMenu menu) {
+        if (!(menu instanceof AnvilMenu am)) return null;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("left", AnvilArena.describe(am.getSlot(AnvilMenu.INPUT_SLOT).getItem()));
+        out.put("right", AnvilArena.describe(am.getSlot(AnvilMenu.ADDITIONAL_SLOT).getItem()));
+        return out;
+    }
+
+    /** 玩家身上（主物品栏、快捷栏、盔甲、副手，不含光标）的每一件物品：[{ slot, id, count, enchantments, name }]。 */
+    private static List<Map<String, Object>> itemDetails(ServerPlayer player) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            Map<String, Object> d = AnvilArena.describe(inv.getItem(i));
+            if (d == null) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("slot", i);
+            row.putAll(d);
+            out.add(row);
+        }
+        return out;
+    }
+
+    /** 场地里的信标方块实体；那一格不是信标（被挖掉了）→ null。 */
+    private static BeaconBlockEntity beaconAt(ServerLevel level, BlockPos o) {
+        BlockPos at = stationPos(o);
+        if (!level.getBlockState(at).is(Blocks.BEACON)) return null;
+        return level.getBlockEntity(at) instanceof BeaconBlockEntity beacon ? beacon : null;
+    }
+
+    /**
+     * 信标方案 G7：服务端即将按设信标包改效果、扣 1 个付款（{@code BeaconPaymentMixin} 调用，服务器线程）。
+     * 本轮的玩家在信标场地付的才记：次数加一，记下这次设的主副效果（不是信标效果的按原版 filterEffect 记成 null）和时刻。
+     */
+    public static void onBeaconPaid(ServerPlayer player, Holder<MobEffect> primary, Holder<MobEffect> secondary) {
+        Run run = active;
+        if (run == null || !isBeacon(run.stationName) || !player.getUUID().equals(run.player)) return;
+        run.paid++;
+        Map<String, Object> set = new LinkedHashMap<>();
+        set.put("primary", BeaconArena.tierOf(primary) >= 0 ? BeaconArena.effectId(primary) : null);
+        set.put("secondary", BeaconArena.tierOf(secondary) >= 0 ? BeaconArena.effectId(secondary) : null);
+        set.put("atMs", System.currentTimeMillis());
+        run.beaconSets.add(set);
+    }
+
+    /** 拆掉信标再放一个新的：方块实体重建，主副效果清空、等级从 0 重新数（信标方案 F8、G2）。 */
+    private static void replaceBeacon(ServerLevel level, BlockPos o) {
+        BlockPos at = stationPos(o);
+        level.setBlockAndUpdate(at, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(at, Blocks.BEACON.defaultBlockState());
+    }
+
+    /** 当前界面是信标时付款格里的东西：{ id: count }；空或不是信标界面 → {}。 */
+    private static Map<String, Integer> beaconSlot(AbstractContainerMenu menu) {
+        if (!(menu instanceof BeaconMenu bm)) return Map.of();
+        ItemStack stack = bm.getSlot(0).getItem();
+        return stack.isEmpty() ? Map.of() : Map.of(id(stack), stack.getCount());
+    }
+
+    /**
+     * 附魔台方案 N5：三档预览（只读，不碰世界）。item 用默认组件新建一件；seed 是附魔种子，shelves 是书架数。
+     * 见 {@link EnchantArena#preview}。
+     */
+    public static Map<String, Object> enchantPreview(MinecraftServer server, String itemId, int seed, int shelves) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("item", itemId);
+        out.put("enchantSeed", seed);
+        out.put("bookshelves", shelves);
+        out.putAll(EnchantArena.preview(server.registryAccess(), new ItemStack(item(itemId)), seed, shelves));
+        return out;
+    }
+
+    /** 场地里的炉子方块实体；那一格不是本轮的炉子（被挖掉了） → null。 */
+    private static AbstractFurnaceBlockEntity furnaceAt(ServerLevel level, BlockPos o, String station) {
+        BlockPos at = stationPos(o);
+        Block block = STATIONS.get(station);
+        if (block == null || !level.getBlockState(at).is(block)) return null;
+        return level.getBlockEntity(at) instanceof AbstractFurnaceBlockEntity furnace ? furnace : null;
+    }
+
     /** 容器工作站的格数：小箱子 27、大箱子 54、漏斗 5、发射器 9；不是容器工作站 → 0。 */
     public static int storageCapacity(String station) {
         if (station == null) return 0;
@@ -217,6 +481,18 @@ public final class ArenaManager {
                 out.put(at, Blocks.HOPPER.defaultBlockState().setValue(HopperBlock.ENABLED, false));
                 out.put(at.below(), Blocks.REDSTONE_BLOCK.defaultBlockState());
             }
+            case "enchanting_table" -> {
+                // 附魔台方案 N1：附魔台 + 同层外圈的书架（shelfCount 个），书架也算工作站，被挖掉判 lost
+                out.put(at, Blocks.ENCHANTING_TABLE.defaultBlockState());
+                for (BlockPos shelf : EnchantArena.shelfPositions(at, shelfCount)) out.put(shelf, Blocks.BOOKSHELF.defaultBlockState());
+            }
+            case "beacon" -> {
+                // 信标方案 G1、G2：信标 + 埋在地板下的铁块底座（beaconLevel 层，第 1 层是地板的一部分），底座也算工作站，被挖掉判 lost
+                out.put(at, Blocks.BEACON.defaultBlockState());
+                for (BlockPos base : BeaconArena.basePositions(at, beaconLevel)) out.put(base, Blocks.IRON_BLOCK.defaultBlockState());
+            }
+            // 铁砧方案 A1：朝向固定；开裂、损坏的铁砧状态不同，build 会把它换回完好的
+            case "anvil" -> out.put(at, Blocks.ANVIL.defaultBlockState().setValue(AnvilBlock.FACING, Direction.EAST));
             default -> out.put(at, station(station).defaultBlockState());
         }
         return out;
@@ -272,6 +548,17 @@ public final class ArenaManager {
                             : stationAt.getOrDefault(pos, Blocks.AIR.defaultBlockState());
                     placed += set(level, pos, state);
                 }
+            }
+        }
+        // 信标底座（信标方案 G1、G2）：地板以下的几层不在上面的循环里，单独铺；本轮用不到的层整层换成空气，否则等级会偏高。
+        // 换成别的工作站时，上一次留下的底座也清掉
+        BlockPos beaconPos = stationPos(o);
+        int baseLayers = isBeacon(station) ? beaconLevel : 0;
+        for (int m = 2; m <= BeaconArena.MAX_LEVEL; m++) {
+            BlockState state = m <= baseLayers ? Blocks.IRON_BLOCK.defaultBlockState() : Blocks.AIR.defaultBlockState();
+            for (BlockPos pos : BeaconArena.layer(beaconPos, m)) {
+                if (state.isAir() && !level.getBlockState(pos).is(Blocks.IRON_BLOCK)) continue; // 只拆底座，不动原地形
+                placed += set(level, pos, state);
             }
         }
         // 场外平台：地板 + 屏障护栏 2 格高（靠场地一侧不设护栏，由场地墙挡住）
@@ -347,8 +634,15 @@ public final class ArenaManager {
 
     // ── 一轮 ─────────────────────────────────────────────────────────────
 
-    /** 一个要发放的物品：slot ∈ [0, 35]（主物品栏），count ≥ 1（超过堆叠上限的由 {@link #split} 拆开）。 */
-    public record Give(int slot, String id, int count) {}
+    /**
+     * 一个要发放的物品：slot ∈ [0, 35]（主物品栏），count ≥ 1（超过堆叠上限的由 {@link #split} 拆开）。
+     * enchantments（铁砧方案 A7）：{ 注册名: 级数 }，附魔书写进存储的附魔；null = 不带附魔。
+     */
+    public record Give(int slot, String id, int count, Map<String, Integer> enchantments) {
+        public Give(int slot, String id, int count) {
+            this(slot, id, count, null);
+        }
+    }
 
     /**
      * 兜底拆堆（工作台方案 W5）：超过堆叠上限的一堆，原槽位放满上限，余下的按上限分堆，
@@ -369,10 +663,10 @@ public final class ArenaManager {
         int next = 0;
         for (Give g : items) {
             int max = item(g.id()).getDefaultMaxStackSize();
-            out.add(new Give(g.slot(), g.id(), Math.min(g.count(), max)));
+            out.add(new Give(g.slot(), g.id(), Math.min(g.count(), max), g.enchantments()));
             for (int left = g.count() - max; left > 0; left -= max) {
                 if (next >= free.size()) throw new IllegalArgumentException("not enough free slots to split " + g.id() + " x" + g.count());
-                out.add(new Give(free.get(next++), g.id(), Math.min(left, max)));
+                out.add(new Give(free.get(next++), g.id(), Math.min(left, max), g.enchantments()));
             }
         }
         return out;
@@ -397,24 +691,71 @@ public final class ArenaManager {
     /**
      * 每轮重置（方案 T8）并发放材料，开始监测 watch 里各物品的 crafted 统计。
      * 箱子工作站（箱子方案）：清空箱子后放进 chestItems；给了 expect 就在 tick 里检测到达（C9）。
+     * 炉子工作站（熔炉方案）：先清空并拆掉上一轮的炉子再放新的（K12）；
+     * 给了 expect.cook 就返回服务器端的燃料时长、烧制时间、产物、堆叠上限（K8），供插件和数据文件核对。
+     * 附魔台工作站（附魔台方案）：按 enchantSetup 摆书架、设经验等级和附魔种子（N2、N4）；给了 expect.enchant 就用真实的附魔台菜单
+     * 算一遍三档，连同实际数到的书架数一起返回（N5 的核对）。
+     * 信标工作站（信标方案）：按 beaconLevel 铺底座（G2），拆掉旧信标再放新的；给了 expect.beacon 就核对付款物品和要求的效果（G7）。
+     * 铁砧工作站（铁砧方案）：build 换上完好的铁砧（A1），按 enchantSetup.xpLevel 设经验等级（A7）；items 可以带附魔。
      * 已有进行中的一轮时拒绝：先 finish 再开新一轮。
      */
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
                                               List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
-                                              Expect expect, long dayTime) {
+                                              Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         Block stationBlock = station(station);
         checkChestItems(chestItems, storageCapacity(station));
-        if (expect != null && expect.targets() == null && !isStorage(station)) throw new IllegalArgumentException("expect { inventory, container } needs a container station (chest, large_chest, hopper, dispenser)");
-        if (expect != null && expect.targets() != null && !isCutter(station)) throw new IllegalArgumentException("expect { targets, allowed } needs the stonecutter station");
+        int baseLevel = requestedBeaconLevel != null ? requestedBeaconLevel : BeaconArena.MAX_LEVEL;
+        if (isBeacon(station) && (baseLevel < 1 || baseLevel > BeaconArena.MAX_LEVEL)) throw new IllegalArgumentException("beaconLevel must be within 1-" + BeaconArena.MAX_LEVEL + ": " + baseLevel);
+        if (expect != null && expect.anvil() != null) {
+            if (!isAnvil(station)) throw new IllegalArgumentException("expect { anvil } needs the anvil station");
+            AnvilArena.stack(server.registryAccess(), item(expect.anvil().item()), 1, expect.anvil().enchantments()); // 未知 id、级数不对在这里报错
+        } else if (expect != null && expect.beacon() != null) {
+            if (!isBeacon(station)) throw new IllegalArgumentException("expect { beacon } needs the beacon station");
+            // 信标方案 G7：付款物品要在 beacon_payment_items 里（F6），要求的效果要是信标效果、底座等级够（F1）
+            if (!new ItemStack(item(expect.beacon().payment())).is(ItemTags.BEACON_PAYMENT_ITEMS)) throw new IllegalArgumentException(expect.beacon().payment() + " is not a beacon payment item");
+            if (expect.beacon().effects().isEmpty()) throw new IllegalArgumentException("expect.beacon.effects is empty");
+            for (Want w : expect.beacon().effects()) {
+                int needed = BeaconArena.requiredLevel(w.effect(), w.amplifier());
+                if (needed > baseLevel) throw new IllegalArgumentException(w.effect() + " " + w.amplifier() + " needs a level " + needed + " beacon, the base is level " + baseLevel);
+            }
+        } else if (expect != null && expect.enchant() != null) {
+            if (!isEnchanter(station)) throw new IllegalArgumentException("expect { enchant } needs the enchanting_table station");
+            item(expect.enchant().item()); // 未知 id 在这里报错
+        } else if (expect != null && expect.cook() != null) {
+            if (!isFurnace(station)) throw new IllegalArgumentException("expect { cook } needs a furnace station (furnace, blast_furnace, smoker)");
+        } else if (expect != null && expect.targets() == null && !isStorage(station)) {
+            throw new IllegalArgumentException("expect { inventory, container } needs a container station (chest, large_chest, hopper, dispenser)");
+        } else if (expect != null && expect.targets() != null && !isCutter(station)) {
+            throw new IllegalArgumentException("expect { targets, allowed } needs the stonecutter station");
+        }
         List<Give> items = split(requested, seed);
         List<ItemStack> stacks = new ArrayList<>();
-        for (Give g : items) stacks.add(new ItemStack(item(g.id()), g.count()));
+        for (Give g : items) stacks.add(AnvilArena.stack(server.registryAccess(), item(g.id()), g.count(), g.enchantments()));
         List<Item> watchItems = new ArrayList<>();
         for (String id : watchIds) watchItems.add(item(id));
-
-        build(server, arena, o, station);
         ServerLevel level = server.overworld();
+        Map<String, Object> cookInfo = expect != null && expect.cook() != null ? cookInfo(server, level, station, expect.cook()) : null;
+
+        // 炉子（熔炉方案 K12、F11）：同一种方块只改点燃状态时方块实体会保留，上一轮剩下的东西、进度、存着的经验都还在。
+        // 先清空三格（拆除时就不会掉东西），再换成空气，build 会放一台新的；拆除时弹出的经验球由下面第 3 步清掉
+        BlockPos stationAt = stationPos(o);
+        if (level.getBlockEntity(stationAt) instanceof AbstractFurnaceBlockEntity old) {
+            old.clearContent();
+            level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
+        }
+        // 附魔台（附魔台方案 N2）：本轮的书架数决定 build 摆哪些书架、工作站完好检查看哪些格子
+        if (isEnchanter(station)) {
+            int shelves = enchantSetup != null && enchantSetup.bookshelves() != null ? enchantSetup.bookshelves() : EnchantArena.MAX_SHELVES;
+            if (shelves < 0 || shelves > EnchantArena.MAX_SHELVES) throw new IllegalArgumentException("bookshelves must be within 0-" + EnchantArena.MAX_SHELVES + ": " + shelves);
+            shelfCount = shelves;
+        }
+        // 信标（信标方案 G2、F8）：本轮的底座层数决定 build 铺哪几层、工作站完好检查看哪些格子；旧信标拆掉，build 放一个新的（效果清空）
+        if (isBeacon(station)) {
+            beaconLevel = baseLevel;
+            if (level.getBlockState(stationAt).is(Blocks.BEACON)) level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
+        }
+        build(server, arena, o, station);
         // 1. 先关界面：2×2 / 工作台合成格里的物品退回物品栏、客户端界面一并关掉；光标物品清掉
         player.containerMenu.setCarried(ItemStack.EMPTY);
         player.closeContainer();
@@ -444,6 +785,29 @@ public final class ArenaManager {
         // 7. 发材料，记统计基线
         for (int i = 0; i < items.size(); i++) player.getInventory().setItem(items.get(i).slot(), stacks.get(i));
         player.inventoryMenu.broadcastChanges();
+        // 7b. 附魔台（附魔台方案 N4）：经验等级（进度清零）、附魔种子
+        Map<String, Object> enchantInfo = null;
+        if (isEnchanter(station)) {
+            if (enchantSetup != null && enchantSetup.xpLevel() != null) {
+                if (enchantSetup.xpLevel() < 0) throw new IllegalArgumentException("xpLevel must be >= 0");
+                player.setExperienceLevels(enchantSetup.xpLevel());
+                player.setExperiencePoints(0);
+            }
+            if (enchantSetup != null && enchantSetup.seed() != null) ((PlayerAccessor) player).stevex$setEnchantmentSeed(enchantSetup.seed());
+            enchantInfo = new LinkedHashMap<>();
+            enchantInfo.put("bookshelves", EnchantArena.countShelves(level, stationPos(o)));
+            enchantInfo.put("xpLevel", player.experienceLevel);
+            enchantInfo.put("enchantSeed", player.getEnchantmentSeed());
+            if (expect != null && expect.enchant() != null) {
+                enchantInfo.put("offers", EnchantArena.menuOffers(level, player, stationPos(o), new ItemStack(item(expect.enchant().item()))));
+            }
+        }
+        // 7c. 铁砧（铁砧方案 A7）：经验等级（进度清零）
+        if (isAnvil(station) && enchantSetup != null && enchantSetup.xpLevel() != null) {
+            if (enchantSetup.xpLevel() < 0) throw new IllegalArgumentException("xpLevel must be >= 0");
+            player.setExperienceLevels(enchantSetup.xpLevel());
+            player.setExperiencePoints(0);
+        }
         // 8. 箱子：先清空（上一轮剩下的不能留），再放本轮的
         Container chest = null;
         if (isStorage(station)) {
@@ -467,7 +831,14 @@ public final class ArenaManager {
         out.put("startedAtMs", active.startedAtMs);
         out.put("baseline", baseline);
         List<Map<String, Object>> given = new ArrayList<>();
-        for (Give g : items) given.add(Map.of("slot", g.slot(), "id", g.id(), "count", g.count()));
+        for (Give g : items) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("slot", g.slot());
+            row.put("id", g.id());
+            row.put("count", g.count());
+            if (g.enchantments() != null && !g.enchantments().isEmpty()) row.put("enchantments", g.enchantments());
+            given.add(row);
+        }
         out.put("given", given);
         out.put("inventory", inventory(player, null));
         if (stationBlock != null) {
@@ -480,7 +851,71 @@ public final class ArenaManager {
             out.put("chestSlots", chest.getContainerSize());
             out.put("chest", counts(chest));
         }
+        if (cookInfo != null) out.put("cook", cookInfo);
+        if (enchantInfo != null) out.put("enchant", enchantInfo);
+        if (isBeacon(station)) {
+            // 信标方案 G2：新放的信标等级是 0，要等它查完光柱、到 80 tick 的整数倍才数底座；插件轮询 status 的 beacon.levels 等它对上
+            Map<String, Object> beaconInfo = new LinkedHashMap<>();
+            beaconInfo.put("baseLevel", beaconLevel);
+            BeaconBlockEntity beacon = beaconAt(level, o);
+            beaconInfo.put("state", beacon != null ? BeaconArena.state(beacon) : null);
+            out.put("beacon", beaconInfo);
+        }
+        if (isAnvil(station)) {
+            Map<String, Object> anvilInfo = new LinkedHashMap<>();
+            anvilInfo.put("state", AnvilArena.state(level, stationPos(o)));
+            anvilInfo.put("xpLevel", player.experienceLevel);
+            anvilInfo.put("items", itemDetails(player));
+            out.put("anvil", anvilInfo);
+        }
         return out;
+    }
+
+    /**
+     * 熔炉方案 K8：服务器端的真实数值——这台炉子里 cook.fuel 的燃料时长（高炉、烟熏炉减半，F3）、
+     * cook.raw 的烧制时间和产物、两者的堆叠上限。这台炉子烧不了 cook.raw、或 cook.fuel 不是燃料 → 报错。
+     */
+    private static Map<String, Object> cookInfo(MinecraftServer server, ServerLevel level, String station, Cook cook) {
+        Item raw = item(cook.raw());
+        Item fuel = item(cook.fuel());
+        item(cook.product()); // 未知 id 在这里报错
+        SingleRecipeInput input = new SingleRecipeInput(new ItemStack(raw));
+        var recipes = server.getRecipeManager();
+        AbstractCookingRecipe recipe = switch (station) {
+            case "blast_furnace" -> recipes.getRecipeFor(RecipeType.BLASTING, input, level).map(h -> (AbstractCookingRecipe) h.value()).orElse(null);
+            case "smoker" -> recipes.getRecipeFor(RecipeType.SMOKING, input, level).map(h -> (AbstractCookingRecipe) h.value()).orElse(null);
+            default -> recipes.getRecipeFor(RecipeType.SMELTING, input, level).map(h -> (AbstractCookingRecipe) h.value()).orElse(null);
+        };
+        if (recipe == null) throw new IllegalArgumentException(cook.raw() + " cannot be cooked in a " + station);
+        int burn = server.fuelValues().burnDuration(new ItemStack(fuel));
+        if (burn <= 0) throw new IllegalArgumentException(cook.fuel() + " is not a fuel");
+        // BlastFurnaceBlockEntity / SmokerBlockEntity.getBurnDuration：super / 2
+        if (!"furnace".equals(station)) burn = burn / 2;
+        ItemStack result = recipe.assemble(input, level.registryAccess());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("burnTicks", burn);
+        out.put("cookTicks", recipe.cookingTime());
+        out.put("product", id(result));
+        out.put("productCount", result.getCount());
+        out.put("rawMaxStack", raw.getDefaultMaxStackSize());
+        out.put("fuelMaxStack", fuel.getDefaultMaxStackSize());
+        return out;
+    }
+
+    /** 炉子三格和点燃状态（熔炉方案 K8）：{ input, fuel, output: { id: count }, lit }；炉子不在了 → null。 */
+    private static Map<String, Object> furnaceState(ServerLevel level, Run run) {
+        AbstractFurnaceBlockEntity furnace = furnaceAt(level, run.origin, run.stationName);
+        if (furnace == null) return null;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("input", slotCount(furnace.getItem(0)));
+        out.put("fuel", slotCount(furnace.getItem(1)));
+        out.put("output", slotCount(furnace.getItem(2)));
+        out.put("lit", furnace.getBlockState().getValue(AbstractFurnaceBlock.LIT));
+        return out;
+    }
+
+    private static Map<String, Integer> slotCount(ItemStack stack) {
+        return stack.isEmpty() ? Map.of() : Map.of(id(stack), stack.getCount());
     }
 
     /** 当前一轮的状态（没有进行中的一轮时 active=false）。 */
@@ -522,22 +957,79 @@ public final class ArenaManager {
             out.put("cutterInput", cutterInput(player.containerMenu));
             out.put("dropped", dropped(level, active.origin));
         }
+        if (isEnchanter(active.stationName)) {
+            // 附魔台方案 N7、N8：物品栏（不含光标）、光标、附魔台两格（界面开着时；关界面时退回物品栏）、场内地上、界面开没开、经验等级、
+            // 那件物品现在的附魔
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("table", enchantTable(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("containerOpen", containerOpen(player));
+            out.put("xpLevel", player.experienceLevel);
+            out.put("enchantments", active.expect != null && active.expect.enchant() != null ? EnchantArena.enchantmentsOf(enchantedStack(player, active.expect.enchant())) : List.of());
+        }
+        if (isFurnace(active.stationName)) {
+            // 熔炉方案 K4、K8：物品栏（不含光标）、光标、炉子三格（关界面后东西留在炉子里）、场内地上
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("furnace", furnaceState(level, active));
+            out.put("dropped", dropped(level, active.origin));
+            // 熔炉方案 K8：任务要求放好后关掉界面；finish 先读状态再关界面，所以这里是 agent 自己留下的样子
+            out.put("containerOpen", containerOpen(player));
+        }
+        if (isBeacon(active.stationName)) {
+            // 信标方案 G6、G7：物品栏（不含光标）、光标、付款格（界面开着时；关界面时付款格里的东西会被扔到地上，F7）、场内地上、
+            // 界面开没开、信标的等级和主副效果（信标不在了 → null）、付款次数和每次设的效果
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("slot", beaconSlot(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("containerOpen", containerOpen(player));
+            BeaconBlockEntity beacon = beaconAt(level, active.origin);
+            out.put("beacon", beacon != null ? BeaconArena.state(beacon) : null);
+            out.put("paid", active.paid);
+            out.put("sets", List.copyOf(active.beaconSets));
+        }
+        if (isAnvil(active.stationName)) {
+            // 铁砧方案 A6、A7：物品栏（不含光标）的计数和每件的附魔、名字，光标，铁砧两格（界面开着时；关界面时退回物品栏），
+            // 场内地上，界面开没开，铁砧的状态，经验等级，每次取出产物的记录
+            out.put("held", counts(player.getInventory()));
+            out.put("items", itemDetails(player));
+            out.put("carried", carried(player.containerMenu));
+            out.put("carriedItem", AnvilArena.describe(player.containerMenu.getCarried()));
+            out.put("slots", anvilSlots(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("containerOpen", containerOpen(player));
+            out.put("anvilState", AnvilArena.state(level, stationPos(active.origin)));
+            out.put("xpLevel", player.experienceLevel);
+            out.put("takes", List.copyOf(active.anvilTakes));
+        }
         return out;
     }
 
-    /** 工作站的每一格都还是应有的方块（大箱子要两半都在，漏斗下面的红石块也要在，§8 S22）。 */
+    /** 工作站的每一格都还是应有的方块（大箱子要两半都在，漏斗下面的红石块也要在，§8 S22）。铁砧开裂、损坏也算在（铁砧方案 A1）。 */
     private static boolean stationIntact(ServerLevel level, Run run) {
+        if (isAnvil(run.stationName)) return level.getBlockState(stationPos(run.origin)).is(BlockTags.ANVIL);
         for (Map.Entry<BlockPos, Block> e : run.stationBlocks.entrySet()) if (!level.getBlockState(e.getKey()).is(e.getValue())) return false;
         return true;
     }
 
-    /** 结束本轮：读最终状态后传送到场外。没有进行中的一轮时只传送。 */
+    /**
+     * 结束本轮：读最终状态后传送到场外。没有进行中的一轮时只传送。
+     * 信标场地（信标方案 G7、G10）：读完状态再拆掉信标重放（清空效果）、清掉玩家身上的效果，不带进下一轮或其他场地的训练。
+     */
     public static Map<String, Object> finish(MinecraftServer server, ServerPlayer player, BlockPos fallbackOrigin) {
         Map<String, Object> out = status(server);
         BlockPos o = active != null ? active.origin : fallbackOrigin;
+        boolean beacon = active != null && isBeacon(active.stationName);
         active = null;
         player.containerMenu.setCarried(ItemStack.EMPTY);
         player.closeContainer();
+        if (beacon) {
+            ServerLevel level = server.overworld();
+            if (level.getBlockState(stationPos(o)).is(Blocks.BEACON)) replaceBeacon(level, o);
+            player.removeAllEffects();
+        }
         teleportOutside(server, player, o);
         return out;
     }
@@ -570,7 +1062,8 @@ public final class ArenaManager {
 
     /**
      * 当前界面是不是这个工作站的界面：工作台 → CraftingMenu（物品栏的 2×2 是 InventoryMenu，不会误记）；
-     * 箱子 → ChestMenu；漏斗 → HopperMenu；发射器 → DispenserMenu；切石机 → StonecutterMenu。
+     * 箱子 → ChestMenu；漏斗 → HopperMenu；发射器 → DispenserMenu；切石机 → StonecutterMenu；
+     * 熔炉 → FurnaceMenu；高炉 → BlastFurnaceMenu；烟熏炉 → SmokerMenu。
      */
     private static boolean opensStation(String station, AbstractContainerMenu menu) {
         return switch (station) {
@@ -578,13 +1071,23 @@ public final class ArenaManager {
             case "hopper" -> menu instanceof HopperMenu;
             case "dispenser" -> menu instanceof DispenserMenu;
             case "stonecutter" -> menu instanceof StonecutterMenu;
+            case "furnace" -> menu instanceof FurnaceMenu;
+            case "blast_furnace" -> menu instanceof BlastFurnaceMenu;
+            case "smoker" -> menu instanceof SmokerMenu;
+            case "enchanting_table" -> menu instanceof EnchantmentMenu;
+            case "beacon" -> menu instanceof BeaconMenu;
+            case "anvil" -> menu instanceof AnvilMenu;
             default -> menu instanceof CraftingMenu;
         };
     }
 
-    /** 箱子方案 C9：物品栏（不含光标）与容器的计数恰好等于 expect，且光标为空。容器不在了 → 否。切石机见 {@link #reachedTargets}。 */
+    /** 箱子方案 C9：物品栏（不含光标）与容器的计数恰好等于 expect，且光标为空。容器不在了 → 否。切石机见 {@link #reachedTargets}，炉子见 {@link #reachedCook}。 */
     private static boolean reached(ServerLevel level, ServerPlayer player, Run run) {
         if (!player.containerMenu.getCarried().isEmpty()) return false;
+        if (run.expect.anvil() != null) return reachedAnvil(player, run.expect.anvil());
+        if (run.expect.beacon() != null) return reachedBeacon(level, player, run);
+        if (run.expect.enchant() != null) return reachedEnchant(player, run.expect.enchant());
+        if (run.expect.cook() != null) return reachedCook(level, player, run);
         if (run.expect.targets() != null) return reachedTargets(player, run.expect);
         Container chest = stationContainer(level, run.origin, run.stationName);
         return chest != null && counts(player.getInventory()).equals(run.expect.inventory()) && counts(chest).equals(run.expect.container());
@@ -598,6 +1101,102 @@ public final class ArenaManager {
             if (!t.getValue().equals(held.getOrDefault(t.getKey(), 0)) || input.containsKey(t.getKey())) return false;
         }
         return expect.allowed().containsAll(held.keySet()) && expect.allowed().containsAll(input.keySet());
+    }
+
+    /**
+     * 熔炉方案 K8（第二版；光标为空已由调用方检查）：放对了并关掉界面就算——容器界面已关闭（当前菜单回到玩家自己的背包菜单）；
+     * 物品栏里原料、燃料恰好剩 rawLeft、fuelLeft，没有原料、燃料、产物以外的物品（产物可有可无）；
+     * 原料格空或只有原料，燃料格空或只有燃料。产物格、炉子还在不在烧都不看。炉子不在了 → 否。
+     */
+    private static boolean reachedCook(ServerLevel level, ServerPlayer player, Run run) {
+        if (containerOpen(player)) return false;
+        Cook cook = run.expect.cook();
+        AbstractFurnaceBlockEntity furnace = furnaceAt(level, run.origin, run.stationName);
+        if (furnace == null) return false;
+        Map<String, Integer> held = counts(player.getInventory());
+        if (held.getOrDefault(cook.raw(), 0) != cook.rawLeft() || held.getOrDefault(cook.fuel(), 0) != cook.fuelLeft()) return false;
+        for (String id : held.keySet()) {
+            if (!id.equals(cook.raw()) && !id.equals(cook.fuel()) && !id.equals(cook.product())) return false;
+        }
+        ItemStack input = furnace.getItem(0);
+        if (!input.isEmpty() && !id(input).equals(cook.raw())) return false;
+        ItemStack fuel = furnace.getItem(1);
+        return fuel.isEmpty() || id(fuel).equals(cook.fuel());
+    }
+
+    /**
+     * 玩家开着某个容器界面（炉子、箱子……）：服务器端的当前菜单不是玩家自己的背包菜单。
+     * 客户端按 E 打开的背包界面服务器看不到，算作没开容器。
+     */
+    /**
+     * 附魔台方案 N8（光标为空已由调用方检查）：容器界面已关闭；物品栏里恰好一件 result，带有目标附魔（附魔书读存储的附魔）；
+     * 物品栏里除了它和青金石没有别的东西。
+     */
+    private static boolean reachedEnchant(ServerPlayer player, Enchant enchant) {
+        if (containerOpen(player)) return false;
+        Map<String, Integer> held = counts(player.getInventory());
+        if (held.getOrDefault(enchant.result(), 0) != 1) return false;
+        for (String id : held.keySet()) if (!id.equals(enchant.result()) && !id.equals(LAPIS)) return false;
+        return EnchantArena.hasEnchantment(enchantedStack(player, enchant), enchant.enchantment(), enchant.level());
+    }
+
+    private static final String LAPIS = "minecraft:lapis_lazuli";
+
+    /**
+     * 信标方案 G7（光标为空已由调用方检查）：容器界面已关闭；场内地上没有物品；物品栏里除了付款物品没有别的东西；
+     * 信标还在，主副效果是界面能设出来的，实际给的效果里有每一项。
+     */
+    private static boolean reachedBeacon(ServerLevel level, ServerPlayer player, Run run) {
+        if (containerOpen(player)) return false;
+        if (!dropped(level, run.origin).isEmpty()) return false;
+        Beacon goal = run.expect.beacon();
+        for (String id : counts(player.getInventory()).keySet()) if (!id.equals(goal.payment())) return false;
+        BeaconBlockEntity beacon = beaconAt(level, run.origin);
+        return beacon != null && BeaconArena.satisfies(beacon, goal.effects());
+    }
+
+    /** 铁砧方案 A6、A7（光标为空已由调用方检查）：玩家身上（主物品栏、快捷栏、盔甲、副手）有一件物品对上目标。不要求关界面。 */
+    private static boolean reachedAnvil(ServerPlayer player, Anvil goal) {
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) if (AnvilArena.matches(inv.getItem(i), goal)) return true;
+        return false;
+    }
+
+    /**
+     * 本轮那件物品现在在哪：物品栏（原材料或附魔后的 result）→ 光标 → 附魔台物品格（界面开着时）。找不到 → 空。
+     */
+    private static ItemStack enchantedStack(ServerPlayer player, Enchant enchant) {
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (!stack.isEmpty() && (id(stack).equals(enchant.result()) || id(stack).equals(enchant.item()))) return stack;
+        }
+        ItemStack carried = player.containerMenu.getCarried();
+        if (!carried.isEmpty() && (id(carried).equals(enchant.result()) || id(carried).equals(enchant.item()))) return carried;
+        if (player.containerMenu instanceof EnchantmentMenu menu) {
+            ItemStack inSlot = menu.getSlot(0).getItem();
+            if (!inSlot.isEmpty()) return inSlot;
+        }
+        return ItemStack.EMPTY;
+    }
+
+    /** 当前界面是附魔台时它的两格：{ item: {id: n}, lapis: {id: n} }；不是附魔台界面 → 两格都是 {}。 */
+    private static Map<String, Object> enchantTable(AbstractContainerMenu menu) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (menu instanceof EnchantmentMenu em) {
+            ItemStack item = em.getSlot(0).getItem();
+            ItemStack lapis = em.getSlot(1).getItem();
+            out.put("item", item.isEmpty() ? Map.of() : Map.of(id(item), item.getCount()));
+            out.put("lapis", lapis.isEmpty() ? Map.of() : Map.of(id(lapis), lapis.getCount()));
+        } else {
+            out.put("item", Map.of());
+            out.put("lapis", Map.of());
+        }
+        return out;
+    }
+
+    private static boolean containerOpen(ServerPlayer player) {
+        return player.containerMenu != player.inventoryMenu;
     }
 
     // ── 工具 ─────────────────────────────────────────────────────────────

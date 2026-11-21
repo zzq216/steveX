@@ -45,8 +45,34 @@ public class ArenaApi {
             if (items.isEmpty() && chestItems.isEmpty()) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
             long dayTime = AgentWebSocketServer.num(params, "dayTime", 1000);
             long seed = params.get("seed") instanceof Number n ? n.longValue() : 0L;
+            // 附魔台训练场（附魔台方案 N2、N4）：书架数、经验等级、附魔种子；不给 = 书架 15 个，经验和种子不动；其他工作站忽略
+            ArenaManager.EnchantSetup enchantSetup = new ArenaManager.EnchantSetup(optionalInt(params, "bookshelves"), optionalInt(params, "xpLevel"), optionalInt(params, "enchantSeed"));
+            // 信标训练场（信标方案 G2）：底座层数 1–4；不给 = 4；其他工作站忽略
+            Integer beaconLevel = optionalInt(params, "beaconLevel");
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel));
+        });
+        // 附魔台训练场（附魔台方案 N5）：三档预览，只读、不碰世界
+        handlers.put("arena/enchant-preview", params -> {
+            if (!(params.get("item") instanceof String item)) throw new IllegalArgumentException("item must be an item id");
+            Integer seed = optionalInt(params, "enchantSeed");
+            if (seed == null) throw new IllegalArgumentException("enchantSeed must be an integer");
+            Integer shelves = optionalInt(params, "bookshelves");
+            int count = shelves == null ? 15 : shelves;
+            if (count < 0 || count > 15) throw new IllegalArgumentException("bookshelves must be within 0-15");
+            return onServer(5_000, server -> ArenaManager.enchantPreview(server, item, seed, count));
+        });
+        // 铁砧训练场（铁砧方案 A2）：物品池和每件物品能附的附魔，只读
+        handlers.put("arena/anvil-catalog", params -> onServer(5_000, ArenaManager::anvilCatalog));
+        // 铁砧训练场（铁砧方案 A4）：按原版算法预览产物和花费，只读（会把玩家设成生存模式）
+        handlers.put("arena/anvil-preview", params -> {
+            ArenaManager.Give left = anvilItem(params.get("left"), "left");
+            if (left == null) throw new IllegalArgumentException("left must be { id:string, enchantments?: { id: level } }");
+            ArenaManager.Give right = anvilItem(params.get("right"), "right");
+            Object name = params.get("name");
+            if (name != null && !(name instanceof String)) throw new IllegalArgumentException("name must be a string or null");
+            UUID uuid = localPlayer();
+            return onServer(5_000, server -> ArenaManager.anvilPreview(server, player(server, uuid), left, right, (String) name));
         });
         handlers.put("arena/status", params -> onServer(5_000, ArenaManager::status));
         handlers.put("arena/finish", params -> {
@@ -119,7 +145,28 @@ public class ArenaApi {
         return (String) v;
     }
 
-    /** [{ slot, id, count }]，可以为空（箱子题"取"的物品栏、"放"的箱子开局都是空的）。 */
+    /** 铁砧预览的一件物品：{ id, enchantments?: { id: level } }；null → null（右格空着）。 */
+    private static ArenaManager.Give anvilItem(Object v, String name) {
+        if (v == null) return null;
+        if (!(v instanceof Map<?, ?> m) || !(m.get("id") instanceof String id)) throw new IllegalArgumentException(name + " must be { id:string, enchantments?: { id: level } }");
+        return new ArenaManager.Give(0, id, 1, levels(m.get("enchantments"), name + ".enchantments"));
+    }
+
+    /** { 附魔注册名: 级数 }（级数 ≥ 1）；null → null。 */
+    private static Map<String, Integer> levels(Object v, String name) {
+        if (v == null) return null;
+        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException(name + " must be { enchantment: level }");
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : m.entrySet()) {
+            if (!(e.getKey() instanceof String id) || !(e.getValue() instanceof Number n) || n.intValue() < 1) {
+                throw new IllegalArgumentException(name + " must map enchantment ids to levels >= 1");
+            }
+            out.put(id, n.intValue());
+        }
+        return out;
+    }
+
+    /** [{ slot, id, count, enchantments? }]，可以为空（箱子题"取"的物品栏、"放"的箱子开局都是空的）；enchantments 是铁砧题用的（铁砧方案 A7）。 */
     private static List<ArenaManager.Give> gives(Object v, String name) {
         if (!(v instanceof List<?> list)) throw new IllegalArgumentException(name + " must be a list of { slot, id, count }");
         List<ArenaManager.Give> out = new ArrayList<>();
@@ -128,18 +175,58 @@ public class ArenaApi {
                     || !(m.get("count") instanceof Number count)) {
                 throw new IllegalArgumentException("each entry of " + name + " must be { slot:int, id:string, count:int }");
             }
-            out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue()));
+            out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue(), levels(m.get("enchantments"), name + ".enchantments")));
         }
         return out;
     }
 
     /**
-     * 两种写法：箱子 { inventory: { id: n }, container: { id: n } }；切石机 { targets: { id: n }, allowed: [id...] }（切石机方案 Q9）。
+     * 三种写法：箱子 { inventory: { id: n }, container: { id: n } }；切石机 { targets: { id: n }, allowed: [id...] }（切石机方案 Q9）；
+     * 炉子 { cook: { raw, rawLeft, fuel, fuelLeft, product } }（熔炉方案 K8）；附魔台 { enchant: { item, result, enchantment, level } }（附魔台方案 N8）；
+     * 信标 { beacon: { payment, effects: [{ effect, amplifier }] } }（信标方案 G7）；铁砧 { anvil: { item, enchantments: { id: level }, name } }（铁砧方案 A7）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
     private static ArenaManager.Expect expect(Object v) {
         if (v == null) return null;
-        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("expect must be { inventory: { id: n }, container: { id: n } } or { targets: { id: n }, allowed: [id...] }");
+        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("expect must be { inventory: { id: n }, container: { id: n } }, { targets: { id: n }, allowed: [id...] } or { cook: { raw, rawLeft, fuel, fuelLeft, product } }");
+        if (m.containsKey("anvil")) {
+            if (!(m.get("anvil") instanceof Map<?, ?> a) || !(a.get("item") instanceof String item) || !(a.get("enchantments") instanceof Map<?, ?>)
+                    || (a.get("name") != null && !(a.get("name") instanceof String))) {
+                throw new IllegalArgumentException("expect.anvil must be { item:string, enchantments: { id: level }, name: string | null }");
+            }
+            return new ArenaManager.Expect(new ArenaManager.Anvil(item, Map.copyOf(levels(a.get("enchantments"), "expect.anvil.enchantments")), (String) a.get("name")));
+        }
+        if (m.containsKey("beacon")) {
+            String usage = "expect.beacon must be { payment:string, effects: [{ effect:string, amplifier:1|2 }] }";
+            if (!(m.get("beacon") instanceof Map<?, ?> b) || !(b.get("payment") instanceof String payment) || !(b.get("effects") instanceof List<?> list) || list.isEmpty()) {
+                throw new IllegalArgumentException(usage);
+            }
+            List<ArenaManager.Want> wants = new ArrayList<>();
+            for (Object o : list) {
+                if (!(o instanceof Map<?, ?> w) || !(w.get("effect") instanceof String effect) || !(w.get("amplifier") instanceof Number amp)
+                        || (amp.intValue() != 1 && amp.intValue() != 2)) {
+                    throw new IllegalArgumentException(usage);
+                }
+                wants.add(new ArenaManager.Want(effect, amp.intValue()));
+            }
+            return new ArenaManager.Expect(new ArenaManager.Beacon(payment, List.copyOf(wants)));
+        }
+        if (m.containsKey("enchant")) {
+            if (!(m.get("enchant") instanceof Map<?, ?> e) || !(e.get("item") instanceof String item) || !(e.get("result") instanceof String result)
+                    || !(e.get("enchantment") instanceof String enchantment) || !(e.get("level") instanceof Number level) || level.intValue() < 1) {
+                throw new IllegalArgumentException("expect.enchant must be { item:string, result:string, enchantment:string, level:int>=1 }");
+            }
+            return new ArenaManager.Expect(new ArenaManager.Enchant(item, result, enchantment, level.intValue()));
+        }
+        if (m.containsKey("cook")) {
+            if (!(m.get("cook") instanceof Map<?, ?> c) || !(c.get("raw") instanceof String raw) || !(c.get("fuel") instanceof String fuel)
+                    || !(c.get("product") instanceof String product) || !(c.get("rawLeft") instanceof Number rawLeft)
+                    || !(c.get("fuelLeft") instanceof Number fuelLeft) || rawLeft.intValue() < 0 || fuelLeft.intValue() < 0) {
+                throw new IllegalArgumentException("expect.cook must be { raw:string, rawLeft:int>=0, fuel:string, fuelLeft:int>=0, product:string }");
+            }
+            if (raw.equals(fuel) || raw.equals(product) || fuel.equals(product)) throw new IllegalArgumentException("expect.cook: raw, fuel and product must be three different items");
+            return new ArenaManager.Expect(new ArenaManager.Cook(raw, rawLeft.intValue(), fuel, fuelLeft.intValue(), product));
+        }
         if (m.containsKey("targets")) {
             Map<String, Integer> targets = counts(m.get("targets"), "expect.targets");
             if (targets.isEmpty()) throw new IllegalArgumentException("expect.targets must name at least one item with a positive count");
@@ -148,6 +235,14 @@ public class ArenaApi {
             return new ArenaManager.Expect(Map.of(), Map.of(), targets, Set.copyOf(allowed));
         }
         return new ArenaManager.Expect(counts(m.get("inventory"), "expect.inventory"), counts(m.get("container"), "expect.container"));
+    }
+
+    /** 可选的整数参数：缺省或 null → null；不是整数 → 报错。 */
+    private static Integer optionalInt(Map<String, Object> params, String name) {
+        Object v = params.get(name);
+        if (v == null) return null;
+        if (!(v instanceof Number n) || n.doubleValue() != Math.rint(n.doubleValue())) throw new IllegalArgumentException(name + " must be an integer");
+        return n.intValue();
     }
 
     private static Map<String, Integer> counts(Object v, String name) {

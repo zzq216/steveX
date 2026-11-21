@@ -136,9 +136,9 @@ function loadPlugin(extra = {}) {
 
 const enter = (messages) => async () => ({ kind: 'enter', messages })
 
-test('装载：注册二十九个工具（含三个 fast_*、四个复盘工具、两个任务历史查询工具、三个整理工具、四个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
+test('装载：注册三十个工具（含三个 fast_*、四个复盘工具、两个任务历史查询工具、三个整理工具、五个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
   const { tools, sections, dispose } = loadPlugin()
-  assert.equal(tools.size, 29)
+  assert.equal(tools.size, 30)
   assert.ok(tools.get('bt_submit_tree').output.schema, '经过 defineTool')
   assert.deepEqual(sections.map((s) => s.name), ['stevex:identity', 'stevex:authoring'])
   assert.ok(sections.every((s) => s.interpolate === false))
@@ -153,7 +153,7 @@ test('P1 适配层：/bt task → followup → 回合绑定（守卫按请求放
 
   await emit('agent/created', { agent })
   assert.equal(agent.restrictions.length, 1, 'exclusiveTools：会话只看得到 steveX 的工具')
-  assert.equal(agent.restrictions[0].allow.length, 26, '普通会话看不到 fast_*')
+  assert.equal(agent.restrictions[0].allow.length, 27, '普通会话看不到 fast_*')
   assert.equal(agent.restrictions[0].allow.includes('todo_write'), false, '没注册的内置工具不进 allow（restrict 会拒绝未知名字）')
 
   const started = commands[0].handler({ rawInput: 'task 做一把木镐', agent })

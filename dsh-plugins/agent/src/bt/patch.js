@@ -1,4 +1,5 @@
 import { walkSpec } from './build.js'
+import { FAILURE } from './status.js'
 
 /**
  * 补丁（P2 实施细则 §3）：大模型回答 recover / escalate / failed / died 请求时交的一组操作。
@@ -11,7 +12,10 @@ import { walkSpec } from './build.js'
  *
  * - 操作点名的都是**补丁之前就有的** id；新节点的 id 由这里分配：`<锚点>.p<版本>`，同一锚点再有新节点时 `…p5b`、`…p5c`（§3.3）
  * - 补丁不能改已经过去的事（§3.2）：memory 模式的 Sequence / Selector 里，游标左边的孩子已经执行完，
- *   replace / remove 它、或者插在它们中间都会被拒——改了也不会重跑。上面有 Repeat / ForEach 时下一轮会重跑，不拒
+ *   replace / remove 它、或者插在它们中间都会被拒——改了也不会重跑。上面有 Repeat / ForEach 时下一轮会重跑，不拒。
+ *   全部备选都失败了的 memory Selector（2026-11-21）：补丁通过后执行器从**最后一个备选**原地重试（root.reopenFailure →
+ *   Selector.onReopenFailure），所以按"当前是最后一个备选"判断——改它里面的节点（包括失败的那个）照常接受；直接插进这个
+ *   Selector 时只能插在最后一个备选后面（新备选），插在它前面不会跑、被拒
  * - insert-* 只能插进 Sequence / Selector；replace 只能换整个节点（不能单独换 Match 的条件或 Action 的 expect）
  * - 同一锚点多次 insert-after：按操作顺序排在锚点后面（A 之后插 B、再插 C → A, B, C）
  *
@@ -147,8 +151,8 @@ function checkTiming(op, path) {
   for (let i = 0; i + 1 < upTo; i++) {
     const parent = path[i]
     const child = path[i + 1]
-    if (!loop && isMemoryList(parent) && parent.kids.indexOf(child) < parent.cursor) {
-      return `${child.id} has already finished; changing it will not make it run again — to redo it, insert-before the current step ${currentStep(parent)}`
+    if (!loop && isMemoryList(parent) && parent.kids.indexOf(child) < effectiveCursor(parent)) {
+      return `${child.id} has already finished; changing it will not make it run again. To do that work again, add a new node at the current position of ${parent.id}: ${currentStep(parent)}`
     }
     if (LOOPS.includes(parent.type)) loop = true
   }
@@ -159,7 +163,11 @@ function checkTiming(op, path) {
   for (const node of path.slice(0, -2)) if (LOOPS.includes(node.type)) loop = true
   if (loop || !isMemoryList(parent)) return null
   const position = parent.kids.indexOf(anchor) + (op === 'insert-after' ? 1 : 0)
-  if (position < parent.cursor) {
+  if (exhausted(parent) && position < parent.kids.length) {
+    const last = parent.kids.at(-1).id
+    return `${parent.id} has already tried all its alternatives; only the last one (${last}) is retried, so a node inserted before it would never run — ${currentStep(parent)}`
+  }
+  if (position < effectiveCursor(parent)) {
     return `that position is between steps of ${parent.id} that have already finished, so the new node would never run — insert at the current position: ${currentStep(parent)}`
   }
   return null
@@ -169,7 +177,22 @@ function isMemoryList(node) {
   return (node.type === 'Sequence' || node.type === 'Selector') && node.mode === 'memory'
 }
 
+/** 全部备选都失败了的 memory Selector：补丁通过后从最后一个备选原地重试 */
+function exhausted(node) {
+  return node.type === 'Selector' && node.mode === 'memory' && node.kids.length > 0 && node.cursor >= node.kids.length && node.lastStatus === FAILURE
+}
+
+/** 补丁通过后会接着执行的孩子下标（exhausted 的 Selector 是最后一个备选） */
+function effectiveCursor(node) {
+  return exhausted(node) ? node.kids.length - 1 : node.cursor
+}
+
+/** "当前位置"的写法：拒绝信息里告诉大模型新节点该插在哪 */
 function currentStep(parent) {
+  if (exhausted(parent)) {
+    const last = parent.kids.at(-1).id
+    return `insert-after ${last} to add a new alternative, or change nodes inside ${last} (the alternative that failed last; it is retried)`
+  }
   return parent.cursor < parent.kids.length
     ? `insert-before ${parent.kids[parent.cursor].id}`
     : `insert-after ${parent.kids.at(-1).id}`

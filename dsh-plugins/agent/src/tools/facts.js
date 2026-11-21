@@ -1,5 +1,6 @@
 import { JSON_OUTPUT, jsonText, textBlocks, sessionOf } from './shared.js'
 import { SourceError } from '../facts/source.js'
+import { GET_MAX, SEARCH_LIMIT, SEARCH_MAX } from '../facts/store.js'
 
 /**
  * 事实库与 MC 源码（P5 实施细则 §4–§6）：fact_search、fact_write、mc_source_search、mc_source_read。
@@ -8,7 +9,7 @@ import { SourceError } from '../facts/source.js'
  * 只读源码基准：路径一律相对基准，越界的拒绝（P5-D9）。
  * 用过源码 / 写过事实都告诉适配层（turns.note），回合结束时据此决定要不要提醒补事实库（§7）。
  * 结果里出现配方生成器的源码（net/minecraft/data/recipes/）时附一句说明（训练场设计方案 T14）：工作台合成配方
- * 已在 json.recipes 里、切石配方在 json.stonecutting 里，在树里读；这里的熔炼、锻造等这两份数据没有。只是补充证据，不拦截。
+ * 已在 json.recipes 里、切石配方在 json.stonecutting 里、熔炉 / 高炉 / 烟熏炉 / 营火配方在 json.cooking 里，在树里读；这里的锻造等这几份数据没有。只是补充证据，不拦截。
  *
  * @param {object} services
  * @param {{ store: import('../facts/store.js').FactStore, source: import('../facts/source.js').SourceTree }} services.facts
@@ -17,7 +18,7 @@ import { SourceError } from '../facts/source.js'
  */
 /** 配方生成器所在的目录（基准内相对路径） */
 export const RECIPE_SOURCE_DIR = 'net/minecraft/data/recipes/'
-export const RECIPE_SOURCE_NOTE = '注意：net/minecraft/data/recipes/ 是配方生成器。工作台 / 背包合成配方（有序 shaped、无序 shapeless）都已经在 json.recipes 里，切石机配方在 json.stonecutting 里，在树里用 code/core.json.query 读；这里的熔炼、锻造等配方这两份数据没有。'
+export const RECIPE_SOURCE_NOTE = '注意：net/minecraft/data/recipes/ 是配方生成器。工作台 / 背包合成配方（有序 shaped、无序 shapeless）都已经在 json.recipes 里，切石机配方在 json.stonecutting 里，熔炉 / 高炉 / 烟熏炉 / 营火配方在 json.cooking 里，在树里用 code/core.json.query 读；这里的锻造等配方这几份数据没有。'
 
 /** 搜索结果的某一行、或读的文件在配方生成器目录下 → 说明文字；否则 null */
 export function recipeSourceNote({ text = '', file = '' } = {}) {
@@ -35,17 +36,50 @@ export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }
       description: [
         '查事实库：从 MC 源码里确认过、带源码引用的事实。查 MC 机制先查这里，库里有、引用有效就不必再翻源码。',
         'query 按空白拆成几个词，名字、陈述、标签里含任一词就返回；按相关度排：名字里命中最高、标签次之、陈述再次，中文词按二字组部分匹配（如"光标方向"拆成 光标 / 标方 / 方向）；不给 = 全部。',
-        '返回每条的名字、陈述、源码引用（文件 + 行号；要看原文用 mc_source_read）与修订号；引用对不上当前源码的标出 stale。'
+        '只返回每条的名字（名字就是一句压缩的结论）、标签，引用对不上当前源码的标 stale；陈述、源码引用与修订号用 fact_get 按名字取。',
+        `分页：一页 limit 条（默认 ${SEARCH_LIMIT}，最多 ${SEARCH_MAX}），total = 命中总数，后面的用 offset 接着取（结果里的 next 就是下一页的 offset）。`
       ].join('\n'),
       parameters: {
         query: { type: 'string', description: '一个或几个词（空白分隔），不区分大小写' },
         tags: { type: 'array', items: { type: 'string' }, description: '只要带这些标签的' },
-        limit: { type: 'integer', description: '最多几条（1–50，默认 20）' }
+        limit: { type: 'integer', description: `一页几条（1–${SEARCH_MAX}，默认 ${SEARCH_LIMIT}）` },
+        offset: { type: 'integer', description: '从第几条起（0 起算，默认 0）' }
       },
       output: { schema: JSON_OUTPUT, render },
       isConcurrencySafe: () => true,
       async execute(args) {
-        return store.search({ query: args.query ?? '', tags: args.tags ?? [], limit: args.limit })
+        const found = store.search({ query: args.query ?? '', tags: args.tags ?? [], limit: args.limit, offset: args.offset })
+        const facts = found.facts.map((f) => ({
+          name: f.name,
+          ...(f.tags ? { tags: f.tags } : {}),
+          ...(f.refs.some((r) => r.stale) ? { stale: true } : {})
+        }))
+        const next = found.offset + facts.length
+        return { total: found.total, offset: found.offset, facts, ...(next < found.total ? { next } : {}) }
+      }
+    },
+    {
+      name: 'fact_get',
+      description: [
+        `按名字取事实的全文（一次 1–${GET_MAX} 条）：陈述、源码引用（文件 + 行号；要看原文用 mc_source_read；对不上当前源码的标 stale）、标签与修订号（fact_write 修订时 replaces 要写它）。`,
+        '合并掉的旧名字也认，返回合并后的那条。名字用 fact_search 找。'
+      ].join('\n'),
+      parameters: {
+        names: { type: 'array', items: { type: 'string' }, required: true, description: `事实名，1–${GET_MAX} 个` }
+      },
+      output: { schema: JSON_OUTPUT, render },
+      isConcurrencySafe: () => true,
+      async execute(args) {
+        const names = Array.isArray(args.names) ? [...new Set(args.names.filter((n) => typeof n === 'string'))] : []
+        if (names.length === 0 || names.length > GET_MAX) return { ok: false, error: `names 要写 1–${GET_MAX} 个事实名` }
+        const facts = []
+        const missing = []
+        for (const name of names) {
+          const fact = store.find(name)
+          if (!fact) missing.push(name)
+          else if (!facts.some((f) => f.name === fact.name)) facts.push(store.view(fact))
+        }
+        return { ok: true, facts, ...(missing.length ? { missing } : {}) }
       }
     },
     {

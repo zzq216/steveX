@@ -77,6 +77,10 @@ const USAGE = [
   '/bt train <场地> [item=<物品>] [runs=<次数>] [seed=<种子>] [n=<份数>] [m=<次数>]  合成训练场（craft2x2 / craft3x3）：每轮重置、发 n 份材料、要求合成 m 次的产物、判定，记录写 runtime/training/<场地>.jsonl（需要单人世界）。n、m 写 k 或 a-b（1–64），不写时 n 在 1–64 随机；n=1 m=1 是单次模式',
   '/bt train chest [item=<物品>] [runs=…] [seed=…] [kind=take|put|mix] [rel=lt|eq|gt|mix] [chest=small|large|hopper|dispenser|mix|all] [stack=64|16|1|mix] [fill=random|full|mix] [types=k|a-b] [targets=k|a-b]  箱子训练场：从容器取 / 往容器放指定数量的物品（chest=mix 只抽大小箱子，all 连漏斗、发射器一起抽）；rel 是要求数量与实有数量的关系，fill=full 让每格都满一组，types 是物品种类数（含全部目标，1–9），targets 是每轮要搬几种目标物品（1–4，默认 1）',
   '/bt train stonecutter [runs=…] [seed=…] [materials=k|a-b] [slots=k|a-b] [fill=random|full|mix] [styles=k|a-b] [bypass=exclude|keep] [material=<材料>]  切石机训练场：把 1–3 种材料各切成指定数量的几种样式，不多不少；materials 是材料种数（1–3），slots 是每种材料占的格数（1–9），styles 是每种材料切几种样式（1–3），bypass=keep 时也拿物品栏 2×2 就能直接做出的产物出题，material 固定第一种材料',
+  '/bt train furnace [runs=…] [seed=…] [station=furnace|blast_furnace|smoker|random] [raw=k|a-b] [fuel=k|a-b] [rawSlots=k|a-b] [fuelSlots=k|a-b] [n=k|a-b] [m=k|a-b] [input=<原料>] [fuelItem=<燃料>]  熔炉训练场：把 n 个原料放进原料格、m 个燃料放进燃料格，然后关掉炉子界面（炉子按原版速度工作，不要求等它烧完）；station 选炉子（缺省每轮随机），raw / fuel 是原料、燃料的总数（缺省 64–128），rawSlots / fuelSlots 是各占几格（缺省 2），input / fuelItem 固定原料、燃料',
+  '/bt train enchanting [runs=…] [seed=…] [item=<物品>] [bookshelves=0-15] [xpLevel=…]  附魔台训练场：读附魔台三档的提示，把物品附魔成带有指定附魔和等级的物品，然后关掉界面；物品从 77 种可附魔物品里按类别抽，bookshelves 是附魔台周围的书架数（缺省 15），xpLevel 是每轮的经验等级（缺省 30），item 固定物品',
+  '/bt train beacon [runs=…] [seed=…] [effect=<效果>] [amplifier=1|2|mix] [primary=<效果>] [level=k|a-b] [payment=<物品>] [count=k|a-b]  信标训练场：底座已搭好，用付款物品让信标提供指定的效果，然后关掉界面；effect 固定目标效果（6 个信标效果之一，再生题另要求一个主效果），amplifier 是目标级数（mix = 前 5 个效果 I、II 级各一半），primary 固定再生题的主效果，level 限定底座等级（1–4，不低于所需等级），payment 固定付款物品（铁锭、金锭、钻石、绿宝石、下界合金锭之一），count 是付款物品的数量（缺省 32–64）',
+  '/bt train anvil [runs=…] [seed=…] [task=merge|rename|both] [second=same|book] [item=<物品>] [enchants=k|a-b] [curses=0|1] [xpLevel=…]  铁砧训练场：用铁砧合并附魔、改名或两样都做，把做好的物品放在物品栏里；task 固定任务（三种等概率），second 固定第二件物品是同种物品还是附魔书，item 固定物品（能附上耐久的物品之一），enchants 是第二件带几个附魔（缺省 1–3），curses=1 时第二件的附魔里可能有诅咒，xpLevel 是每轮的经验等级（缺省 216，不低于 39）',
   '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
   '注意：DSH Web 只在会话开过回合后才显示命令结果。新会话里先说一句话（或 /bt task …），再用 status / nodes / capsules 这类查看命令'
@@ -424,7 +428,8 @@ function setupPlanner(ctx, config, runtime) {
   ctx.on('agent/turn-stopping', ({ agent, turn }) => {
     const fast = fastBridge.onTurnStopping({ sessionId: agent.id, turn })
     const result = fast === undefined ? bridge.onTurnStopping({ sessionId: agent.id, turn }) : null
-    const steer = fast?.steer ?? result?.steer ?? factTurns.onTurnStopping({ sessionId: agent.id, turn })
+    // 已经有请求在排队等这个会话（如修复请求）：事实库提醒推迟到下一回合，先让请求开回合（2026-11-21）
+    const steer = fast?.steer ?? result?.steer ?? factTurns.onTurnStopping({ sessionId: agent.id, turn, defer: fast === undefined && bridge.hasQueuedRequest(agent.id) })
     if (steer) {
       agent.steer(toMessage(steer))
       return
