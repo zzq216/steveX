@@ -14,6 +14,9 @@ import path from 'node:path'
  * 铁砧场地（铁砧训练场设计方案 A8）：按任务、物品、第二件物品的种类分组；多出"多次取出""多花经验""名字错"。
  * 锻造台场地（锻造台训练场设计方案 M10）：按类别、题数、纹饰样式、纹饰材料分组；多出"多做""配错""部分完成"。
  * 坐骑场地（坐骑训练场设计方案 H11）：按组、动物、任务分组；多出"放多""放错""骑上过""不开界面装备"。
+ * 织布机场地（织布机训练场设计方案 L12）：按底色种数、样式数、图案、颜色、用没用图案物分组；多出"多做""做错"（misweave）"复制"。
+ * 酿造台场地（酿造台训练场设计方案 P13）：按材料、开局瓶子、配方种类分组；多出"放多""放错""酿起来了"。
+ * 制图台场地（制图台训练场设计方案 K11）：按题型、开局缩放等级、余量、步数（chain 题）分组；多出"多做""做错"（mismap）"复制"。
  */
 
 export function readRecords(file) {
@@ -33,9 +36,9 @@ const secs = (ms) => (ms === null ? '-' : `${(ms / 1000).toFixed(1)}s`)
 
 /**
  * @param {object[]} records
- * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack'|'fill'|'targets'|'materials'|'styles'|'yield'|'family'|'station'|'band'|'kind'|'slot'|'enchantment'|'effect'|'level'|'payment'|'item'|'second'|'tasks'|'pattern'|'material'|'group'|'animal' }} [filter]
- * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean, cutter: boolean, cooker: boolean, enchanter: boolean, beaconer: boolean, anviler: boolean, smither: boolean, mounter: boolean }}
- *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）；cutter = 切石题的记录；cooker = 熔炉题的记录；enchanter = 附魔台题的记录；beaconer = 信标题的记录；anviler = 铁砧题的记录；smither = 锻造台题的记录；mounter = 坐骑题的记录
+ * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack'|'fill'|'targets'|'materials'|'styles'|'yield'|'family'|'station'|'band'|'kind'|'slot'|'enchantment'|'effect'|'level'|'payment'|'item'|'second'|'tasks'|'pattern'|'material'|'group'|'animal'|'banners'|'color' }} [filter]
+ * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean, cutter: boolean, cooker: boolean, enchanter: boolean, beaconer: boolean, anviler: boolean, smither: boolean, mounter: boolean, loomer: boolean, charter: boolean, brewer: boolean }}
+ *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）；cutter = 切石题的记录；cooker = 熔炉题的记录；enchanter = 附魔台题的记录；beaconer = 信标题的记录；anviler = 铁砧题的记录；smither = 锻造台题的记录；mounter = 坐骑题的记录；loomer = 织布机题的记录；charter = 制图台题的记录；brewer = 酿造台题的记录
  */
 export function summarize(records, { last = null, batch = null, by = 'target' } = {}) {
   let picked = batch ? records.filter((r) => r.batch === batch) : records
@@ -50,6 +53,9 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   const anviler = picked.some(isAnvilRecord)
   const smither = picked.some(isSmithingRecord)
   const mounter = picked.some(isMountRecord)
+  const loomer = picked.some(isLoomRecord)
+  const charter = picked.some(isCartographyRecord)
+  const brewer = picked.some(isBrewRecord)
   // 任务历史（任务历史方案 H10）：记录里有 assessed 字段才显示这几列
   const historyCols = picked.some((r) => r.assessed !== undefined)
   const group = (list) => {
@@ -68,7 +74,11 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       disturbed: count('disturbed'),
       lost: count('lost'),
       miscut: count('miscut'),
+      misweave: count('misweave'),
+      mismap: count('mismap'),
+      copiedRuns: list.filter((r) => (isLoomRecord(r) || isCartographyRecord(r)) && r.copied > 0).length,
       misplaced: count('misplaced'),
+      brewedRuns: list.filter((r) => isBrewRecord(r) && r.brews > 0).length,
       misenchanted: count('misenchanted'),
       previewMismatch: list.filter((r) => r.matchedPreview === false).length,
       overpaid: list.filter((r) => Number.isInteger(r.paid) && r.paid > 1).length,
@@ -104,7 +114,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, historyCols }
 }
 
 /** 切石题的记录：materials 是 [{ id, family, styles }]（合成题的材料字段叫 items） */
@@ -121,6 +131,20 @@ const isAnvilRecord = (r) => ['merge', 'rename', 'both'].includes(r.task) && 'le
 const isSmithingRecord = (r) => Array.isArray(r.tasks) && 'goalsMet' in r
 /** 坐骑题的记录：有动物和 equippedWithoutMenu 字段（H11） */
 const isMountRecord = (r) => typeof r.animal === 'string' && 'equippedWithoutMenu' in r
+/** 织布机题的记录：banners 是 [{ id, styles }]，有 copied 字段（L12） */
+const isLoomRecord = (r) => Array.isArray(r.banners) && 'copied' in r
+/** 酿造台题的记录：有配方 recipe、药水 potion 和 brews 字段（P13） */
+const isBrewRecord = (r) => Boolean(r.recipe?.ingredient) && typeof r.potion?.signature === 'string' && 'brews' in r
+const BREW_BOTTLE_NAMES = { 'minecraft:potion': '普通', 'minecraft:splash_potion': '喷溅', 'minecraft:lingering_potion': '滞留' }
+const BREW_KIND_NAMES = { potion: '药水配方', container: '换瓶子配方' }
+/** 制图台题的记录：有开局地图 source、plan 和 copied 字段（K11） */
+const isCartographyRecord = (r) => typeof r.source?.scale === 'number' && Boolean(r.plan) && 'copied' in r
+const CARTOGRAPHY_TASK_NAMES = { zoom: '放大', lock: '锁定', clone: '复制', chain: '连续操作' }
+const CARTOGRAPHY_MATERIAL_NAMES = { paper: '纸', glass: '玻璃', empty: '空图' }
+/** 制图台题按余量分组的键：发了的辅料各多发几个，如"纸1""纸0/空图2" */
+const spareKey = (r) => ['paper', 'glass', 'empty'].filter((k) => r.given?.[k] > 0).map((k) => `${CARTOGRAPHY_MATERIAL_NAMES[k]}${r.given[k] - r.plan[k]}`).join('/')
+/** 织布机题按图案 / 颜色分组的键：一轮里出现过的去重排序后用 + 连起来 */
+const loomStyleKey = (r, field) => [...new Set(r.banners.flatMap((b) => b.styles.map((st) => String(st[field]).replace(/^minecraft:/, ''))))].sort().join('+')
 const MOUNT_GROUP_NAMES = { horse: '马', donkey: '驴', camel: '骆驼', llama: '羊驼', nautilus: '鹦鹉螺' }
 const MOUNT_TASK_NAMES = { equip: '装上', unequip: '卸下' }
 
@@ -152,6 +176,21 @@ const FILL_NAMES = { random: '随机数量', full: '每格满' }
 function groupKey(r, by) {
   if (by === 'shape') return r.shape
   if (by === 'portions') return portionsKey(r)
+  // 酿造台题（P13）
+  if (by === 'ingredient') return isBrewRecord(r) ? r.recipe.ingredient.replace(/^minecraft:/, '') : null
+  if (by === 'bottle') return isBrewRecord(r) ? BREW_BOTTLE_NAMES[r.potion.bottle] ?? r.potion.bottle : null
+  if (by === 'kind' && isBrewRecord(r)) return BREW_KIND_NAMES[r.recipe.kind] ?? r.recipe.kind
+  // 制图台题（K11）
+  if (by === 'task' && isCartographyRecord(r)) return CARTOGRAPHY_TASK_NAMES[r.task ?? 'chain'] ?? r.task
+  if (by === 'ops' && isCartographyRecord(r)) return Number.isInteger(r.opCount) ? `${r.opCount} 步` : null
+  if (by === 'scale' && isCartographyRecord(r)) return `开局 ${r.source.scale} 级`
+  if (by === 'spare' && isCartographyRecord(r)) return `余量 ${spareKey(r)}`
+  // 织布机题（L12）
+  if (by === 'banners' && isLoomRecord(r)) return `${r.bannerCount} 种底色`
+  if (by === 'styles' && isLoomRecord(r)) return `${r.styleCount} 种样式`
+  if (by === 'pattern' && isLoomRecord(r)) return loomStyleKey(r, 'pattern')
+  if (by === 'color' && isLoomRecord(r)) return loomStyleKey(r, 'color')
+  if (by === 'item' && isLoomRecord(r)) return (r.patternItems ?? []).length ? '用图案物' : '不用图案物'
   // 坐骑题（H11）
   if (by === 'group') return isMountRecord(r) ? MOUNT_GROUP_NAMES[r.group] ?? r.group : null
   if (by === 'animal') return isMountRecord(r) ? r.animal.replace(/^minecraft:/, '') : null
@@ -196,10 +235,13 @@ function portionsKey(r) {
   return Number.isInteger(r.portions) && Number.isInteger(r.crafts) ? `${r.portions}/${r.crafts}` : null
 }
 
-const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物' }
+const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子' }
 
-export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, historyCols = false }) {
+export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, historyCols = false }) {
   if (total.runs === 0) return '没有训练记录'
+  if (brewer) return formatBrew({ rows, total, by, historyCols })
+  if (charter) return formatCartography({ rows, total, by, historyCols })
+  if (loomer) return formatLoom({ rows, total, by, historyCols })
   if (mounter) return formatMount({ rows, total, by, historyCols })
   if (smither) return formatSmithing({ rows, total, by, historyCols })
   if (anviler) return formatAnvil({ rows, total, by, historyCols })
@@ -224,6 +266,45 @@ function formatStorage({ rows, total, by, historyCols }) {
     '打开箱子中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '箱子被挖',
     ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
   const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.disturbed, r.lost,
+    secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/**
+ * 织布机题的表（L12）："多做" = 某个目标多于要求；"做错" = 目标以外的带图案旗帜或开局没有的物品；"复制" = 用 2×2 复制过旗帜的轮数；
+ * 达成中位 = 恰好做完那一刻（只算成功轮）
+ */
+function formatLoom({ rows, total, by, historyCols }) {
+  const head = [by === 'pattern' ? '图案' : by === 'item' ? '图案物' : BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '失败', '超时', '中止', '多做', '做错', '丢失', '复制',
+    '打开织布机中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '织布机被挖',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.misweave, r.lost, r.copiedRuns,
+    secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/**
+ * 制图台题的表（K11）："多做" = 某个目标多于要求、或由开局地图做出的总张数超过目标；"做错" = 不是从开局地图做出的地图、开局没有的物品、
+ * 走不到任何目标的地图；"复制" = 用 2×2 复制过地图的轮数；达成中位 = 恰好做完那一刻（只算成功轮）
+ */
+function formatCartography({ rows, total, by, historyCols }) {
+  const head = [by === 'task' ? '题型' : BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '失败', '超时', '中止', '多做', '做错', '丢失', '复制',
+    '打开制图台中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '制图台被挖',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.mismap, r.lost, r.copiedRuns,
+    secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/** 酿造台题的表（P13）：同熔炉的列，打开工作站中位叫"打开酿造台中位"，另加"酿起来了"（放好以后真的酿完过一次的轮数） */
+function formatBrew({ rows, total, by, historyCols }) {
+  const head = [by === 'kind' ? '配方种类' : BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '失败', '超时', '中止', '放多', '放错', '丢失', '酿起来了',
+    '打开酿造台中位', '达成中位', '任务中位', 'token中位', '用过chat/send', '酿造台被挖',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.misplaced, r.lost, r.brewedRuns,
     secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
     ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
   return [head.join('\t'), ...rows.map(line), line(total)].join('\n')

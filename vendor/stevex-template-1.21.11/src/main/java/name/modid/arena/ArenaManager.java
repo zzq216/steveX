@@ -29,6 +29,11 @@ import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.inventory.DispenserMenu;
 import net.minecraft.world.inventory.HopperMenu;
 import net.minecraft.world.inventory.StonecutterMenu;
+import net.minecraft.world.inventory.LoomMenu;
+import net.minecraft.world.inventory.CartographyTableMenu;
+import net.minecraft.world.inventory.BrewingStandMenu;
+import net.minecraft.world.level.block.entity.BrewingStandBlockEntity;
+import net.minecraft.world.level.block.LoomBlock;
 import net.minecraft.world.inventory.EnchantmentMenu;
 import net.minecraft.world.inventory.BeaconMenu;
 import net.minecraft.world.inventory.AnvilMenu;
@@ -39,6 +44,7 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.animal.equine.AbstractHorse;
 import net.minecraft.world.entity.animal.nautilus.AbstractNautilus;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.phys.EntityHitResult;
 import name.modid.mixin.MountMenuAccessor;
 import net.minecraft.core.registries.Registries;
@@ -119,6 +125,16 @@ import net.minecraft.world.phys.Vec3;
  * prepare 发带附魔的物品、设经验等级，登记"铁砧"写法的目标（{@link Anvil}，A7）；取出产物由 {@code AnvilTakeMixin} 报给 {@link #onAnvilTake}；
  * status 另报物品栏、光标、铁砧两格、地上掉落物、界面开没开、铁砧的状态、经验等级、取出记录。
  *
+ * <p>织布机场地（docs/织布机训练场设计方案.md）：工作站是织布机（{@code loom}）。arena/loom-catalog 是出题用的只读目录（{@link LoomArena}，L11）；
+ * 物品按签名计数（带图案的旗帜和素旗 id 相同，L9）；prepare 登记 {@link LoomArena.Spec}；status 另报物品栏、光标、织布机输入格、地上的计数（L8）。
+ *
+ * <p>制图台场地（docs/制图台训练场设计方案.md）：工作站是制图台（{@code cartography}）。prepare 的 items 里带 map 的一项由 mod 现做开局地图（{@link CartographyArena#create}，K6），
+ * 地图按签名计数（缩放等级、是否锁定、是不是从开局地图做出来的，K9）；prepare 登记 {@link CartographyArena.Spec}；status 另报物品栏、光标、制图台输入格、地上的计数（K8）。
+ *
+ * <p>酿造台场地（docs/酿造台训练场设计方案.md）：工作站是酿造台（{@code brewing_stand}），每轮清空后换一台新的（燃料值、酿造进度清掉，P11）。
+ * prepare 的 items 里带 potion 的项发指定药水（P8），用服务器的酿造配方核对题目（{@link BrewArena#check}）；物品按签名计数（瓶子 id#药水，P7）；
+ * status 另报物品栏、光标、地上、酿造台五格和燃料值、酿造次数（{@code BrewingBrewMixin} 报给 {@link #onBrew}，P9）。
+ *
  * <p>锻造台场地（docs/锻造台训练场设计方案.md）：工作站是锻造台（{@code smithing_table}，不会损坏，M1）。arena/smithing-catalog、
  * arena/smithing-preview 是出题用的只读接口（{@link SmithingArena}，M2、M4）；prepare 登记"锻造"写法的目标（{@link Smith}，可以有多个，M7）；
  * 取出产物由 {@code SmithingTakeMixin} 报给 {@link #onSmithingTake}；status 另报物品栏（每件带纹饰）、光标、锻造台三格、地上掉落物、
@@ -151,6 +167,9 @@ public final class ArenaManager {
             Map.entry("beacon", Blocks.BEACON),
             Map.entry("anvil", Blocks.ANVIL),
             Map.entry("smithing_table", Blocks.SMITHING_TABLE),
+            Map.entry("loom", Blocks.LOOM),
+            Map.entry("cartography", Blocks.CARTOGRAPHY_TABLE),
+            Map.entry("brewing_stand", Blocks.BREWING_STAND),
             // 坐骑场地（坐骑方案 H1）：工作站是动物，方块位置上只留空气
             Map.entry("mount", Blocks.AIR));
 
@@ -168,7 +187,10 @@ public final class ArenaManager {
             Map.entry("beacon", new Site(new BlockPos(10100, 120, 10000), "beacon")),
             Map.entry("anvil", new Site(new BlockPos(10000, 120, 10180), "anvil")),
             Map.entry("smithing", new Site(new BlockPos(10000, 120, 10210), "smithing_table")),
-            Map.entry("mount", new Site(new BlockPos(10000, 120, 10240), "mount"))));
+            Map.entry("mount", new Site(new BlockPos(10000, 120, 10240), "mount")),
+            Map.entry("loom", new Site(new BlockPos(10000, 120, 10270), "loom")),
+            Map.entry("cartography", new Site(new BlockPos(10000, 120, 10300), "cartography")),
+            Map.entry("brewing", new Site(new BlockPos(10000, 120, 10330), "brewing_stand"))));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -186,40 +208,55 @@ public final class ArenaManager {
      *   <li>铁砧方案 A7（anvil 不为 null）：见 {@link Anvil}。</li>
      *   <li>锻造台方案 M7（smithing 不为 null）：见 {@link Smith}。</li>
      *   <li>坐骑方案 H6（mount 不为 null）：见 {@link MountGoal}。</li>
+     *   <li>织布机方案 L9（loom 不为 null）：见 {@link LoomArena#reached}。</li>
+     *   <li>制图台方案 K9（cartography 不为 null）：见 {@link CartographyArena#reached}。</li>
+     *   <li>酿造台方案 P8（brew 不为 null）：容器界面已关闭，光标为空，见 {@link BrewArena#reached}。</li>
      * </ul>
      * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount) {
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew) {
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
-            this(inventory, container, null, null, null, null, null, null, null, null);
+            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
-            this(inventory, container, targets, allowed, null, null, null, null, null, null);
+            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Cook cook) {
-            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Enchant enchant) {
-            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null);
         }
 
         public Expect(Beacon beacon) {
-            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null);
         }
 
         public Expect(Anvil anvil) {
-            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null);
         }
 
         public Expect(List<Smith> smithing) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null);
         }
 
         public Expect(MountGoal mount) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null);
+        }
+
+        public Expect(LoomArena.Spec loom) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null);
+        }
+
+        public Expect(CartographyArena.Spec cartography) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null);
+        }
+
+        public Expect(BrewArena.Spec brew) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew);
         }
     }
 
@@ -313,6 +350,10 @@ public final class ArenaManager {
         boolean equippedWithoutMenu;
         String lastSaddle;
         String lastBody;
+        // 制图台方案 K6、K9：开局地图（编号、各级中心），用来认出"由开局地图做出来"的地图
+        CartographyArena.Source mapSource;
+        // 酿造台方案 P9：本轮场地那台酿造台酿了几次（BrewingBrewMixin 报来）
+        int brews;
 
         Run(String arena, BlockPos origin, UUID player, List<Watch> watch, long startedAtMs, String stationName, Block station, Expect expect) {
             this.arena = arena;
@@ -357,6 +398,37 @@ public final class ArenaManager {
     /** 容器工作站：小箱子、大箱子、漏斗、发射器（箱子方案、§8）。 */
     public static boolean isStorage(String station) {
         return storageCapacity(station) > 0;
+    }
+
+    /** 织布机工作站（织布机方案）：没有方块实体，关界面时三个输入格退回物品栏（F8）；计数按签名（L9）。 */
+    public static boolean isLoom(String station) {
+        return "loom".equals(station);
+    }
+
+    /** 酿造台工作站（酿造台方案）：每轮换新（P11）；物品按签名计数（P7）。 */
+    public static boolean isBrewer(String station) {
+        return "brewing_stand".equals(station);
+    }
+
+    private static BrewingStandBlockEntity standAt(ServerLevel level, BlockPos o) {
+        return level.getBlockEntity(stationPos(o)) instanceof BrewingStandBlockEntity stand ? stand : null;
+    }
+
+    /** 酿造台方案 P9：某台酿造台酿完一次（BrewingBrewMixin 在 doBrew 开头报来）；只记本轮场地的那台。 */
+    public static void onBrew(net.minecraft.world.level.Level level, BlockPos pos) {
+        Run run = active;
+        if (run == null || !isBrewer(run.stationName) || !(level instanceof ServerLevel) || level.dimension() != net.minecraft.world.level.Level.OVERWORLD) return;
+        if (pos.equals(stationPos(run.origin))) run.brews++;
+    }
+
+    /** 制图台工作站（制图台方案）：关界面时 0、1 两格退回物品栏（F10）；地图按签名计数（K9）。 */
+    public static boolean isCartography(String station) {
+        return "cartography".equals(station);
+    }
+
+    /** 织布机方案 L11：素旗、染料、基础图案、图案物（只读）。 */
+    public static Map<String, Object> loomCatalog(MinecraftServer server) {
+        return LoomArena.catalog(server);
     }
 
     /** 切石机工作站（切石机方案）：没有容器，计数看物品栏、光标、切石机输入格。 */
@@ -423,13 +495,22 @@ public final class ArenaManager {
         return (float) Math.toDegrees(Math.atan2(dy, dz));
     }
 
-    /** 服务器侧按玩家当前位置与朝向做一次实体射线检测：准星命中的是这只动物，且中间没有方块挡着（H1 自检） */
+    /**
+     * 服务器侧按玩家当前位置与朝向做实体射线检测：准星命中的是这只动物，且中间没有方块挡着（H1 自检）。
+     * 站着和潜行（眼睛低 0.35 格）各测一次（2026-11-22）：开坐骑界面要潜行右键，潜行时也得对得准
+     */
     private static boolean aimsAtEntity(ServerPlayer player, Entity target) {
-        Vec3 eye = player.getEyePosition();
+        Vec3 feet = player.position();
+        return aimsAtEntity(player, target, feet.add(0, player.getEyeHeight(Pose.STANDING), 0))
+            && aimsAtEntity(player, target, feet.add(0, player.getEyeHeight(Pose.CROUCHING), 0));
+    }
+
+    private static boolean aimsAtEntity(ServerPlayer player, Entity target, Vec3 eye) {
         Vec3 dir = Vec3.directionFromRotation(player.getXRot(), player.getYRot());
         double range = player.entityInteractionRange();
         Vec3 end = eye.add(dir.scale(range));
-        EntityHitResult hit = ProjectileUtil.getEntityHitResult(player, eye, end, player.getBoundingBox().expandTowards(dir.scale(range)).inflate(1.0), e -> !e.isSpectator() && e.isPickable(), range * range);
+        AABB search = new AABB(eye, eye).expandTowards(dir.scale(range)).inflate(1.0);
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(player, eye, end, search, e -> !e.isSpectator() && e.isPickable(), range * range);
         if (hit == null || !hit.getEntity().getUUID().equals(target.getUUID())) return false;
         BlockHitResult block = player.level().clip(new ClipContext(eye, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
         return block.getType() != HitResult.Type.BLOCK || eye.distanceToSqr(hit.getLocation()) <= eye.distanceToSqr(block.getLocation());
@@ -680,10 +761,20 @@ public final class ArenaManager {
             }
             // 铁砧方案 A1：朝向固定；开裂、损坏的铁砧状态不同，build 会把它换回完好的
             case "anvil" -> out.put(at, Blocks.ANVIL.defaultBlockState().setValue(AnvilBlock.FACING, Direction.EAST));
+            // 织布机方案 L2：正面朝北，对着站在 -z 一侧的玩家（只影响外观）
+            case "loom" -> out.put(at, Blocks.LOOM.defaultBlockState().setValue(LoomBlock.FACING, Direction.NORTH));
+            // 制图台方案 K1：没有朝向属性
+            case "cartography" -> out.put(at, Blocks.CARTOGRAPHY_TABLE.defaultBlockState());
+            // 酿造台方案 P1：没有朝向属性；三个药水瓶的方块状态由酿造台自己更新，完好检查只看方块
+            case "brewing_stand" -> out.put(at, Blocks.BREWING_STAND.defaultBlockState());
             case "mount" -> {
-                // 坐骑方案 H1：动物站的那一格是空气；鹦鹉螺组下面那格地板换成水源（四周是地板，水不会流出去）
+                // 坐骑方案 H1：动物站的那一格是空气；鹦鹉螺组下面那格地板换成水源（四周是地板，水不会流出去）。
+                // 水坑朝玩家那边多一格（2026-11-22）：潜行时眼睛低 0.35 格，同样的俯角会落在坑沿那块地板上，潜行右键开不了界面；
+                // 坑沿也是水，视线（点选不看流体）直接落进坑里。动物仍在原来那格
+                BlockState floor = mountWater ? Blocks.WATER.defaultBlockState() : Blocks.STONE.defaultBlockState();
                 out.put(at, Blocks.AIR.defaultBlockState());
-                out.put(at.below(), mountWater ? Blocks.WATER.defaultBlockState() : Blocks.STONE.defaultBlockState());
+                out.put(at.below(), floor);
+                out.put(at.below().north(), floor);
             }
             default -> out.put(at, station(station).defaultBlockState());
         }
@@ -829,10 +920,20 @@ public final class ArenaManager {
     /**
      * 一个要发放的物品：slot ∈ [0, 35]（主物品栏），count ≥ 1（超过堆叠上限的由 {@link #split} 拆开）。
      * enchantments（铁砧方案 A7）：{ 注册名: 级数 }，附魔书写进存储的附魔；null = 不带附魔。
+     * potion（酿造台方案 P8）：不为 null 时 id 必须是药水 / 喷溅药水 / 滞留药水，按这个药水注册名做出带药水内容的药水（一个一叠，超过 1 由 split 拆开）。
+     * mapScale（制图台方案 K6）：不为 null 时 id 必须是已绘制地图、count 在 1–64，mod 现做一张这个缩放等级的开局地图，复制成 count 张同编号的一叠；一轮最多一项。
      */
-    public record Give(int slot, String id, int count, Map<String, Integer> enchantments) {
+    public record Give(int slot, String id, int count, Map<String, Integer> enchantments, Integer mapScale, String potion) {
         public Give(int slot, String id, int count) {
-            this(slot, id, count, null);
+            this(slot, id, count, null, null, null);
+        }
+
+        public Give(int slot, String id, int count, Map<String, Integer> enchantments) {
+            this(slot, id, count, enchantments, null, null);
+        }
+
+        public Give(int slot, String id, int count, Map<String, Integer> enchantments, Integer mapScale) {
+            this(slot, id, count, enchantments, mapScale, null);
         }
     }
 
@@ -855,10 +956,10 @@ public final class ArenaManager {
         int next = 0;
         for (Give g : items) {
             int max = item(g.id()).getDefaultMaxStackSize();
-            out.add(new Give(g.slot(), g.id(), Math.min(g.count(), max), g.enchantments()));
+            out.add(new Give(g.slot(), g.id(), Math.min(g.count(), max), g.enchantments(), g.mapScale(), g.potion()));
             for (int left = g.count() - max; left > 0; left -= max) {
                 if (next >= free.size()) throw new IllegalArgumentException("not enough free slots to split " + g.id() + " x" + g.count());
-                out.add(new Give(free.get(next++), g.id(), Math.min(left, max), g.enchantments()));
+                out.add(new Give(free.get(next++), g.id(), Math.min(left, max), g.enchantments(), g.mapScale(), g.potion()));
             }
         }
         return out;
@@ -903,7 +1004,18 @@ public final class ArenaManager {
             if (mountSetup == null) throw new IllegalArgumentException("the mount station needs mount: { animal, saddle?, body?, chest?, strength? }");
             MountArena.type(mountSetup.animal()); // 不认识的动物在这里报错
         }
-        if (expect != null && expect.mount() != null) {
+        String brewProduct = null;
+        if (expect != null && expect.brew() != null) {
+            if (!isBrewer(station)) throw new IllegalArgumentException("expect { brew } needs the brewing_stand station");
+            // 酿造台方案 P8：用服务器的酿造配方核对题目，返回产物签名
+            brewProduct = BrewArena.check(server.overworld().potionBrewing(), expect.brew());
+        } else if (expect != null && expect.cartography() != null) {
+            if (!isCartography(station)) throw new IllegalArgumentException("expect { cartography } needs the cartography station");
+            CartographyArena.check(expect.cartography());
+        } else if (expect != null && expect.loom() != null) {
+            if (!isLoom(station)) throw new IllegalArgumentException("expect { loom } needs the loom station");
+            LoomArena.check(server, expect.loom());
+        } else if (expect != null && expect.mount() != null) {
             if (!isMount(station)) throw new IllegalArgumentException("expect { mount } needs the mount station");
         } else if (expect != null && expect.smithing() != null) {
             if (!isSmithing(station)) throw new IllegalArgumentException("expect { smithing } needs the smithing_table station");
@@ -933,7 +1045,26 @@ public final class ArenaManager {
         }
         List<Give> items = split(requested, seed);
         List<ItemStack> stacks = new ArrayList<>();
-        for (Give g : items) stacks.add(AnvilArena.stack(server.registryAccess(), item(g.id()), g.count(), g.enchantments()));
+        CartographyArena.Source mapSource = null;
+        for (Give g : items) {
+            if (g.potion() != null) {
+                // 酿造台方案 P8：带药水内容的药水
+                if (!List.of("minecraft:potion", "minecraft:splash_potion", "minecraft:lingering_potion").contains(g.id())) throw new IllegalArgumentException("items[].potion needs a potion, splash_potion or lingering_potion, got " + g.id());
+                stacks.add(BrewArena.potionStack(g.id(), g.potion()).copyWithCount(g.count()));
+                continue;
+            }
+            if (g.mapScale() == null) {
+                stacks.add(AnvilArena.stack(server.registryAccess(), item(g.id()), g.count(), g.enchantments()));
+                continue;
+            }
+            // 制图台方案 K6：开局地图由 mod 现做（F2：地图格里的地图要有地图数据）
+            if (!isCartography(station)) throw new IllegalArgumentException("items[].map needs the cartography station");
+            if (!CartographyArena.FILLED_MAP.equals(g.id()) || g.count() < 1 || g.count() > 64) throw new IllegalArgumentException("items[].map needs id " + CartographyArena.FILLED_MAP + " and count 1-64");
+            if (mapSource != null) throw new IllegalArgumentException("at most one items[] entry may carry map");
+            Map.Entry<ItemStack, CartographyArena.Source> made = CartographyArena.create(server.overworld(), o, g.mapScale());
+            stacks.add(made.getKey().copyWithCount(g.count())); // K6：同编号的一叠
+            mapSource = made.getValue();
+        }
         List<Item> watchItems = new ArrayList<>();
         for (String id : watchIds) watchItems.add(item(id));
         ServerLevel level = server.overworld();
@@ -944,6 +1075,11 @@ public final class ArenaManager {
         BlockPos stationAt = stationPos(o);
         if (level.getBlockEntity(stationAt) instanceof AbstractFurnaceBlockEntity old) {
             old.clearContent();
+            level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
+        }
+        // 酿造台（酿造台方案 P11、F7）：同理，燃料值、酿造进度、格子里的东西都在方块实体上；先清空再拆，build 放一台新的
+        if (level.getBlockEntity(stationAt) instanceof BrewingStandBlockEntity oldStand) {
+            oldStand.clearContent();
             level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
         }
         // 附魔台（附魔台方案 N2）：本轮的书架数决定 build 摆哪些书架、工作站完好检查看哪些格子
@@ -1038,6 +1174,7 @@ public final class ArenaManager {
             baseline.put(watchIds.get(i), value);
         }
         active = new Run(arena, o.immutable(), player.getUUID(), watch, System.currentTimeMillis(), station, stationBlock, expect);
+        active.mapSource = mapSource;
         if (mount != null) {
             active.mountUuid = mount.getUUID();
             active.lastSaddle = MountArena.worn(mount, EquipmentSlot.SADDLE);
@@ -1071,6 +1208,8 @@ public final class ArenaManager {
         }
         if (cookInfo != null) out.put("cook", cookInfo);
         if (enchantInfo != null) out.put("enchant", enchantInfo);
+        if (mapSource != null) out.put("map", mapSource.describe());
+        if (brewProduct != null) out.put("brew", Map.of("product", brewProduct));
         if (isBeacon(station)) {
             // 信标方案 G2：新放的信标等级是 0，要等它查完光柱、到 80 tick 的整数倍才数底座；插件轮询 status 的 beacon.levels 等它对上
             Map<String, Object> beaconInfo = new LinkedHashMap<>();
@@ -1179,6 +1318,34 @@ public final class ArenaManager {
             out.put("held", counts(player.getInventory()));
             out.put("carried", carried(player.containerMenu));
             out.put("dropped", dropped(level, active.origin));
+        }
+        if (isLoom(active.stationName)) {
+            // 织布机方案 L8、L9：物品栏（不含光标）、光标、织布机三个输入格（界面开着时；关界面时退回物品栏）、场内地上，都按签名计数
+            out.put("held", LoomArena.counts(player.getInventory()));
+            out.put("carried", LoomArena.carried(player.containerMenu));
+            out.put("loomInput", LoomArena.input(player.containerMenu));
+            out.put("dropped", LoomArena.dropped(level, box(active.origin)));
+            out.put("containerOpen", containerOpen(player));
+        }
+        if (isBrewer(active.stationName)) {
+            // 酿造台方案 P5、P8：物品栏（不含光标）、光标、地上按签名计数；酿造台五格、燃料值、剩余酿造 tick；酿造次数
+            out.put("held", BrewArena.counts(player.getInventory()));
+            out.put("carried", BrewArena.carried(player.containerMenu));
+            out.put("dropped", BrewArena.dropped(level, box(active.origin)));
+            BrewingStandBlockEntity stand = standAt(level, active.origin);
+            out.put("stand", stand != null ? BrewArena.stand(stand) : null);
+            out.put("containerOpen", containerOpen(player));
+            out.put("brews", active.brews);
+        }
+        if (isCartography(active.stationName)) {
+            // 制图台方案 K8、K9：物品栏（不含光标）、光标、制图台 0、1 两格（界面开着时；关界面时退回物品栏）、场内地上，都按签名计数
+            CartographyArena.Source src = active.mapSource;
+            out.put("held", CartographyArena.counts(player.getInventory(), level, src));
+            out.put("carried", CartographyArena.carried(player.containerMenu, level, src));
+            out.put("tableInput", CartographyArena.input(player.containerMenu, level, src));
+            out.put("dropped", CartographyArena.dropped(level, box(active.origin), src));
+            out.put("containerOpen", containerOpen(player));
+            out.put("map", src != null ? src.describe() : null);
         }
         if (isCutter(active.stationName)) {
             // 切石机方案 Q8：物品栏（不含光标）、光标、切石机输入格（界面开着时；关界面时会退回物品栏）、场内地上
@@ -1352,6 +1519,9 @@ public final class ArenaManager {
             case "beacon" -> menu instanceof BeaconMenu;
             case "anvil" -> menu instanceof AnvilMenu;
             case "smithing_table" -> menu instanceof SmithingMenu;
+            case "loom" -> menu instanceof LoomMenu;
+            case "cartography" -> menu instanceof CartographyTableMenu;
+            case "brewing_stand" -> menu instanceof BrewingStandMenu;
             default -> menu instanceof CraftingMenu;
         };
     }
@@ -1362,6 +1532,18 @@ public final class ArenaManager {
         if (run.expect.smithing() != null) return reachedSmithing(player, run.expect.smithing());
         if (!player.containerMenu.getCarried().isEmpty()) return false;
         if (run.expect.mount() != null) return reachedMount(level, player, run);
+        if (run.expect.brew() != null) {
+            // 酿造台方案 P8：界面关闭、光标为空（上面已查）、物品栏和酿造台五格
+            if (containerOpen(player)) return false;
+            BrewingStandBlockEntity stand = standAt(level, run.origin);
+            return stand != null && BrewArena.reached(BrewArena.counts(player.getInventory()), stand, run.expect.brew());
+        }
+        if (run.expect.cartography() != null) {
+            ServerLevel lvl = level;
+            return CartographyArena.reached(CartographyArena.counts(player.getInventory(), lvl, run.mapSource),
+                    CartographyArena.input(player.containerMenu, lvl, run.mapSource), run.expect.cartography());
+        }
+        if (run.expect.loom() != null) return LoomArena.reached(LoomArena.counts(player.getInventory()), LoomArena.input(player.containerMenu), run.expect.loom());
         if (run.expect.anvil() != null) return reachedAnvil(player, run.expect.anvil());
         if (run.expect.beacon() != null) return reachedBeacon(level, player, run);
         if (run.expect.enchant() != null) return reachedEnchant(player, run.expect.enchant());

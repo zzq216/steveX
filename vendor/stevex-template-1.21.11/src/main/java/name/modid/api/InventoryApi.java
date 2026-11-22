@@ -170,6 +170,25 @@ public class InventoryApi {
             item.put("bannerPatterns", bannerLayers);
         }
 
+        // 制图台训练场设计方案 K2：已绘制地图带 map { id, scale, locked }。缩放等级和锁定存在地图数据里、不在物品组件上，
+        // 此前所有地图在 API 里同形（都是 minecraft:filled_map）。数据从客户端读：服务器每 tick 把物品栏里每张地图的数据
+        // 同步过来（ServerPlayer.synchronizeSpecialItemUpdates），刚做出来还没同步到时只给 { id }。
+        // 制图台结果格里的预览带 map_post_processing（取出后才放大 / 锁定），另给 mapPostProcessing: "scale" | "lock"。
+        var mapId = stack.get(DataComponents.MAP_ID);
+        if (mapId != null) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("id", mapId.id());
+            var clientLevel = Minecraft.getInstance().level;
+            var mapData = clientLevel != null ? clientLevel.getMapData(mapId) : null;
+            if (mapData != null) {
+                map.put("scale", (int) mapData.scale);
+                map.put("locked", mapData.locked);
+            }
+            item.put("map", map);
+        }
+        var mapPost = stack.get(DataComponents.MAP_POST_PROCESSING);
+        if (mapPost != null) item.put("mapPostProcessing", mapPost.name().toLowerCase());
+
         // v2.48 potionContents：药水内容物。此前 slotItem 不吐该组件，于是**所有药水在 API 里同形**
         // （id 都是 minecraft:potion / splash_potion / lingering_potion，count 都是 1），
         // 酿造台的三个药水格因此完全读不出"这一格是哪瓶药"——与织布机缺 BANNER_PATTERNS

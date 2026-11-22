@@ -18,7 +18,9 @@
 		"SmithingTakeMixin",
 		"MountMenuAccessor",
 		"AbstractHorseAccessor",
-		"LlamaAccessor"
+		"LlamaAccessor",
+		"BrewingStandAccessor",
+		"BrewingBrewMixin"
 	],
 	"client": [
 		"LevelRendererMixin",

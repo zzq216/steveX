@@ -106,7 +106,8 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     stonecutting: '切石机配方（minecraft:stonecutting）：input 是单个物品 id，result 是产物，count 是切一次（消耗 1 个 input）得到的产物个数。',
     cooking: '烹饪配方：type 是 smelting（熔炉）/ blasting（高炉）/ smoking（烟熏炉）/ campfire_cooking（营火）；input 是能用的原料 id 列表（标签已展开），任选一种；result 是产物，count 是烧一个原料得到的产物个数；time 是烧一个所需的 tick 数。',
     smithing: '锻造台配方，两种 type：transform（升级）是 { template, base, addition, result }，template、base 是单个物品 id，addition 是能用的材料 id 列表，产物 result 保留底材的组件；trim（纹饰）是 { template, base, addition, pattern }，base、addition 是能用的物品 id 列表（标签已展开），pattern 是纹饰样式的注册名，和做出来的物品上 trim.pattern 的值相同，产物和底材是同一种物品。',
-    items: '物品属性，每条一个物品：id；maxStack 是堆叠上限；remainder 是合成后留在格子里的剩余物；burn 是当燃料时在熔炉里燃烧的 tick 数（只有燃料才有这一项）；enchantable 是可附魔程度（只有能上附魔台的物品才有这一项），enchantingTable: false 表示附魔台给它出不了附魔；trimMaterial 是它当纹饰材料时对应的纹饰材料注册名（只有纹饰材料才有这一项，和做出来的物品上 trim.material 的值相同）。只收了配方表、烹饪配方、锻造配方里出现过的物品、全部燃料和全部可附魔物品。高炉、烟熏炉里的燃烧时长是 burn 的一半（整数除法，BlastFurnaceBlockEntity / SmokerBlockEntity 的 getBurnDuration）。'
+    brewing: '酿造台配方，有四组记录（records 写组名）：fuel 是能当燃料的物品 { id, charges }，charges 是一个燃料能开始几次酿造；containers 是能装药水的瓶子 { id }；potionMixes 是药水配方 { from, ingredient, to, time }，from / to 是药水注册名（和物品上 potionContents.potion 的值相同），对 containers 里的每种瓶子都成立，瓶子不变；containerMixes 是换瓶子的配方 { from, ingredient, to, time }，from / to 是瓶子的物品 id，药水种类不变；time 是酿一次的 tick 数。',
+    items: '物品属性，每条一个物品：id；maxStack 是堆叠上限；remainder 是合成后留在格子里的剩余物；burn 是当燃料时在熔炉里燃烧的 tick 数（只有燃料才有这一项）；enchantable 是可附魔程度（只有能上附魔台的物品才有这一项），enchantingTable: false 表示附魔台给它出不了附魔；trimMaterial 是它当纹饰材料时对应的纹饰材料注册名（只有纹饰材料才有这一项，和做出来的物品上 trim.material 的值相同）。只收了配方表、烹饪配方、锻造配方、酿造配方里出现过的物品、全部燃料和全部可附魔物品。高炉、烟熏炉里的燃烧时长是 burn 的一半（整数除法，BlastFurnaceBlockEntity / SmokerBlockEntity 的 getBurnDuration）。'
   }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),

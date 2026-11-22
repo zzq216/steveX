@@ -87,6 +87,8 @@ public class ArenaApi {
         });
         // 坐骑训练场（坐骑方案 H10）：每种动物能装什么、箱子几格，只读
         handlers.put("arena/mount-catalog", params -> onServer(10_000, ArenaManager::mountCatalog));
+        // 织布机训练场（织布机方案 L11）：素旗、染料、基础图案、图案物，只读
+        handlers.put("arena/loom-catalog", params -> onServer(5_000, ArenaManager::loomCatalog));
         handlers.put("arena/status", params -> onServer(5_000, ArenaManager::status));
         handlers.put("arena/finish", params -> {
             String arena = arena(params);
@@ -179,7 +181,10 @@ public class ArenaApi {
         return out;
     }
 
-    /** [{ slot, id, count, enchantments? }]，可以为空（箱子题"取"的物品栏、"放"的箱子开局都是空的）；enchantments 是铁砧题用的（铁砧方案 A7）。 */
+    /**
+     * [{ slot, id, count, enchantments?, map? }]，可以为空（箱子题"取"的物品栏、"放"的箱子开局都是空的）；enchantments 是铁砧题用的（铁砧方案 A7）；
+     * map: { scale } 是制图台题的开局地图（制图台方案 K6）；potion 是酿造台题发的药水的药水注册名（酿造台方案 P8）。
+     */
     private static List<ArenaManager.Give> gives(Object v, String name) {
         if (!(v instanceof List<?> list)) throw new IllegalArgumentException(name + " must be a list of { slot, id, count }");
         List<ArenaManager.Give> out = new ArrayList<>();
@@ -188,7 +193,16 @@ public class ArenaApi {
                     || !(m.get("count") instanceof Number count)) {
                 throw new IllegalArgumentException("each entry of " + name + " must be { slot:int, id:string, count:int }");
             }
-            out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue(), levels(m.get("enchantments"), name + ".enchantments")));
+            Integer mapScale = null;
+            if (m.get("map") != null) {
+                // 制图台方案 K6：{ map: { scale } } 由 mod 现做开局地图
+                if (!(m.get("map") instanceof Map<?, ?> map) || !(map.get("scale") instanceof Number scale)) throw new IllegalArgumentException(name + "[].map must be { scale:int }");
+                mapScale = scale.intValue();
+            }
+            Object potion = m.get("potion");
+            // 酿造台方案 P8：{ potion: 药水注册名 } 发带药水内容的药水
+            if (potion != null && !(potion instanceof String)) throw new IllegalArgumentException(name + "[].potion must be a potion id string");
+            out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue(), levels(m.get("enchantments"), name + ".enchantments"), mapScale, (String) potion));
         }
         return out;
     }
@@ -198,6 +212,9 @@ public class ArenaApi {
      * 炉子 { cook: { raw, rawLeft, fuel, fuelLeft, product } }（熔炉方案 K8）；附魔台 { enchant: { item, result, enchantment, level } }（附魔台方案 N8）；
      * 信标 { beacon: { payment, effects: [{ effect, amplifier }] } }（信标方案 G7）；铁砧 { anvil: { item, enchantments: { id: level }, name } }（铁砧方案 A7）；
      * 锻造台 { smithing: [{ item, trim: { pattern, material } | null }] }（锻造台方案 M7）；
+     * 织布机 { loom: { goals: [{ banner, pattern, color, count }], allowed: [id...] } }（织布机方案 L9）；
+     * 制图台 { cartography: { goals: [{ scale, locked, count }], allowed: [id...] } }（制图台方案 K9）；
+     * 酿造台 { brew: { fuel, fuelLeft, ingredient, ingredientLeft, potion, potionLeft, placed, products: [签名...] } }（酿造台方案 P8）；
      * 坐骑 { mount: { saddle?: id | null, body?: id | null, chest: { id: n }, inventory: { id: n } } }（坐骑方案 H6；写了 saddle / body 才检查，null = 要空着）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
@@ -211,6 +228,44 @@ public class ArenaApi {
             return new ArenaManager.Expect(new ArenaManager.MountGoal(
                     g.containsKey("saddle"), (String) g.get("saddle"), g.containsKey("body"), (String) g.get("body"),
                     Map.copyOf(counts(g.get("chest"), "expect.mount.chest")), Map.copyOf(counts(g.get("inventory"), "expect.mount.inventory"))));
+        }
+        if (m.containsKey("brew")) {
+            String usage = "expect.brew must be { fuel:string, fuelLeft:int, ingredient:string, ingredientLeft:int, potion:string, potionLeft:int, placed:int, products:[string] }";
+            if (!(m.get("brew") instanceof Map<?, ?> b) || !(b.get("fuel") instanceof String fuel) || !(b.get("ingredient") instanceof String ingredient)
+                    || !(b.get("potion") instanceof String potion) || !(b.get("fuelLeft") instanceof Number fuelLeft) || !(b.get("ingredientLeft") instanceof Number ingredientLeft)
+                    || !(b.get("potionLeft") instanceof Number potionLeft) || !(b.get("placed") instanceof Number placed) || b.get("products") == null) {
+                throw new IllegalArgumentException(usage);
+            }
+            Set<String> products = new HashSet<>(strings(b.get("products"), "expect.brew.products"));
+            return new ArenaManager.Expect(new name.modid.arena.BrewArena.Spec(fuel, fuelLeft.intValue(), ingredient, ingredientLeft.intValue(), potion, potionLeft.intValue(), placed.intValue(), Set.copyOf(products)));
+        }
+        if (m.containsKey("cartography")) {
+            String usage = "expect.cartography must be { goals: [{ scale:int, locked:boolean, count:int>=1 }], allowed: [id...] }";
+            if (!(m.get("cartography") instanceof Map<?, ?> c) || !(c.get("goals") instanceof List<?> list) || list.isEmpty()) throw new IllegalArgumentException(usage);
+            List<name.modid.arena.CartographyArena.Goal> goals = new ArrayList<>();
+            for (Object o : list) {
+                if (!(o instanceof Map<?, ?> g) || !(g.get("scale") instanceof Number scale) || !(g.get("locked") instanceof Boolean locked)
+                        || !(g.get("count") instanceof Number count) || count.intValue() < 1) {
+                    throw new IllegalArgumentException(usage);
+                }
+                goals.add(new name.modid.arena.CartographyArena.Goal(scale.intValue(), locked, count.intValue()));
+            }
+            Set<String> allowed = new HashSet<>(c.get("allowed") == null ? List.of() : strings(c.get("allowed"), "expect.cartography.allowed"));
+            return new ArenaManager.Expect(new name.modid.arena.CartographyArena.Spec(List.copyOf(goals), Set.copyOf(allowed)));
+        }
+        if (m.containsKey("loom")) {
+            String usage = "expect.loom must be { goals: [{ banner:string, pattern:string, color:string, count:int>=1 }], allowed: [id...] }";
+            if (!(m.get("loom") instanceof Map<?, ?> l) || !(l.get("goals") instanceof List<?> list) || list.isEmpty()) throw new IllegalArgumentException(usage);
+            List<name.modid.arena.LoomArena.Goal> goals = new ArrayList<>();
+            for (Object o : list) {
+                if (!(o instanceof Map<?, ?> g) || !(g.get("banner") instanceof String banner) || !(g.get("pattern") instanceof String pattern)
+                        || !(g.get("color") instanceof String color) || !(g.get("count") instanceof Number count) || count.intValue() < 1) {
+                    throw new IllegalArgumentException(usage);
+                }
+                goals.add(new name.modid.arena.LoomArena.Goal(banner, pattern, color, count.intValue()));
+            }
+            Set<String> allowed = new HashSet<>(l.get("allowed") == null ? List.of() : strings(l.get("allowed"), "expect.loom.allowed"));
+            return new ArenaManager.Expect(new name.modid.arena.LoomArena.Spec(List.copyOf(goals), Set.copyOf(allowed)));
         }
         if (m.containsKey("smithing")) {
             String usage = "expect.smithing must be a non-empty list of { item:string, trim: { pattern:string, material:string } | null }";

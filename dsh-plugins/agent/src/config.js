@@ -9,6 +9,9 @@ import { beaconPool, parseAmplifier, parseBeaconCountSpec } from './training/bea
 import { parseAnvilXpLevel, parseCurses, parseEnchantsSpec } from './training/anvil.js'
 import { parseTasksSpec } from './training/smithing.js'
 import { parseMountGroups, parseMountMove, parseMountTotal } from './training/mount.js'
+import { loomOptions } from './training/loom.js'
+import { cartographyOptions } from './training/cartography.js'
+import { brewOptions } from './training/brew.js'
 import { parseCountSpec } from './training/sampler.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
@@ -26,6 +29,12 @@ const ANVIL_ARENA_DEFAULTS = Object.freeze({ xpLevel: 216, enchants: '1-3', curs
 const SMITHING_ARENA_DEFAULTS = Object.freeze({ tasks: '1-4', exclude: [] })
 /** 用户自己加的坐骑场地（type: 'mount'）没写的字段（坐骑训练场设计方案 §6） */
 const MOUNT_ARENA_DEFAULTS = Object.freeze({ groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] })
+/** 用户自己加的织布机场地（type: 'loom'）没写的字段（织布机训练场设计方案 §5） */
+const LOOM_ARENA_DEFAULTS = Object.freeze({ banners: '1-3', slots: '1-3', fill: 'random', styles: '1-3', spare: '0-3', itemPatterns: 'off', exclude: [] })
+/** 用户自己加的制图台场地（type: 'cartography'）没写的字段（制图台训练场设计方案 §5）；exclude 不用，留空 */
+/** 用户自己加的酿造台场地（type: 'brew'）没写的字段（酿造台训练场设计方案 §5） */
+const BREW_ARENA_DEFAULTS = Object.freeze({ fuel: '32-64', raw: '32-64', bottles: '1-3', m: '1-32', n: '1-32', exclude: [] })
+const CARTOGRAPHY_ARENA_DEFAULTS = Object.freeze({ task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] })
 const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
 const steveXRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -51,6 +60,8 @@ export const DEFAULTS = Object.freeze({
     cooking: 'dsh-plugins/agent/data/cooking.json',
     /** 锻造台配方：升级和纹饰（锻造台训练场设计方案 M9） */
     smithing: 'dsh-plugins/agent/data/smithing.json',
+    /** 酿造台配方：药水配方、换瓶子配方、燃料（酿造台训练场设计方案 P10） */
+    brewing: 'dsh-plugins/agent/data/brewing.json',
     /** 物品的堆叠上限、合成剩余物、燃料时长、可附魔程度、纹饰材料（熔炉训练场设计方案 K10；锻造台训练场设计方案 M9） */
     items: 'dsh-plugins/agent/data/items.json'
   },
@@ -160,6 +171,8 @@ export const DEFAULTS = Object.freeze({
     stonecutting: 'dsh-plugins/agent/data/stonecutting.json',
     /** 烹饪配方（熔炉题出题用，熔炉训练场设计方案 K10；npm run extract-recipes 一并生成），相对 steveX/ */
     cooking: 'dsh-plugins/agent/data/cooking.json',
+    /** 酿造配方（酿造台题出题用，酿造台训练场设计方案 P10；npm run extract-item-props 一并生成），相对 steveX/ */
+    brewing: 'dsh-plugins/agent/data/brewing.json',
     /**
      * 场地：名字 → { origin: 场内地板中心 [x,y,z], mode: named | hidden（T5）, exclude: 不抽的配方名,
      *   grid: 合成格边长 2 | 3（缺省 2）, station: 场内工作站 'crafting_table' | null（缺省 null）,
@@ -187,6 +200,14 @@ export const DEFAULTS = Object.freeze({
      *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/锻造台训练场设计方案.md
      * 'mount' = 坐骑（动物身上的物品栏），字段是 { origin, groups: 出哪几组动物（horse / donkey / camel / llama / nautilus）, total: 两格物品的总数 "k" | "a-b"（2–128）,
      *     move: 要搬的数量 "k" | "a-b"（1–64）, exclude: 物品池里不抽的物品 id, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/坐骑训练场设计方案.md
+     * 'loom' = 织布机，字段是 { origin, banners: 底色种数 "k" | "a-b"（1–3）, slots: 每种底色的格数（1–3）, fill: random | full | mix, styles: 每种底色的样式数（1–3）,
+     *     spare: 素旗、染料比目标多发几个（0–3）, itemPatterns: off | on（要不要出图案物的图案）, exclude: 不出的素旗、染料、图案、图案物 id, timeoutSec? / wallTimeoutSec? }
+     *     （命令行同名选项优先），见 docs/织布机训练场设计方案.md
+     * 'cartography' = 制图台，字段是 { origin, task: zoom | lock | clone | mix | chain（mix = 前三种单项操作等概率）, scale: 开局地图的缩放等级（0–3）,
+     *     maps: 放大、锁定题开局几张（1–3）, copies: 复制题做到几张（2–5）, ops: chain 题的步数（1–4）, spare: 用到的辅料多发几个（0–3）,
+     *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/制图台训练场设计方案.md
+     * 'brew' = 酿造台，字段是 { origin, fuel: 发几个烈焰粉 "k" | "a-b"（1–64）, raw: 发几个材料（1–64，不超过堆叠上限）, bottles: 发几瓶药水（1–3）,
+     *     m: 放进燃料格的个数, n: 放进材料格的个数（1–64）, exclude: 不出的材料、药水、瓶子 id, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/酿造台训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
@@ -199,7 +220,10 @@ export const DEFAULTS = Object.freeze({
       beacon: { type: 'beacon', origin: [10100, 120, 10000], timeoutSec: 600, amplifier: 'mix', count: '32-64', exclude: [] },
       anvil: { type: 'anvil', origin: [10000, 120, 10180], timeoutSec: 600, xpLevel: 216, enchants: '1-3', curses: false, exclude: [] },
       smithing: { type: 'smithing', origin: [10000, 120, 10210], timeoutSec: 600, tasks: '1-4', exclude: [] },
-      mount: { type: 'mount', origin: [10000, 120, 10240], timeoutSec: 600, groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] }
+      mount: { type: 'mount', origin: [10000, 120, 10240], timeoutSec: 600, groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] },
+      loom: { type: 'loom', origin: [10000, 120, 10270], timeoutSec: 900, banners: '1-3', slots: '1-3', fill: 'random', styles: '1-3', spare: '0-3', itemPatterns: 'off', exclude: [] },
+      cartography: { type: 'cartography', origin: [10000, 120, 10300], timeoutSec: 600, task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] },
+      brewing: { type: 'brew', origin: [10000, 120, 10330], timeoutSec: 600, fuel: '32-64', raw: '32-64', bottles: '1-3', m: '1-32', n: '1-32', exclude: [] }
     }
   },
   planner: {
@@ -256,10 +280,34 @@ export function normalizeConfig(raw = {}) {
       throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
     }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
-      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : 'recipe names'}`)
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : arena.type === 'loom' ? 'banner, dye, banner pattern or pattern item ids' : arena.type === 'cartography' ? 'strings (unused)' : arena.type === 'brew' ? 'ingredient, potion or bottle ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing" or "mount"`)
+    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography" or "brew"`)
+    if (type === 'brew') {
+      try {
+        brewOptions({}, arena)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'cartography') {
+      try {
+        cartographyOptions({}, arena)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'loom') {
+      try {
+        loomOptions({}, arena)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (type === 'mount') {
       try {
         parseMountGroups(arena.groups)
@@ -366,6 +414,7 @@ export function normalizeConfig(raw = {}) {
   config.training.itemProps = path.resolve(steveXRoot, config.training.itemProps)
   config.training.stonecutting = path.resolve(steveXRoot, config.training.stonecutting)
   config.training.cooking = path.resolve(steveXRoot, config.training.cooking)
+  config.training.brewing = path.resolve(steveXRoot, config.training.brewing)
   for (const key of ['maxOutputChars', 'inspectMaxBytes']) {
     if (!(Number.isInteger(config.planner[key]) && config.planner[key] > 0)) throw new Error(`stevex-agent config: planner.${key} must be a positive integer`)
   }
@@ -399,6 +448,12 @@ function normalizeTraining(raw = {}) {
             ? { ...SMITHING_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
           : type === 'mount'
             ? { ...MOUNT_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'loom'
+            ? { ...LOOM_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'cartography'
+            ? { ...CARTOGRAPHY_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'brew'
+            ? { ...BREW_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
         : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }

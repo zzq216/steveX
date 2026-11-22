@@ -19,6 +19,9 @@
  *   - 纹饰材料（trimMaterial，锻造台训练场设计方案 M9）：.trimMaterial(TrimMaterials.X)，按 TrimMaterials.java 的 registryKey("名字") 换成注册名
  *     （如金锭 → minecraft:gold）。这个对应关系只在源码里，配方 json 里没有
  * 同样的内容另存一份数组格式的 data/items.json（{ source, items: [{ id, maxStack, remainder?, burn?, enchantable?, enchantingTable?, trimMaterial? }] }），给 agent 的 json.items 查。
+ *   - 酿造配方（酿造台训练场设计方案 P10）：PotionBrewing.addVanillaMixes 的 addContainer / addContainerRecipe / addMix / addStartMix，
+ *     药水按 Potions.java 换成注册名，起始配方按 Builder.addStartMix 的方法体展开；燃料按 jar 的 brewing_fuel 标签。另存 data/brewing.json，
+ *     items.json 也覆盖酿造材料、瓶子和燃料
  * 只输出 recipes.json、cooking.json、smithing.json 里出现过的材料、产物、全部燃料、全部可附魔物品和它们的剩余物；有一个找不到或写法认不出就报错退出，不按 64 猜。
  *
  * 用法：
@@ -36,6 +39,8 @@ const steveXRoot = path.resolve(pluginRoot, '../..')
 const outFile = path.join(pluginRoot, 'data', 'item-props.json')
 /** 同样的内容排成数组，给 agent 用 core.json.query 查（json.items；查询只认数组，熔炉训练场设计方案 K10） */
 const listFile = path.join(pluginRoot, 'data', 'items.json')
+/** 酿造配方（酿造台训练场设计方案 P10），core.json.query 的 brewing */
+const brewingFile = path.join(pluginRoot, 'data', 'brewing.json')
 
 /** 这些 Item.Properties 方法内部调用 durability(…) 或 stacksTo(1)（Item.java），堆叠上限都是 1 */
 const STACK_ONE_HELPERS = ['durability', 'tool', 'pickaxe', 'axe', 'hoe', 'shovel', 'sword', 'spear', 'humanoidArmor', 'wolfArmor', 'horseArmor', 'nautilusArmor']
@@ -329,6 +334,86 @@ export function parseFuels(source, { items, blocks, tags, resolveTag }) {
   return { fuels, problems }
 }
 
+/** Potions.java：字段名 → 药水注册名（`public static final Holder<Potion> WATER = register("water", …)` → WATER → minecraft:water）。 */
+export function potionNames(source) {
+  const out = new Map()
+  for (const m of source.matchAll(/public static final Holder<Potion> (\w+) = register\(\s*"([a-z0-9_]+)"/g)) out.set(m[1], `minecraft:${m[2]}`)
+  return out
+}
+
+/**
+ * 酿造配方（酿造台训练场设计方案 P10）：PotionBrewing.addVanillaMixes 的方法体逐行解析。
+ *   addContainer(Items.X) → containers；addContainerRecipe(Items.A, Items.B, Items.C) → containerMixes { from: A, ingredient: B, to: C }；
+ *   addMix(Potions.A, Items.B, Potions.C) → potionMixes { from, ingredient, to }；
+ *   addStartMix(Items.B, Potions.C) 按 Builder.addStartMix 的方法体展开（1.21.11 是 水瓶 + B → 平凡、粗制 + B → C）。
+ * 燃料是 jar 里的 brewing_fuel 标签（ItemTags.BREWING_FUEL），每个带 charges = BrewingStandBlockEntity.FUEL_USES；每条配方带 time =
+ * serverTick 里开始酿造时设的 brewTime（同 cooking.json 每条带 time）。core.json.query 只能取数组，所以单个数值都放进记录里。
+ * 输出 { fuel: [{ id, charges }], containers: [{ id }], potionMixes: [{ from, ingredient, to, time }], containerMixes: [{ from, ingredient, to, time }] }。
+ * 认不出的写法报错，不猜。
+ * @param {{ items: Map, potions: Map, resolveTag: Function, stand: string }} names  items：Items 字段名 → { id }；potions：potionNames 的结果；
+ *   stand：BrewingStandBlockEntity.java 的源码
+ * @returns {{ brewing: object|null, problems: string[] }}
+ */
+export function parseBrewing(source, { items, potions, resolveTag, stand }) {
+  const problems = []
+  const vanilla = /public static void addVanillaMixes\(PotionBrewing\.Builder builder\) \{([\s\S]*?)\n\t\}/.exec(source)?.[1]
+  if (!vanilla) return { brewing: null, problems: ['PotionBrewing：找不到 addVanillaMixes'] }
+  const startBody = /public void addStartMix\(Item item, Holder<Potion> holder\) \{([\s\S]*?)\n\t\t\}/.exec(source)?.[1] ?? ''
+  const startMixes = [...startBody.matchAll(/this\.addMix\(Potions\.(\w+), item, (?:Potions\.(\w+)|holder)\)/g)].map((m) => ({ from: m[1], to: m[2] ?? null }))
+  if (startMixes.length !== 2) problems.push(`PotionBrewing：认不出 addStartMix 的方法体（找到 ${startMixes.length} 条 addMix）`)
+  const item = (field) => {
+    const id = items.get(field)?.id
+    if (!id) problems.push(`PotionBrewing：Items.${field} 没有注册名`)
+    return id ? `minecraft:${id}` : null
+  }
+  const potion = (field) => {
+    const id = potions.get(field)
+    if (!id) problems.push(`PotionBrewing：Potions.${field} 没有注册名`)
+    return id ?? null
+  }
+  const containers = []
+  const containerMixes = []
+  const potionMixes = []
+  for (const line of vanilla.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    let m
+    if ((m = /^builder\.addContainer\(Items\.(\w+)\);$/.exec(line))) containers.push(item(m[1]))
+    else if ((m = /^builder\.addContainerRecipe\(Items\.(\w+), Items\.(\w+), Items\.(\w+)\);$/.exec(line))) containerMixes.push({ from: item(m[1]), ingredient: item(m[2]), to: item(m[3]) })
+    else if ((m = /^builder\.addMix\(Potions\.(\w+), Items\.(\w+), Potions\.(\w+)\);$/.exec(line))) potionMixes.push({ from: potion(m[1]), ingredient: item(m[2]), to: potion(m[3]) })
+    else if ((m = /^builder\.addStartMix\(Items\.(\w+), Potions\.(\w+)\);$/.exec(line))) {
+      for (const rule of startMixes) potionMixes.push({ from: potion(rule.from), ingredient: item(m[1]), to: potion(rule.to ?? m[2]) })
+    } else problems.push(`PotionBrewing：认不出的写法 ${line}`)
+  }
+  const fuelTag = 'minecraft:brewing_fuel'
+  let fuel = []
+  if (resolveTag.has && !resolveTag.has(fuelTag)) problems.push(`jar 里没有标签 ${fuelTag}`)
+  else fuel = [...resolveTag(fuelTag)].sort()
+  const charges = /public static final int FUEL_USES = (\d+);/.exec(stand)
+  // 开始酿造的分支：先 fuel--，再设 brewTime（别处的 brewTime = 0 是中断时的重置）
+  const ticks = /\.fuel--;\s*\w+\.brewTime = (\d+);/.exec(stand)
+  if (!charges) problems.push('BrewingStandBlockEntity：找不到 FUEL_USES')
+  if (!ticks) problems.push('BrewingStandBlockEntity：找不到开始酿造时设的 brewTime')
+  if (!potionMixes.length || !containers.length) problems.push('PotionBrewing：没有解析出配方')
+  if (problems.length) return { brewing: null, problems }
+  const time = Number(ticks[1])
+  return {
+    brewing: {
+      fuel: fuel.map((id) => ({ id, charges: Number(charges[1]) })),
+      containers: containers.map((id) => ({ id })),
+      potionMixes: potionMixes.map((mix) => ({ ...mix, time })),
+      containerMixes: containerMixes.map((mix) => ({ ...mix, time }))
+    },
+    problems
+  }
+}
+
+/** 酿造配方里出现的物品 id：材料、瓶子、燃料（items.json 要覆盖它们，酿造台训练场设计方案 P10） */
+export function brewingItemIds(brewing) {
+  const ids = new Set([...brewing.fuel.map((f) => f.id), ...brewing.containers.map((c) => c.id)])
+  for (const mix of brewing.potionMixes) ids.add(mix.ingredient)
+  for (const mix of brewing.containerMixes) for (const id of [mix.from, mix.ingredient, mix.to]) ids.add(id)
+  return ids
+}
+
 /**
  * TrimMaterials.java 里的纹饰材料：字段名 → 注册名（`public static final ResourceKey<TrimMaterial> GOLD = registryKey("gold")` → GOLD → minecraft:gold）。
  */
@@ -364,9 +449,10 @@ export function recipeItemIds(recipes) {
  *   带上 enchantable（可附魔程度），附魔台出不了附魔的另记 enchantingTable: false（书总是出得了）
  * @returns {{ props: object, missing: string[] }}  props: id → { maxStack, remainder?, burn?, enchantable?, enchantingTable?, trimMaterial? }
  */
-export function buildProps(recipes, items, fuels = new Map(), tableItems = null) {
+export function buildProps(recipes, items, fuels = new Map(), tableItems = null, extraIds = []) {
   const byId = new Map([...items.values()].map((item) => [`minecraft:${item.id}`, item]))
   const wanted = recipeItemIds(recipes)
+  for (const id of extraIds) wanted.add(id)
   for (const id of fuels.keys()) wanted.add(id)
   if (tableItems) for (const item of items.values()) if (item.enchantable !== undefined) wanted.add(`minecraft:${item.id}`)
   const props = {}
@@ -443,7 +529,13 @@ function main() {
     ...JSON.parse(fs.readFileSync(cookingFile, 'utf8')).recipes,
     ...JSON.parse(fs.readFileSync(smithingFile, 'utf8')).recipes
   ]
-  const { props, missing } = buildProps(recipes, items, fuels, tableItems)
+  // 酿造台训练场设计方案 P10：酿造配方写在代码里，同一次从源码提取
+  const { brewing, problems: brewingProblems } = parseBrewing(read('net/minecraft/world/item/alchemy/PotionBrewing.java'), {
+    items, potions: potionNames(read('net/minecraft/world/item/alchemy/Potions.java')), resolveTag,
+    stand: read('net/minecraft/world/level/block/entity/BrewingStandBlockEntity.java')
+  })
+  fuelProblems.push(...brewingProblems)
+  const { props, missing } = buildProps(recipes, items, fuels, tableItems, brewing ? brewingItemIds(brewing) : [])
   // 认不出的写法只在落到要输出的物品上时才算错；连 id 都认不出的，要用到它就会出现在 missing 里
   const relevant = problems.filter((p) => p.id && props[`minecraft:${p.id}`]).map((p) => p.text)
   if (missing.length || relevant.length || fuelProblems.length || materials.problems.length) {
@@ -455,6 +547,7 @@ function main() {
   fs.mkdirSync(path.dirname(outFile), { recursive: true })
   fs.writeFileSync(outFile, JSON.stringify(out, null, 1) + '\n')
   fs.writeFileSync(listFile, JSON.stringify({ source: out.source, items: Object.entries(props).map(([id, p]) => ({ id, ...p })) }) + '\n')
+  fs.writeFileSync(brewingFile, JSON.stringify({ source: out.source, ...brewing }, null, 1) + '\n')
   const counts = {}
   for (const { maxStack } of Object.values(props)) counts[maxStack] = (counts[maxStack] ?? 0) + 1
   const remainders = Object.entries(props).filter(([, p]) => p.remainder).map(([id, p]) => `${id} → ${p.remainder}`)
@@ -468,6 +561,7 @@ function main() {
   console.log(`可附魔 ${enchantables.length} 种${notOnTable.length ? `（其中附魔台出不了附魔的：${notOnTable.join('，')}）` : ''}`)
   const trims = Object.entries(props).filter(([, p]) => p.trimMaterial).map(([id, p]) => `${id} → ${p.trimMaterial}`)
   console.log(`纹饰材料 ${trims.length} 种：${trims.join('，')}`)
+  console.log(`${brewingFile}：药水配方 ${brewing.potionMixes.length} 条、换瓶子配方 ${brewing.containerMixes.length} 条、瓶子 ${brewing.containers.length} 种、燃料 ${brewing.fuel.map((f) => `${f.id}（${f.charges} 次）`).join('，')}、每次 ${brewing.potionMixes[0].time} tick`)
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

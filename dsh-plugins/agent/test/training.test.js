@@ -69,7 +69,7 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 test('parseTrainArgs', () => {
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
@@ -126,7 +126,7 @@ test('judge', () => {
 
 test('arena/* is listed for the trainer but hidden from the agent', () => {
   const arena = METHODS.filter((m) => m.method.startsWith('arena/')).map((m) => m.method)
-  assert.deepEqual(arena, ['arena/build', 'arena/prepare', 'arena/enchant-preview', 'arena/mount-catalog', 'arena/smithing-catalog', 'arena/smithing-preview', 'arena/anvil-catalog', 'arena/anvil-preview', 'arena/status', 'arena/finish'])
+  assert.deepEqual(arena, ['arena/build', 'arena/prepare', 'arena/enchant-preview', 'arena/mount-catalog', 'arena/loom-catalog', 'arena/smithing-catalog', 'arena/smithing-preview', 'arena/anvil-catalog', 'arena/anvil-preview', 'arena/status', 'arena/finish'])
   const registry = new CommandRegistry()
   registerRawCommands(registry)
   for (const method of arena) {
@@ -204,12 +204,14 @@ const ITEM_PROPS = Object.fromEntries(
 )
 const ARENAS_2X2 = { craft2x2: { origin: [0, 100, 0], mode: 'named', exclude: [], portions: '1', crafts: '1' } }
 
-function harness({ script, timeoutSec = 600, wallTimeoutSec = 2400, cancelTurn = () => {}, openFails = false, consoleAlive = () => true, arenas = ARENAS_2X2, prepareData = () => ({}), statusData = () => ({}), itemProps = ITEM_PROPS, recipes = RECIPES, stonecutting = null, cooking = null, onCall = null } = {}) {
+function harness({ script, timeoutSec = 600, wallTimeoutSec = 2400, cancelTurn = () => {}, openFails = false, consoleAlive = () => true, arenas = ARENAS_2X2, prepareData = () => ({}), statusData = () => ({}), itemProps = ITEM_PROPS, recipes = RECIPES, stonecutting = null, cooking = null, brewing = null, onCall = null } = {}) {
   const dir = tempDir('stevex-train-')
   const recipesFile = path.join(dir, 'recipes.json')
   const itemPropsFile = path.join(dir, 'item-props.json')
   const stonecuttingFile = path.join(dir, 'stonecutting.json')
   const cookingFile = path.join(dir, 'cooking.json')
+  const brewingFile = path.join(dir, 'brewing.json')
+  if (brewing) fs.writeFileSync(brewingFile, JSON.stringify(brewing))
   if (itemProps) fs.writeFileSync(itemPropsFile, JSON.stringify({ items: itemProps }))
   if (stonecutting) fs.writeFileSync(stonecuttingFile, JSON.stringify({ recipes: stonecutting }))
   if (cooking) fs.writeFileSync(cookingFile, JSON.stringify({ recipes: cooking }))
@@ -275,7 +277,7 @@ function harness({ script, timeoutSec = 600, wallTimeoutSec = 2400, cancelTurn =
   bridge.startPlanning = (args) => { planned.push(args.sessionId); instructions.push(args.instruction); return startPlanning(args) }
   const trainer = new Trainer({
     bridge, executor, game, prompts,
-    config: { timeoutSec, wallTimeoutSec, pollMs: 1000, recipes: recipesFile, itemProps: itemPropsFile, stonecutting: stonecuttingFile, cooking: cookingFile, arenas },
+    config: { timeoutSec, wallTimeoutSec, pollMs: 1000, recipes: recipesFile, itemProps: itemPropsFile, stonecutting: stonecuttingFile, cooking: cookingFile, brewing: brewingFile, arenas },
     runtimeDir: dir,
     whenIdle: async () => true,
     async openSession(consoleSessionId) {
@@ -1324,7 +1326,7 @@ test('config: the stonecutter arena has its own defaults and checks; json.stonec
   assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
-  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing" or "mount"/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography" or "brew"/)
 })
 
 const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
@@ -2444,7 +2446,7 @@ test('anvil options: task, second, enchants, curses and xpLevel; rename has no s
 
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null }
   assert.deepEqual(parseTrainArgs(['anvil', 'task=merge', 'second=same', 'item=bow', 'enchants=1-2', 'curses=1', 'xpLevel=50']),
     { ok: true, arena: 'anvil', item: 'bow', runs: 1, seed: null, portions: null, crafts: null, ...none, task: 'merge', second: 'same', enchants: '1-2', curses: '1', xpLevel: 50 })
   assert.match(parseTrainArgs(['anvil', 'task=repair']).error, /task 只能是 merge \/ rename \/ both/)
@@ -2994,7 +2996,7 @@ test('mount options: group, animal, task, item, total and move; chest-only optio
   const parsed = parseTrainArgs(['mount', 'group=llama', 'animal=minecraft:trader_llama', 'task=unequip', 'total=64', 'move=1-10'])
   assert.deepEqual([parsed.ok, parsed.group, parsed.animal, parsed.task, parsed.total, parsed.move], [true, 'llama', 'minecraft:trader_llama', 'unequip', '64', '1-10'])
   assert.equal(parseTrainArgs(['anvil', 'task=merge']).task, 'merge', 'anvil task values still parse')
-  assert.match(parseTrainArgs(['mount', 'task=ride']).error, /task 只能是 merge \/ rename \/ both（铁砧题）或 equip \/ unequip（坐骑题）/)
+  assert.match(parseTrainArgs(['mount', 'task=ride']).error, /task 只能是 merge \/ rename \/ both（铁砧题）、equip \/ unequip（坐骑题）或 zoom \/ lock \/ clone \/ mix \/ chain（制图台题）/)
   assert.match(parseTrainArgs(['mount', 'group=pig']).error, /group 只能是 horse \/ donkey/)
   const config = normalizeConfig({ logger: null })
   assert.deepEqual(config.training.arenas.mount, { type: 'mount', origin: [10000, 120, 10240], timeoutSec: 600, groups: all, total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] })
@@ -3180,4 +3182,800 @@ test('report: mount records group by group / animal / task and count overshoot, 
   assert.deepEqual(summarize(records, { by: 'task' }).rows.map((r) => [r.key, r.runs]).sort(), [['卸下', 2], ['装上', 2]])
   assert.deepEqual(summarize(records, { by: 'animal' }).rows.map((r) => r.key).sort(), ['donkey', 'horse', 'llama', 'mule'])
   assert.equal(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1, items: [] }]).mounter, false, 'craft records are not mount records')
+})
+
+// ── 织布机训练场（docs/织布机训练场设计方案.md）──────────────────────────────
+
+const loomModule = await import('../src/training/loom.js')
+const LOOM_CATALOG = {
+  banners: [{ id: mc('white_banner'), color: 'white' }, { id: mc('black_banner'), color: 'black' }, { id: mc('red_banner'), color: 'red' }],
+  dyes: [{ id: mc('white_dye'), color: 'white' }, { id: mc('black_dye'), color: 'black' }, { id: mc('red_dye'), color: 'red' }, { id: mc('blue_dye'), color: 'blue' }],
+  patterns: [mc('stripe_bottom'), mc('cross'), mc('border')],
+  patternItems: [{ item: mc('creeper_banner_pattern'), patterns: [mc('creeper')] }]
+}
+const loomTables = (exclude = []) => loomModule.loomTables(LOOM_CATALOG, exclude)
+
+test('loom options: banners, slots, styles, spare (0–3) and itemPatterns; banner= fixes the first base; tables drop excluded ids (§5, L11)', () => {
+  const { loomOptions, parseSpareSpec } = loomModule
+  assert.deepEqual(loomOptions({}, {}), { banners: { lo: 1, hi: 3 }, slots: { lo: 1, hi: 3 }, fill: 'random', styles: { lo: 1, hi: 3 }, spare: { lo: 0, hi: 3 }, itemPatterns: 'off', banner: null })
+  assert.deepEqual(parseSpareSpec('0'), { lo: 0, hi: 0 })
+  assert.throws(() => parseSpareSpec('4'), /spare 要写 k 或 a-b（0–3/)
+  assert.throws(() => loomOptions({ slots: '4' }), /slots 要写 k 或 a-b（1–3/)
+  assert.throws(() => loomOptions({ itemPatterns: 'yes' }), /itemPatterns 只能是 off \/ on/)
+  assert.equal(loomOptions({ banner: 'white_banner' }).banner, mc('white_banner'))
+  const tables = loomTables([mc('red_dye'), mc('border')])
+  assert.deepEqual([tables.colors, tables.patterns, tables.itemPatterns], [['black', 'blue', 'white'], [mc('stripe_bottom'), mc('cross')], [{ item: mc('creeper_banner_pattern'), pattern: mc('creeper') }]])
+  assert.equal(loomTables([mc('creeper_banner_pattern')]).itemPatterns.length, 0)
+  assert.throws(() => loomModule.sampleLoom(loomTables(), 1, loomOptions({ banner: 'cyan_banner' })), /没有素旗 minecraft:cyan_banner/)
+})
+
+test('loom sampler: colors differ from the base, styles distinct per base, spare 0–3 on banners and dyes, stacks within limits, items only when on, reproducible (L3–L6)', () => {
+  const { sampleLoom, loomOptions, goalsOf, givenIds, loomExpect, BANNER_STACK, DYE_STACK } = loomModule
+  const tables = loomTables()
+  let itemStyles = 0
+  let styles = 0
+  for (const itemPatterns of ['off', 'on']) {
+    const options = loomOptions({ itemPatterns })
+    for (let seed = 0; seed < 400; seed++) {
+      const p = sampleLoom(tables, seed, options)
+      assert.equal(new Set(p.banners.map((b) => b.id)).size, p.banners.length)
+      const dyeWant = {}
+      for (const b of p.banners) {
+        const keys = b.styles.map((st) => `${st.pattern}/${st.color}`)
+        assert.equal(new Set(keys).size, keys.length, 'styles distinct per base')
+        assert.ok(b.styles.length >= 1 && b.styles.length <= 3 && b.slots >= 1 && b.slots <= 3)
+        const want = b.styles.reduce((n, st) => n + st.want, 0)
+        assert.ok(b.given - want >= 0 && b.given - want <= 3, 'banner spare 0–3')
+        for (const st of b.styles) {
+          assert.notEqual(st.color, b.color)
+          assert.ok(st.want >= 1 && st.want <= Math.floor(b.scale / b.styles.length))
+          if (itemPatterns === 'off') assert.equal(st.item, null)
+          if (st.item) {
+            itemStyles++
+            assert.equal(st.pattern, mc('creeper'))
+          }
+          if (itemPatterns === 'on') styles++
+          dyeWant[st.color] = (dyeWant[st.color] ?? 0) + st.want
+        }
+      }
+      for (const d of p.dyes) assert.ok(d.given - dyeWant[d.color] >= 0 && d.given - dyeWant[d.color] <= 3, 'dye spare 0–3')
+      assert.deepEqual(p.patternItems, [...new Set(goalsOf(p).map((g) => g.item).filter(Boolean))].sort())
+      const sum = (id) => p.layout.filter((s) => s.id === id).reduce((n, s) => n + s.count, 0)
+      for (const b of p.banners) assert.equal(sum(b.id), b.given)
+      for (const d of p.dyes) assert.equal(sum(d.id), d.given)
+      for (const s of p.layout) assert.ok(s.count <= (s.id.endsWith('_banner') ? BANNER_STACK : s.id.endsWith('_dye') ? DYE_STACK : 1))
+      assert.equal(new Set(p.layout.map((s) => s.slot)).size, p.layout.length)
+      const end = goalsOf(p).reduce((n, g) => n + Math.ceil(g.want / BANNER_STACK), 0)
+      assert.ok(p.layout.length + end <= 36, 'start slots + target stacks fit')
+      assert.deepEqual(loomExpect(p).loom.allowed, givenIds(p))
+    }
+  }
+  assert.ok(itemStyles / styles > 0.25 && itemStyles / styles < 0.42, `about a third use the pattern item (${itemStyles}/${styles})`)
+  const full = sampleLoom(tables, 9, loomOptions({ fill: 'full', banners: '1', slots: '2' }))
+  assert.equal(full.banners[0].scale, 32)
+  assert.deepEqual(sampleLoom(tables, 42, loomOptions({})), sampleLoom(tables, 42, loomOptions({})))
+  assert.equal(sampleLoom(tables, 3, loomOptions({ banner: 'red_banner' })).banners[0].id, mc('red_banner'))
+})
+
+/** 织布机题的固定一道：白旗做 3 面 stripe_bottom/red、2 面 creeper/blue（图案物）；发 6 面白旗、4 份红染料、2 份蓝染料、1 个苦力怕图案物 */
+function fixedLoom() {
+  return {
+    bannerCount: 1, styleCount: 2, fill: 'random', retries: 0,
+    banners: [{ id: mc('white_banner'), color: 'white', slots: 1, scale: 10, given: 6, styles: [
+      { pattern: mc('stripe_bottom'), color: 'red', item: null, want: 3 },
+      { pattern: mc('creeper'), color: 'blue', item: mc('creeper_banner_pattern'), want: 2 }] }],
+    dyes: [{ id: mc('blue_dye'), color: 'blue', given: 2 }, { id: mc('red_dye'), color: 'red', given: 4 }],
+    patternItems: [mc('creeper_banner_pattern')], layout: [], target: `${mc('white_banner')}#${mc('stripe_bottom')}/red`, want: 3
+  }
+}
+
+test('loom judge: exact goals succeed with leftovers; overshoot, misweave (wrong style, two layers, mixed dye), lost (thrown out, dropped, missing pattern item), copied (L8, L10)', () => {
+  const { judgeLoom } = loomModule
+  const p = fixedLoom()
+  const W = mc('white_banner')
+  const red = `${W}#${mc('stripe_bottom')}/red`
+  const blue = `${W}#${mc('creeper')}/blue`
+  const base = { [red]: 3, [blue]: 2, [W]: 1, [mc('red_dye')]: 1, [mc('creeper_banner_pattern')]: 1 }
+  const judge = (held, extra = {}) => judgeLoom({ taskState: 'done', picked: p, final: { held, carried: {}, loomInput: {}, dropped: {}, stationIntact: true, ...extra } })
+  const ok = judge(base)
+  assert.deepEqual([ok.outcome, ok.reached, ok.copied, ok.madeOf], ['success', true, 0, { [red]: 3, [blue]: 2 }])
+  assert.equal(judge({ [red]: 3, [blue]: 2, [mc('red_dye')]: 1, [mc('creeper_banner_pattern')]: 1 }, { loomInput: { [W]: 1 } }).outcome, 'success', 'a plain banner left in the loom input is fine')
+  assert.equal(judge({ [red]: 3, [W]: 1, [mc('red_dye')]: 1, [mc('creeper_banner_pattern')]: 1 }, { loomInput: { [blue]: 2 } }).outcome, 'false_success', 'goals must be in the inventory, not the loom')
+  assert.equal(judge({ ...base, [red]: 4, [W]: 0, [mc('red_dye')]: 0 }).outcome, 'overshoot')
+  const wrong = judge({ ...base, [W]: 0, [`${W}#${mc('cross')}/red`]: 1, [mc('red_dye')]: 0 })
+  assert.deepEqual([wrong.outcome, wrong.extra], ['misweave', { [`${W}#${mc('cross')}/red`]: 1 }])
+  assert.equal(judge({ ...base, [red]: 2, [`${red}+${mc('border')}/red`]: 1, [mc('red_dye')]: 0 }).outcome, 'misweave', 'a second layer is the wrong style')
+  assert.equal(judge({ ...base, [mc('red_dye')]: 0, [mc('purple_dye')]: 2, [mc('blue_dye')]: 0 }).outcome, 'misweave', 'mixed dye is a new item')
+  assert.equal(judge({ ...base, [W]: 0 }).outcome, 'lost', 'a banner thrown out of the arena')
+  assert.equal(judge(base, { dropped: { [mc('red_dye')]: 1 } }).outcome, 'lost')
+  assert.equal(judge({ ...base, [mc('creeper_banner_pattern')]: 0 }).outcome, 'lost', 'the pattern item is gone')
+  assert.equal(judge(base, { stationIntact: false }).outcome, 'lost')
+  // 2×2 复制：用掉的染料比做出的旗少
+  const copied = judge({ ...base, [mc('red_dye')]: 2 })
+  assert.deepEqual([copied.outcome, copied.copied], ['success', 1])
+  assert.equal(judge(base, { carried: { [red]: 1 } }).outcome, 'overshoot')
+  assert.equal(judge({ ...base, [red]: 2 }, { carried: { [red]: 1 } }).outcome, 'false_success', 'a goal on the cursor is not reached')
+  assert.equal(judgeLoom({ taskState: 'done', picked: p, final: { held: base, carried: {}, loomInput: {}, dropped: {} }, timedOut: true }).outcome, 'timeout')
+  assert.equal(judgeLoom({ stopped: true, picked: p, final: null }).outcome, 'aborted')
+})
+
+/**
+ * 织布机题的假世界：arena/loom-catalog 回 LOOM_CATALOG；prepare 按参数发物品；任务结束时按 finalOf(params, world) 改状态
+ * （缺省：每个目标恰好做出，染料每面用 1 份，剩下的素旗、染料留在物品栏）。
+ */
+function loomHarness({ finalOf = null, aimOk = true } = {}) {
+  const world = { params: null, state: {} }
+  const defaultFinal = (params) => {
+    const held = {}
+    for (const g of params.items) held[g.id] = (held[g.id] ?? 0) + g.count
+    for (const goal of params.expect.loom.goals) {
+      held[`${goal.banner}#${goal.pattern}/${goal.color}`] = goal.count
+      held[goal.banner] -= goal.count
+      held[mc(`${goal.color}_dye`)] -= goal.count
+    }
+    return { held: Object.fromEntries(Object.entries(held).filter(([, n]) => n > 0)) }
+  }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params, world))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: { loom: { type: 'loom', origin: [0, 100, 270], timeoutSec: 900, banners: '1-3', slots: '1-3', fill: 'random', styles: '1-3', spare: '0-3', itemPatterns: 'off', exclude: [] } },
+    onCall: (method) => (method === 'arena/loom-catalog' ? { ok: true, data: LOOM_CATALOG } : null),
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: {}, carried: {}, loomInput: {}, dropped: {}, containerOpen: false, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk, station: 'loom' }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('loom run: the catalog is read once, prepare carries the goals, the text names bases, patterns and colors only; making them succeeds', async () => {
+  const h = loomHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'loom', runs: 4, seed: 5, itemPatterns: 'on' })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /banners=1-3，slots=1-3，fill=random，styles=1-3，spare=0-3，itemPatterns=on/)
+  await h.done()
+  const records = h.records('loom')
+  assert.equal(records.length, 4)
+  assert.equal(h.calls.filter(([m]) => m === 'arena/loom-catalog').length, 1)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.equal(record.copied, 0)
+    const prepare = prepares[i]
+    assert.deepEqual([prepare.station, prepare.items], ['loom', record.layout])
+    assert.deepEqual(prepare.expect.loom.goals, record.banners.flatMap((b) => b.styles.map((st) => ({ banner: b.id, pattern: st.pattern, color: st.color, count: st.want }))))
+    for (const b of record.banners) for (const st of b.styles) assert.equal(st.made, st.want)
+    for (const d of record.dyes) assert.equal(d.used, record.banners.flatMap((b) => b.styles).filter((st) => st.color === d.color).reduce((n, st) => n + st.want, 0))
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你正前方有一台织布机，视角已经对准它。你的物品栏里有这些旗帜：${record.banners.map((b) => b.id).join('、')}。\n请做出：用 `), text)
+    for (const b of record.banners) for (const st of b.styles) assert.ok(text.includes(`${st.want} 面加了 ${st.color} 色 ${st.pattern} 图案的`), text)
+    assert.doesNotMatch(text, /dye|染料|图案物|按钮|右键|Shift|复制/, 'name the goal, not the materials or the moves')
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/4 轮：会话 run-1，\w+_banner 做 \d+ 面 /)
+})
+
+test('loom run: overshoot and option conflicts; a crosshair off the loom stops the run', async () => {
+  const over = loomHarness({
+    finalOf: (params) => {
+      const [goal] = params.expect.loom.goals
+      // 多做一面：素旗少一面，旗帜总数不变（不算丢失）
+      const held = {}
+      for (const g of params.items) held[g.id] = (held[g.id] ?? 0) + g.count
+      held[goal.banner] -= goal.count + 1
+      held[mc(`${goal.color}_dye`)] -= goal.count + 1
+      held[`${goal.banner}#${goal.pattern}/${goal.color}`] = goal.count + 1
+      return { held }
+    }
+  })
+  assert.equal(over.trainer.start({ sessionId: 'console', arena: 'loom', banners: '1', styles: '1', spare: '3', seed: 2 }).ok, true)
+  await over.done()
+  assert.equal(over.records('loom')[0].outcome, 'overshoot')
+
+  const h = loomHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'loom', item: 'white_banner' }).error, /织布机场地用 banner= 固定第一种底色/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'loom', bypass: 'keep' }).error, /不认这些选项：bypass/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'loom', slots: '5' }).error, /slots 要写 k 或 a-b（1–3/)
+  const off = loomHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'loom' }).ok, true)
+  await off.done()
+  assert.match(off.records('loom')[0].error, /crosshair is not on the loom/)
+})
+
+test('report: loom records group by styles / banners / pattern / color / item and count overshoot, misweave and copied runs', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const st = (pattern, color, item = null) => ({ pattern: mc(pattern), color, item, want: 1, made: 1 })
+  const rec = (banners, outcome, extra = {}) => ({
+    batch: 'b1', target: 'x', banners, bannerCount: banners.length, styleCount: banners.reduce((n, b) => n + b.styles.length, 0), patternItems: [],
+    outcome, copied: 0, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true, ...extra
+  })
+  const records = [
+    rec([{ id: mc('white_banner'), styles: [st('cross', 'red')] }], 'success'),
+    rec([{ id: mc('white_banner'), styles: [st('cross', 'red'), st('border', 'blue')] }], 'misweave', { copied: 2 }),
+    rec([{ id: mc('black_banner'), styles: [st('creeper', 'red', mc('creeper_banner_pattern'))] }], 'overshoot', { patternItems: [mc('creeper_banner_pattern')] })
+  ]
+  const byStyles = summarize(records, { by: 'styles' })
+  assert.equal(byStyles.loomer, true)
+  assert.deepEqual(byStyles.rows.map((r) => [r.key, r.runs]), [['1 种样式', 2], ['2 种样式', 1]])
+  assert.deepEqual([byStyles.total.overshoot, byStyles.total.misweave, byStyles.total.copiedRuns], [1, 1, 1])
+  assert.match(formatSummary(byStyles).split('\n')[0], /^样式数\t轮数\t成功率\t虚报\t失败\t超时\t中止\t多做\t做错\t丢失\t复制\t打开织布机中位/)
+  assert.deepEqual(summarize(records, { by: 'banners' }).rows.map((r) => [r.key, r.runs]), [['1 种底色', 3]])
+  assert.deepEqual(summarize(records, { by: 'pattern' }).rows.map((r) => r.key).sort(), ['border+cross', 'creeper', 'cross'])
+  assert.deepEqual(summarize(records, { by: 'color' }).rows.map((r) => [r.key, r.runs]).sort(), [['blue+red', 1], ['red', 2]])
+  assert.deepEqual(summarize(records, { by: 'item' }).rows.map((r) => [r.key, r.runs]).sort(), [['不用图案物', 2], ['用图案物', 1]])
+  assert.equal(summarize([{ target: 'x', outcome: 'success', materials: [], materialCount: 1, targetCount: 1 }]).loomer, false, 'stonecutter records are not loom records')
+})
+
+// ── 制图台训练场（docs/制图台训练场设计方案.md）──────────────────────────────
+
+const cartoModule = await import('../src/training/cartography.js')
+
+/** K5 的逐级做法：从 s₀ 开始，每一级先复制出要留下的、要锁的、要继续放大的，再锁一张、复制出其余锁定的，最后放大一张。返回用量和做出的地图 */
+function simulatePlan(start, goals) {
+  const want = (scale, locked) => goals.find((g) => g.scale === scale && g.locked === locked)?.want ?? 0
+  const maxScale = Math.max(...goals.map((g) => g.scale))
+  const used = { paper: 0, glass: 0, empty: 0 }
+  const made = []
+  for (let s = start; s <= maxScale; s++) {
+    const u = want(s, false)
+    const l = want(s, true)
+    const carry = s < maxScale ? 1 : 0
+    const copies = u + (l > 0 ? 1 : 0) + carry
+    assert.ok(copies >= 1, `level ${s} has a map to work on`)
+    used.empty += copies - 1
+    for (let i = 0; i < u; i++) made.push({ scale: s, locked: false })
+    if (l > 0) {
+      used.glass++
+      used.empty += l - 1
+      for (let i = 0; i < l; i++) made.push({ scale: s, locked: true })
+    }
+    if (carry) {
+      assert.ok(s < 4, 'zoom stays within scale 4')
+      used.paper++
+    }
+  }
+  return { used, goals: cartoModule.goalsFrom(made) }
+}
+
+test('cartography options: task (mix by default), scale 0–3, maps 1–3, copies 2–5, ops 1–4 only for chain, spare 0–3 (§5, K3–K5)', () => {
+  const { cartographyOptions, parseOpsSpec, parseMapScaleSpec, parseMapsSpec, parseCopiesSpec } = cartoModule
+  assert.deepEqual(cartographyOptions({}, {}), { task: 'mix', scale: { lo: 0, hi: 3 }, maps: { lo: 1, hi: 3 }, copies: { lo: 2, hi: 5 }, ops: { lo: 1, hi: 4 }, spare: { lo: 0, hi: 3 } })
+  assert.equal(cartographyOptions({ task: 'zoom' }, { task: 'mix' }).task, 'zoom')
+  assert.throws(() => cartographyOptions({ task: 'repair' }), /task 只能是 zoom \/ lock \/ clone \/ mix \/ chain/)
+  assert.throws(() => cartographyOptions({ ops: '2' }), /ops 只用于 task=chain/)
+  assert.throws(() => cartographyOptions({ task: 'chain', maps: '2' }), /maps \/ copies 不用于 task=chain/)
+  assert.deepEqual(cartographyOptions({ task: 'chain', ops: '2' }).ops, { lo: 2, hi: 2 })
+  assert.throws(() => parseOpsSpec('5'), /ops 要写 k 或 a-b（1–4/)
+  assert.throws(() => parseMapScaleSpec('4'), /scale 要写 k 或 a-b（0–3/)
+  assert.throws(() => parseMapsSpec('4'), /maps 要写 k 或 a-b（1–3/)
+  assert.throws(() => parseCopiesSpec('1'), /copies 要写 k 或 a-b（2–5/)
+  assert.deepEqual(parseCopiesSpec('3-5'), { lo: 3, hi: 5 })
+})
+
+test('cartography single tasks: mix draws the three evenly, never chain; zoom / lock work on part of a stack, clone makes 2–5; only the one material, plan + spare (K3, K4)', () => {
+  const { sampleCartography, cartographyOptions, cartographyExpect, givenIds, mapKey, FILLED_MAP, PAPER, GLASS_PANE, EMPTY_MAP } = cartoModule
+  const tally = { zoom: 0, lock: 0, clone: 0 }
+  const options = cartographyOptions({})
+  for (let seed = 0; seed < 3000; seed++) {
+    const p = sampleCartography(seed, options)
+    assert.ok(p.task in tally, p.task)
+    tally[p.task]++
+    assert.ok(p.start >= 0 && p.start <= 3)
+    assert.equal(p.ops, undefined, 'only chain records the steps')
+    const total = p.goals.reduce((n, g) => n + g.want, 0)
+    const at = (scale, locked) => p.goals.find((g) => g.scale === scale && g.locked === locked)?.want ?? 0
+    if (p.task === 'zoom') {
+      assert.ok(p.count >= 1 && p.count <= 3)
+      assert.equal(total, p.count)
+      const [up] = p.goals.filter((g) => g.scale > p.start)
+      assert.ok(up && !up.locked && up.scale <= 4 && up.want >= 1 && up.want <= p.count)
+      assert.equal(at(p.start, false), p.count - up.want)
+      assert.deepEqual(p.plan, { paper: up.want * (up.scale - p.start), glass: 0, empty: 0 })
+      assert.equal(p.target, mapKey(up.scale, false))
+    } else if (p.task === 'lock') {
+      assert.ok(p.count >= 1 && p.count <= 3)
+      assert.equal(total, p.count)
+      const m = at(p.start, true)
+      assert.ok(m >= 1 && m <= p.count)
+      assert.equal(at(p.start, false), p.count - m)
+      assert.deepEqual(p.plan, { paper: 0, glass: m, empty: 0 })
+      assert.equal(p.target, mapKey(p.start, true))
+    } else {
+      assert.equal(p.count, 1)
+      assert.deepEqual(p.goals.map((g) => [g.scale, g.locked]), [[p.start, false]])
+      assert.ok(total >= 2 && total <= 5)
+      assert.deepEqual(p.plan, { paper: 0, glass: 0, empty: total - 1 })
+    }
+    for (const k of ['paper', 'glass', 'empty']) {
+      if (p.plan[k] === 0) assert.equal(p.given[k], 0, `${k} is not given when unused`)
+      else assert.ok(p.given[k] - p.plan[k] >= 0 && p.given[k] - p.plan[k] <= 3, `${k} spare 0–3`)
+    }
+    const source = p.layout.filter((s) => s.id === FILLED_MAP)
+    assert.deepEqual(source.map((s) => [s.count, s.map]), [[p.count, { scale: p.start }]], 'one stack of same maps')
+    const sum = (id) => p.layout.filter((s) => s.id === id).reduce((n, s) => n + s.count, 0)
+    assert.deepEqual([sum(PAPER), sum(GLASS_PANE), sum(EMPTY_MAP)], [p.given.paper, p.given.glass, p.given.empty])
+    assert.equal(p.layout.length, 2, 'the stack and one material')
+    assert.equal(new Set(p.layout.map((s) => s.slot)).size, 2)
+    assert.deepEqual(cartographyExpect(p).cartography.allowed, givenIds(p))
+  }
+  for (const n of Object.values(tally)) assert.ok(n > 900 && n < 1100, JSON.stringify(tally))
+  assert.equal(sampleCartography(1, cartographyOptions({ task: 'lock', maps: '3' })).count, 3)
+  assert.deepEqual(sampleCartography(42, options), sampleCartography(42, options))
+})
+
+test('cartography chain: legal steps, at most 5 maps, minimal plan works, given = plan + spare only for used materials, reproducible (K5)', () => {
+  const { sampleCartography, cartographyOptions, minimalPlan, kindsOf } = cartoModule
+  const options = cartographyOptions({ task: 'chain' })
+  const seenKinds = new Set()
+  for (let seed = 0; seed < 3000; seed++) {
+    const p = sampleCartography(seed, options)
+    assert.equal(p.task, 'chain')
+    assert.equal(p.count, 1)
+    assert.ok(p.opCount >= 1 && p.opCount <= 4)
+    const maps = [{ scale: p.start, locked: false }]
+    for (const { op, from } of p.ops) {
+      const i = maps.findIndex((m) => m.scale === from.scale && m.locked === from.locked)
+      assert.ok(i >= 0, 'the step starts from an existing map')
+      if (op === 'zoom') {
+        assert.ok(!from.locked && from.scale < 4)
+        maps[i] = { scale: from.scale + 1, locked: false }
+      } else if (op === 'lock') {
+        assert.ok(!from.locked)
+        maps[i] = { scale: from.scale, locked: true }
+      } else maps.push({ ...from })
+    }
+    assert.deepEqual(p.goals, cartoModule.goalsFrom(maps))
+    assert.ok(p.goals.reduce((n, g) => n + g.want, 0) <= 5)
+    assert.deepEqual(p.plan, minimalPlan(p.start, p.goals))
+    const sim = simulatePlan(p.start, p.goals)
+    assert.deepEqual(sim.used, p.plan)
+    assert.deepEqual(sim.goals, p.goals)
+    for (const k of ['paper', 'glass', 'empty']) {
+      if (p.plan[k] === 0) assert.equal(p.given[k], 0)
+      else assert.ok(p.given[k] - p.plan[k] >= 0 && p.given[k] - p.plan[k] <= 3)
+    }
+    assert.equal(p.kinds, kindsOf(p.start, p.goals))
+    seenKinds.add(p.kinds)
+  }
+  assert.deepEqual([...seenKinds].sort(), ['clone', 'lock', 'lock+clone', 'zoom', 'zoom+clone', 'zoom+lock', 'zoom+lock+clone'])
+  assert.deepEqual(sampleCartography(42, options), sampleCartography(42, options))
+  assert.deepEqual(minimalPlan(0, [{ scale: 1, locked: false, want: 2 }]), { paper: 1, glass: 0, empty: 1 })
+  assert.deepEqual(cartoModule.planFor('zoom', 0, [{ scale: 1, locked: false, want: 2 }]), { paper: 2, glass: 0, empty: 0 }, 'a zoom task has no empty maps to share the zoom')
+})
+
+test('cartography judge (chain): exact goals succeed with leftovers; unfinished, overshoot, mismap (foreign, dead end, new item), lost (conservation, dropped, station), copied (K8, K10)', () => {
+  const { judgeCartography } = cartoModule
+  // 0 级开局 1 张，要 1 张 0 级锁定、2 张 1 级未锁定；发 2 纸（余 1）、1 玻璃板、2 空地图
+  const p = {
+    task: 'chain', start: 0, count: 1, goals: [{ scale: 0, locked: true, want: 1 }, { scale: 1, locked: false, want: 2 }],
+    plan: { paper: 1, glass: 1, empty: 2 }, given: { paper: 2, glass: 1, empty: 2 }, layout: []
+  }
+  const M = mc('filled_map')
+  const L0 = `${M}#scale=0,locked`
+  const S0 = `${M}#scale=0`
+  const S1 = `${M}#scale=1`
+  const base = { [L0]: 1, [S1]: 2, [mc('paper')]: 1 }
+  const judge = (held, extra = {}) => judgeCartography({ taskState: 'done', picked: p, final: { held, carried: {}, tableInput: {}, dropped: {}, stationIntact: true, craftedDelta: { [M]: 0 }, ...extra } })
+  const ok = judge(base)
+  assert.deepEqual([ok.outcome, ok.reached, ok.copied, ok.madeOf, ok.extra, ok.unfinished], ['success', true, 0, { [L0]: 1, [S1]: 2 }, {}, {}])
+  assert.equal(judge({ [L0]: 1, [S1]: 2 }, { tableInput: { [mc('paper')]: 1 } }).outcome, 'success', 'leftover paper in the table input is fine')
+  assert.equal(judge({ [L0]: 1, [S1]: 1 }, { tableInput: { [S1]: 1, [mc('paper')]: 1 } }).outcome, 'false_success', 'goals must be in the inventory, not the table')
+  const half = judge({ [L0]: 1, [S1]: 1, [S0]: 1, [mc('paper')]: 2 })
+  assert.deepEqual([half.outcome, half.unfinished, half.extra], ['false_success', { [S0]: 1 }, {}])
+  assert.equal(judge({ [S1]: 3, [mc('glass_pane')]: 1 }).outcome, 'overshoot')
+  assert.equal(judge({ [L0]: 1, [S1]: 2, [S0]: 1, [mc('paper')]: 1 }).outcome, 'overshoot', 'one clone too many')
+  const dead = judge({ [L0]: 1, [S1]: 1, [`${M}#scale=1,locked`]: 1 })
+  assert.deepEqual([dead.outcome, dead.extra], ['mismap', { [`${M}#scale=1,locked`]: 1 }])
+  assert.equal(judge({ [L0]: 1, [S1]: 1, [`${M}#scale=2`]: 1 }).outcome, 'mismap', 'zoomed past every goal')
+  const foreign = judge({ [L0]: 1, [S1]: 1, [`${M}#foreign`]: 1, [mc('paper')]: 2 })
+  assert.deepEqual([foreign.outcome, foreign.extra], ['mismap', { [`${M}#foreign`]: 1 }])
+  assert.equal(judge({ ...base, [mc('stick')]: 1 }).outcome, 'mismap')
+  assert.equal(judge({ [L0]: 1, [S1]: 1, [mc('paper')]: 1 }).outcome, 'lost')
+  assert.equal(judge({ [L0]: 1, [S1]: 1, [mc('map')]: 1, [mc('paper')]: 1 }).outcome, 'false_success', 'an unused empty map keeps the count')
+  assert.equal(judge(base, { dropped: { [mc('paper')]: 1 } }).outcome, 'lost')
+  assert.equal(judge(base, { stationIntact: false }).outcome, 'lost')
+  assert.deepEqual([judge(base, { craftedDelta: { [M]: 2 } }).outcome, judge(base, { craftedDelta: { [M]: 2 } }).copied], ['success', 2])
+  assert.equal(judge({ [L0]: 1, [S1]: 1, [mc('paper')]: 1 }, { carried: { [S1]: 1 } }).outcome, 'false_success', 'a goal on the cursor is not reached')
+  assert.equal(judgeCartography({ taskState: 'done', picked: p, final: { held: base, carried: {}, tableInput: {}, dropped: {} }, timedOut: true }).outcome, 'timeout')
+  assert.equal(judgeCartography({ stopped: true, picked: p, final: null }).outcome, 'aborted')
+})
+
+test('cartography judge (single tasks): a whole stack done with Shift overshoots, zooming past the goal is mismap, a right-clicked map is mismap, conservation counts the start stack (K8)', () => {
+  const { judgeCartography } = cartoModule
+  const M = mc('filled_map')
+  const judge = (picked, held, extra = {}) => judgeCartography({ taskState: 'done', picked, final: { held, carried: {}, tableInput: {}, dropped: {}, stationIntact: true, craftedDelta: { [M]: 0 }, ...extra } })
+  // 锁定：3 张 1 级，锁 2 张；发 3 块玻璃板（余 1）
+  const lock = { task: 'lock', start: 1, count: 3, goals: [{ scale: 1, locked: false, want: 1 }, { scale: 1, locked: true, want: 2 }], plan: { paper: 0, glass: 2, empty: 0 }, given: { paper: 0, glass: 3, empty: 0 } }
+  assert.equal(judge(lock, { [`${M}#scale=1`]: 1, [`${M}#scale=1,locked`]: 2, [mc('glass_pane')]: 1 }).outcome, 'success')
+  assert.equal(judge(lock, { [`${M}#scale=1,locked`]: 3 }).outcome, 'overshoot', 'Shift locked the whole stack')
+  assert.equal(judge(lock, { [`${M}#scale=1`]: 2 }).outcome, 'lost', 'three maps were given')
+  // 放大：2 张 0 级，1 张放大到 2 级；发 3 张纸（余 1）
+  const zoom = { task: 'zoom', start: 0, count: 2, goals: [{ scale: 0, locked: false, want: 1 }, { scale: 2, locked: false, want: 1 }], plan: { paper: 2, glass: 0, empty: 0 }, given: { paper: 3, glass: 0, empty: 0 } }
+  assert.equal(judge(zoom, { [`${M}#scale=0`]: 1, [`${M}#scale=2`]: 1, [mc('paper')]: 1 }).outcome, 'success')
+  const half = judge(zoom, { [`${M}#scale=0`]: 1, [`${M}#scale=1`]: 1, [mc('paper')]: 2 })
+  assert.deepEqual([half.outcome, half.unfinished], ['false_success', { [`${M}#scale=1`]: 1 }], 'one level short is unfinished')
+  assert.equal(judge(zoom, { [`${M}#scale=0`]: 1, [`${M}#scale=3`]: 1 }).outcome, 'mismap', 'zoomed past the goal')
+  assert.equal(judge(zoom, { [`${M}#scale=1`]: 2, [mc('paper')]: 1 }).outcome, 'false_success', 'both zoomed once: still reachable')
+  assert.equal(judge(zoom, { [`${M}#scale=2`]: 2 }).outcome, 'overshoot', 'Shift zoomed both')
+  // 复制：1 张 0 级做到 3 张；发 3 张空地图（余 1）
+  const clone = { task: 'clone', start: 0, count: 1, goals: [{ scale: 0, locked: false, want: 3 }], plan: { paper: 0, glass: 0, empty: 2 }, given: { paper: 0, glass: 0, empty: 3 } }
+  assert.equal(judge(clone, { [`${M}#scale=0`]: 3, [mc('map')]: 1 }).outcome, 'success')
+  assert.equal(judge(clone, { [`${M}#scale=0`]: 4 }).outcome, 'overshoot')
+  const right = judge(clone, { [`${M}#scale=0`]: 3, [`${M}#foreign`]: 1 })
+  assert.deepEqual([right.outcome, right.extra], ['mismap', { [`${M}#foreign`]: 1 }])
+})
+
+/**
+ * 制图台题的假世界：prepare 按参数发物品、回开局地图；任务结束时按 finalOf(params, world) 改状态
+ * （缺省：每个目标恰好做出，辅料按最省用量用掉，余量留在物品栏）。题型从目标推：有锁定 → lock；总张数多于开局 → clone；否则 zoom。
+ */
+function cartographyHarness({ finalOf = null, aimOk = true, noMap = false } = {}) {
+  const world = { params: null, state: {} }
+  const defaultFinal = (params) => {
+    const held = {}
+    for (const g of params.items) if (g.id !== mc('filled_map')) held[g.id] = (held[g.id] ?? 0) + g.count
+    const goals = params.expect.cartography.goals.map((g) => ({ scale: g.scale, locked: g.locked, want: g.count }))
+    const source = params.items.find((g) => g.map)
+    const total = goals.reduce((n, g) => n + g.want, 0)
+    const task = goals.some((g) => g.locked) ? 'lock' : total > source.count ? 'clone' : 'zoom'
+    const plan = cartoModule.planFor(task, source.map.scale, goals)
+    held[mc('paper')] = (held[mc('paper')] ?? 0) - plan.paper
+    held[mc('glass_pane')] = (held[mc('glass_pane')] ?? 0) - plan.glass
+    held[mc('map')] = (held[mc('map')] ?? 0) - plan.empty
+    for (const g of goals) held[cartoModule.mapKey(g.scale, g.locked)] = g.want
+    return { held: Object.fromEntries(Object.entries(held).filter(([, n]) => n > 0)) }
+  }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params, world))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: { cartography: { type: 'cartography', origin: [0, 100, 300], timeoutSec: 600, task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] } },
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: {}, carried: {}, tableInput: {}, dropped: {}, containerOpen: false, stationIntact: true, openedAtMs: null, reachedAtMs: null, craftedDelta: { [mc('filled_map')]: 0 } }
+      const start = params.items.find((g) => g.map)?.map.scale
+      return { aimOk, station: 'cartography', ...(noMap ? {} : { map: { id: 7, scale: start, center: [8256, 300] } }) }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('cartography run: prepare carries the source stack, goals and watch; the text names states only; making them succeeds', async () => {
+  const h = cartographyHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'cartography', runs: 6, seed: 5 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /task=mix，scale=0-3，maps=1-3，copies=2-5，spare=0-3/)
+  await h.done()
+  const records = h.records('cartography')
+  assert.equal(records.length, 6)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.ok(['zoom', 'lock', 'clone'].includes(record.task))
+    assert.equal(record.copied, 0)
+    assert.equal(record.ops, undefined)
+    assert.deepEqual(record.source, { scale: record.source.scale, count: record.source.count, mapId: 7, center: [8256, 300] })
+    const prepare = prepares[i]
+    assert.deepEqual([prepare.station, prepare.items, prepare.watch], ['cartography', record.layout, [mc('filled_map')]])
+    assert.equal(prepare.items.find((g) => g.map).count, record.source.count)
+    assert.deepEqual(prepare.expect.cartography.goals, record.goals.map((g) => ({ scale: g.scale, locked: g.locked, count: g.want })))
+    for (const g of record.goals) assert.equal(g.made, g.want)
+    assert.deepEqual(record.used, record.plan)
+    const text = h.instructions[i]
+    const maps = record.source.count === 1 ? '一张地图' : `${record.source.count} 张相同的地图`
+    const it = record.source.count === 1 ? '它' : '它们'
+    assert.ok(text.startsWith(`你正前方有一台制图台，视角已经对准它。你的物品栏里有${maps}（缩放等级 ${record.source.scale}，未锁定）。\n请把${it}做成：`), text)
+    for (const g of record.goals) assert.ok(text.includes(`${g.want} 张缩放等级 ${g.scale}、${g.locked ? '已锁定' : '未锁定'}的地图`), text)
+    assert.doesNotMatch(text, /纸|玻璃|空地图|paper|glass|右键|Shift|复制|放大|锁定后/, 'name the goal, not the materials or the moves')
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/6 轮：会话 run-1，(放大|锁定|复制) \d×s\d → /)
+  // chain 题照旧
+  const c = cartographyHarness()
+  assert.equal(c.trainer.start({ sessionId: 'console', arena: 'cartography', task: 'chain', ops: '2', seed: 3 }).ok, true)
+  await c.done()
+  const [chain] = c.records('cartography')
+  assert.deepEqual([chain.task, chain.opCount, chain.outcome], ['chain', 2, 'success'])
+})
+
+test('cartography run: overshoot and option conflicts; a crosshair off the table or a missing source map stops the run', async () => {
+  const over = cartographyHarness({
+    finalOf: (params) => {
+      const goals = params.expect.cartography.goals
+      const top = goals[goals.length - 1]
+      return { held: { [cartoModule.mapKey(top.scale, top.locked)]: goals.reduce((n, g) => n + g.count, 0) + 1 } }
+    }
+  })
+  assert.equal(over.trainer.start({ sessionId: 'console', arena: 'cartography', task: 'clone', seed: 2 }).ok, true)
+  await over.done()
+  assert.equal(over.records('cartography')[0].outcome, 'overshoot')
+
+  const h = cartographyHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'cartography', banners: '1' }).error, /不认这些选项：banners/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'cartography', ops: '2' }).error, /ops 只用于 task=chain/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'cartography', task: 'chain', copies: '3' }).error, /maps \/ copies 不用于 task=chain/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'cartography', task: 'equip' }).error, /task 只能是 zoom \/ lock \/ clone \/ mix \/ chain/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'cartography', scale: '4' }).error, /scale 要写 k 或 a-b（0–3/)
+  const off = cartographyHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'cartography' }).ok, true)
+  await off.done()
+  assert.match(off.records('cartography')[0].error, /crosshair is not on the cartography table/)
+  const noMap = cartographyHarness({ noMap: true })
+  assert.equal(noMap.trainer.start({ sessionId: 'console', arena: 'cartography' }).ok, true)
+  await noMap.done()
+  assert.match(noMap.records('cartography')[0].error, /no source map/)
+})
+
+test('report: cartography records group by task / scale / spare / ops and count overshoot, mismap and copied runs', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (task, scale, outcome, extra = {}) => ({
+    batch: 'b1', target: 'x', task, source: { scale, count: 1, mapId: 1, center: [0, 0] }, goals: [],
+    plan: { paper: 1, glass: 0, empty: 0 }, given: { paper: 2, glass: 0, empty: 0 },
+    outcome, copied: 0, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true, ...extra
+  })
+  const records = [
+    rec('zoom', 0, 'success'),
+    rec('zoom', 1, 'mismap'),
+    rec('clone', 0, 'overshoot', { copied: 2, plan: { paper: 0, glass: 0, empty: 2 }, given: { paper: 0, glass: 0, empty: 2 } }),
+    rec('chain', 0, 'success', { opCount: 3, plan: { paper: 1, glass: 1, empty: 1 }, given: { paper: 1, glass: 2, empty: 1 } })
+  ]
+  const byTask = summarize(records, { by: 'task' })
+  assert.equal(byTask.charter, true)
+  assert.deepEqual(byTask.rows.map((r) => [r.key, r.runs]), [['放大', 2], ['复制', 1], ['连续操作', 1]])
+  assert.deepEqual([byTask.total.overshoot, byTask.total.mismap, byTask.total.copiedRuns], [1, 1, 1])
+  assert.match(formatSummary(byTask).split('\n')[0], /^题型\t轮数\t成功率\t虚报\t失败\t超时\t中止\t多做\t做错\t丢失\t复制\t打开制图台中位/)
+  assert.deepEqual(summarize(records, { by: 'ops' }).rows.map((r) => [r.key, r.runs]).sort(), [['3 步', 1], ['（未记录）', 3]])
+  assert.deepEqual(summarize(records, { by: 'scale' }).rows.map((r) => [r.key, r.runs]), [['开局 0 级', 3], ['开局 1 级', 1]])
+  assert.deepEqual(summarize(records, { by: 'spare' }).rows.map((r) => [r.key, r.runs]).sort(), [['余量 空图0', 1], ['余量 纸0/玻璃1/空图0', 1], ['余量 纸1', 2]])
+  assert.equal(summarize([{ target: 'x', outcome: 'success', banners: [], copied: 0 }]).charter, false, 'loom records are not cartography records')
+})
+
+// ── 酿造台训练场（docs/酿造台训练场设计方案.md）──────────────────────────────
+
+const brewModule = await import('../src/training/brew.js')
+const T400 = { time: 400 }
+const BREWING = {
+  fuel: [{ id: mc('blaze_powder'), charges: 20 }],
+  containers: [{ id: mc('potion') }, { id: mc('splash_potion') }, { id: mc('lingering_potion') }],
+  potionMixes: [
+    { from: mc('water'), ingredient: mc('nether_wart'), to: mc('awkward'), ...T400 },
+    { from: mc('water'), ingredient: mc('redstone'), to: mc('mundane'), ...T400 },
+    { from: mc('awkward'), ingredient: mc('golden_carrot'), to: mc('night_vision'), ...T400 },
+    { from: mc('night_vision'), ingredient: mc('redstone'), to: mc('long_night_vision'), ...T400 },
+    { from: mc('awkward'), ingredient: mc('blaze_powder'), to: mc('strength'), ...T400 },
+    { from: mc('awkward'), ingredient: mc('turtle_helmet'), to: mc('turtle_master'), ...T400 }
+  ],
+  containerMixes: [
+    { from: mc('potion'), ingredient: mc('gunpowder'), to: mc('splash_potion'), ...T400 },
+    { from: mc('splash_potion'), ingredient: mc('dragon_breath'), to: mc('lingering_potion'), ...T400 }
+  ]
+}
+const BREW_PROPS = Object.fromEntries(['blaze_powder', 'nether_wart', 'redstone', 'golden_carrot', 'turtle_helmet', 'gunpowder', 'dragon_breath', 'glass_bottle']
+  .map((id) => [mc(id), { maxStack: id === 'turtle_helmet' ? 1 : 64, ...(id === 'dragon_breath' ? { remainder: mc('glass_bottle') } : {}) }]))
+
+test('brew options and tables: fuel / raw 1–64, bottles 1–3, n / m default 1-32; blaze powder as an ingredient is excluded; potion mixes × 3 bottles, container mixes × potions (P3, P4)', () => {
+  const { brewOptions, brewTables, parseBottlesSpec } = brewModule
+  assert.deepEqual(brewOptions({}, {}), { fuel: { lo: 32, hi: 64 }, raw: { lo: 32, hi: 64 }, bottles: { lo: 1, hi: 3 }, m: { lo: 1, hi: 32 }, n: { lo: 1, hi: 32 }, input: null })
+  assert.deepEqual(brewOptions({ portions: '5', crafts: '2', input: 'redstone' }, { fuel: '10' }), { fuel: { lo: 10, hi: 10 }, raw: { lo: 32, hi: 64 }, bottles: { lo: 1, hi: 3 }, m: { lo: 2, hi: 2 }, n: { lo: 5, hi: 5 }, input: mc('redstone') })
+  assert.throws(() => parseBottlesSpec('4'), /bottles 要写 k 或 a-b（1–3/)
+  assert.throws(() => brewOptions({ fuel: '65' }), /fuel 要写 k 或 a-b（1–64/)
+  const tables = brewTables(BREWING, BREW_PROPS)
+  assert.deepEqual(tables.ingredients, [mc('dragon_breath'), mc('golden_carrot'), mc('gunpowder'), mc('nether_wart'), mc('redstone'), mc('turtle_helmet')])
+  assert.equal(tables.fuel, mc('blaze_powder'))
+  assert.equal(tables.byIngredient.get(mc('redstone')).length, 6, 'two mixes × three bottles')
+  // 换瓶子配方 × 配方表里出现过的药水（water、mundane、awkward、night_vision、long_night_vision、strength、turtle_master）
+  assert.equal(tables.byIngredient.get(mc('gunpowder')).length, 7)
+  assert.deepEqual(tables.byIngredient.get(mc('gunpowder')).find((r) => r.from === mc('awkward')), { kind: 'container', bottle: mc('potion'), from: mc('awkward'), ingredient: mc('gunpowder'), to: mc('awkward'), input: `${mc('potion')}#${mc('awkward')}`, product: `${mc('splash_potion')}#${mc('awkward')}` })
+  assert.equal(tables.stacks.get(mc('turtle_helmet')), 1)
+  assert.equal(tables.remainders.get(mc('dragon_breath')), mc('glass_bottle'))
+  const fewer = brewTables(BREWING, BREW_PROPS, { exclude: [mc('lingering_potion'), 'redstone'] })
+  assert.ok(!fewer.ingredients.includes(mc('redstone')))
+  assert.equal(fewer.byIngredient.get(mc('nether_wart')).length, 2, 'lingering bottles excluded')
+  assert.throws(() => brewTables(BREWING, {}), /item-props\.json 里没有/)
+})
+
+test('brew sampler: ingredients drawn evenly (never blaze powder), turtle helmet only 1, m ≤ F, n ≤ R, p ≤ b, one stack each and one slot per bottle, reproducible (P3, P4)', () => {
+  const { brewTables, brewOptions, sampleBrew, brewExpect } = brewModule
+  const tables = brewTables(BREWING, BREW_PROPS)
+  const options = brewOptions({})
+  const tally = {}
+  for (let seed = 0; seed < 3000; seed++) {
+    const p = sampleBrew(tables, seed, options)
+    tally[p.ingredient.id] = (tally[p.ingredient.id] ?? 0) + 1
+    assert.notEqual(p.ingredient.id, mc('blaze_powder'))
+    assert.ok(p.fuel.total >= 32 && p.fuel.total <= 64 && p.fuel.placed >= 1 && p.fuel.placed <= Math.min(32, p.fuel.total))
+    if (p.ingredient.id === mc('turtle_helmet')) assert.deepEqual([p.ingredient.total, p.ingredient.placed], [1, 1])
+    else assert.ok(p.ingredient.total >= 32 && p.ingredient.total <= 64)
+    assert.ok(p.ingredient.placed >= 1 && p.ingredient.placed <= Math.min(32, p.ingredient.total))
+    assert.ok(p.potion.total >= 1 && p.potion.total <= 3 && p.potion.placed >= 1 && p.potion.placed <= p.potion.total)
+    assert.equal(p.potion.signature, `${p.potion.bottle}#${p.potion.potion}`)
+    const sum = (id) => p.layout.filter((s) => s.id === id && !s.potion).reduce((n, s) => n + s.count, 0)
+    assert.deepEqual([sum(p.fuel.id), sum(p.ingredient.id)], [p.fuel.total, p.ingredient.total])
+    const bottles = p.layout.filter((s) => s.potion)
+    assert.equal(bottles.length, p.potion.total)
+    assert.ok(bottles.every((s) => s.count === 1 && s.id === p.potion.bottle && s.potion === p.potion.potion))
+    assert.equal(p.layout.length, 2 + p.potion.total)
+    assert.equal(new Set(p.layout.map((s) => s.slot)).size, p.layout.length)
+    const expect = brewExpect(p).brew
+    assert.deepEqual([expect.fuelLeft, expect.ingredientLeft, expect.potionLeft, expect.placed, expect.products], [p.fuel.total - p.fuel.placed, p.ingredient.total - p.ingredient.placed, p.potion.total - p.potion.placed, p.potion.placed, [p.product]])
+  }
+  for (const n of Object.values(tally)) assert.ok(n > 400 && n < 600, JSON.stringify(tally))
+  assert.equal(Object.keys(tally).length, 6)
+  assert.deepEqual(sampleBrew(tables, 42, options), sampleBrew(tables, 42, options))
+  assert.equal(sampleBrew(tables, 7, brewOptions({ input: 'gunpowder' })).ingredient.id, mc('gunpowder'))
+  assert.throws(() => sampleBrew(tables, 1, brewOptions({ input: 'blaze_powder' })), /没有材料 minecraft:blaze_powder/)
+})
+
+/** 酿造台题的固定一道：喷溅的粗制药水 + 龙息 → 滞留的粗制药水；发 40 烈焰粉放 5、20 龙息放 3、3 瓶放 2 */
+function fixedBrew() {
+  const pot = `${mc('splash_potion')}#${mc('awkward')}`
+  const product = `${mc('lingering_potion')}#${mc('awkward')}`
+  return {
+    recipe: { kind: 'container', from: pot, ingredient: mc('dragon_breath'), to: product },
+    fuel: { id: mc('blaze_powder'), total: 40, placed: 5 },
+    ingredient: { id: mc('dragon_breath'), total: 20, placed: 3, remainder: mc('glass_bottle') },
+    potion: { signature: pot, bottle: mc('splash_potion'), potion: mc('awkward'), total: 3, placed: 2 },
+    product, layout: [], target: product
+  }
+}
+
+test('brew judge: inventory-based success before and after brewing; open GUI, overflowed blaze powder, extra items, lost potions / ingredients, dragon-breath bottles, overshoot (P5, P6)', () => {
+  const { judgeBrew } = brewModule
+  const p = fixedBrew()
+  const BP = mc('blaze_powder')
+  const DB = mc('dragon_breath')
+  const GB = mc('glass_bottle')
+  const pot = p.potion.signature
+  const prod = p.product
+  const held = { [BP]: 35, [DB]: 17, [pot]: 1 }
+  const placed = { potions: [pot, pot, null], ingredient: { [DB]: 3 }, fuel: { [BP]: 4 }, fuelCharges: 20, brewTicks: 300 }
+  const judge = (extra = {}) => judgeBrew({ taskState: 'done', picked: p, final: { held, carried: {}, dropped: {}, stand: placed, containerOpen: false, brews: 0, stationIntact: true, ...extra } })
+  const ok = judge()
+  assert.deepEqual([ok.outcome, ok.reached, ok.account.put, ok.account.consumed], ['success', true, { fuel: 5, ingredient: 3, potions: 2 }, { fuel: 1, ingredient: 0 }])
+  // 酿完一次：药水变成产物，龙息少 1、玻璃瓶掉在地上
+  const brewed = judge({ stand: { ...placed, potions: [prod, prod, null], ingredient: { [DB]: 2 } }, dropped: { [GB]: 1 }, brews: 1 })
+  assert.deepEqual([brewed.outcome, brewed.account.consumed.ingredient], ['success', 1])
+  assert.equal(judge({ containerOpen: true }).outcome, 'false_success', 'the GUI must be closed')
+  assert.equal(judge({ carried: { [BP]: 1 }, held: { ...held, [BP]: 34 } }).outcome, 'false_success', 'something on the cursor')
+  const overflow = judge({ stand: { ...placed, ingredient: { [DB]: 3, [BP]: 2 } }, held: { ...held, [BP]: 33 } })
+  assert.equal(overflow.outcome, 'misplaced')
+  assert.match(overflow.account.wrongSlots.join(), /材料格：minecraft:blaze_powder/)
+  assert.equal(judge({ held: { ...held, [mc('glowstone')]: 1 } }).outcome, 'misplaced', 'an item the round did not give')
+  assert.equal(judge({ held: { [BP]: 35, [DB]: 17 } }).outcome, 'lost', 'a potion thrown out of the arena')
+  assert.equal(judge({ held: { [BP]: 35, [DB]: 16, [pot]: 1 } }).outcome, 'lost', 'a dragon breath gone without a brew')
+  assert.equal(judge({ dropped: { [BP]: 1 }, held: { ...held, [BP]: 34 } }).outcome, 'lost', 'something on the ground')
+  assert.equal(judge({ stationIntact: false }).outcome, 'lost')
+  assert.equal(judge({ stand: { ...placed, ingredient: { [DB]: 1 }, potions: [prod, prod, null] }, dropped: { [GB]: 2 }, brews: 2, held: { ...held } }).outcome, 'success', 'two brews used two (3 placed)')
+  const p1 = { ...p, ingredient: { ...p.ingredient, placed: 1 } }
+  const over = judgeBrew({ taskState: 'done', picked: p1, final: { held: { [BP]: 35, [DB]: 19, [pot]: 1 }, carried: {}, dropped: { [GB]: 1 }, stand: { ...placed, ingredient: { [DB]: 0 } , potions: [prod, prod, null] }, containerOpen: false, brews: 1, stationIntact: true } })
+  assert.equal(over.outcome, 'success', 'one placed, one used')
+  const over2 = judgeBrew({ taskState: 'done', picked: p1, final: { held: { [BP]: 35, [DB]: 17, [pot]: 1 }, carried: {}, dropped: { [GB]: 1 }, stand: { ...placed, ingredient: { [DB]: 1 }, potions: [prod, prod, null] }, containerOpen: false, brews: 2, stationIntact: true } })
+  assert.equal(over2.outcome, 'overshoot', 'two used, one asked')
+  assert.equal(judgeBrew({ taskState: 'done', picked: p, final: { held, carried: {}, dropped: {}, stand: placed, containerOpen: false, brews: 0 }, timedOut: true }).outcome, 'timeout')
+  assert.equal(judgeBrew({ stopped: true, picked: p, final: null }).outcome, 'aborted')
+})
+
+/**
+ * 酿造台题的假世界：prepare 回服务器算出的产物；任务结束时按 finalOf(params) 改状态
+ * （缺省：恰好放对、关掉界面，燃料格被吃掉 1 个，还没酿完）。
+ */
+function brewHarness({ finalOf = null, aimOk = true, product = null } = {}) {
+  const world = { params: null, state: {} }
+  const defaultFinal = (params) => {
+    const e = params.expect.brew
+    const given = (id) => params.items.filter((g) => g.id === id && !g.potion).reduce((n, g) => n + g.count, 0)
+    const held = Object.fromEntries([[e.fuel, e.fuelLeft], [e.ingredient, e.ingredientLeft], [e.potion, e.potionLeft]].filter(([, n]) => n > 0))
+    const fuelIn = given(e.fuel) - e.fuelLeft - 1
+    return {
+      held, containerOpen: false, brews: 0,
+      stand: { potions: [...Array(e.placed).fill(e.potion), ...Array(3 - e.placed).fill(null)], ingredient: { [e.ingredient]: given(e.ingredient) - e.ingredientLeft }, fuel: fuelIn > 0 ? { [e.fuel]: fuelIn } : {}, fuelCharges: 20, brewTicks: 400 }
+    }
+  }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, brewing: BREWING, itemProps: BREW_PROPS,
+    arenas: { brewing: { type: 'brew', origin: [0, 100, 330], timeoutSec: 600, fuel: '32-64', raw: '32-64', bottles: '1-3', m: '1-32', n: '1-32', exclude: [] } },
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: {}, carried: {}, dropped: {}, stand: { potions: [null, null, null], ingredient: {}, fuel: {} }, containerOpen: false, brews: 0, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk, station: 'brewing_stand', brew: { product: product ?? params.expect.brew.products[0] } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('brew run: prepare carries potions and the expect; the text names fuel, ingredient and potion kind only; placing right and closing succeeds', async () => {
+  const h = brewHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'brewing', runs: 4, seed: 5 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /fuel=32-64，raw=32-64，bottles=1-3，m=1-32，n=1-32；配方池 6 种材料/)
+  await h.done()
+  const records = h.records('brewing')
+  assert.equal(records.length, 4)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual(record.put, { fuel: record.fuel.placed, ingredient: record.ingredient.placed, potions: record.potion.placed })
+    assert.deepEqual([record.consumed.fuel, record.brews], [1, 0])
+    const prepare = prepares[i]
+    assert.deepEqual([prepare.station, prepare.items], ['brewing_stand', record.layout])
+    assert.equal(prepare.expect.brew.potion, record.potion.signature)
+    const text = h.instructions[i]
+    const potion = `${record.potion.bottle}（${record.potion.potion}）`
+    assert.equal(text, `你正前方有一台酿造台（minecraft:brewing_stand），视角已经对准它。\n你的物品栏里有 ${record.fuel.id}、${record.ingredient.id} 和 ${record.potion.total} 瓶 ${potion}。请把 ${record.fuel.placed} 个 ${record.fuel.id} 放进它的燃料格，${record.ingredient.placed} 个 ${record.ingredient.id} 放进它的材料格，${record.potion.placed} 瓶 ${potion} 放进它的药水格，放好以后关掉它的界面。不要多放，也不要动其他物品。`)
+    assert.doesNotMatch(text, /产物|右键|Shift|等/, 'no product, no moves')
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/4 轮：会话 run-1，酿造台：放 \d+ 个 blaze_powder、/)
+})
+
+test('brew run: a product the server disagrees with or a crosshair off the stand stops the run; option conflicts', async () => {
+  const stale = brewHarness({ product: `${mc('potion')}#${mc('thick')}` })
+  assert.equal(stale.trainer.start({ sessionId: 'console', arena: 'brewing' }).ok, true)
+  await stale.done()
+  assert.match(stale.records('brewing')[0].error, /数据和服务器不一致.*npm run extract-item-props/)
+  const off = brewHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'brewing' }).ok, true)
+  await off.done()
+  assert.match(off.records('brewing')[0].error, /crosshair is not on the brewing stand/)
+  const h = brewHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'brewing', item: 'redstone' }).error, /酿造台场地用 input= 指定材料/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'brewing', fuelItem: 'coal' }).error, /不认这些选项：fuelItem/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'brewing', input: 'blaze_powder' }).error, /没有材料 minecraft:blaze_powder/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'brewing', bottles: '5' }).error, /bottles 要写 k 或 a-b（1–3/)
+})
+
+test('report: brew records group by ingredient / bottle / kind and count overshoot, misplaced and brewed runs', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (ingredient, bottle, kind, outcome, brews = 0) => ({
+    batch: 'b1', target: 'x', recipe: { kind, from: 'a', ingredient: mc(ingredient), to: 'b' }, potion: { signature: `${mc(bottle)}#x`, bottle: mc(bottle), potion: 'x', total: 1, placed: 1 },
+    brews, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true
+  })
+  const records = [rec('redstone', 'potion', 'potion', 'success', 1), rec('redstone', 'splash_potion', 'potion', 'misplaced'), rec('gunpowder', 'potion', 'container', 'overshoot', 2)]
+  const byIng = summarize(records, { by: 'ingredient' })
+  assert.equal(byIng.brewer, true)
+  assert.deepEqual(byIng.rows.map((r) => [r.key, r.runs]), [['redstone', 2], ['gunpowder', 1]])
+  assert.deepEqual([byIng.total.overshoot, byIng.total.misplaced, byIng.total.brewedRuns], [1, 1, 2])
+  assert.match(formatSummary(byIng).split('\n')[0], /^材料\t轮数\t成功率\t虚报\t失败\t超时\t中止\t放多\t放错\t丢失\t酿起来了\t打开酿造台中位/)
+  assert.deepEqual(summarize(records, { by: 'bottle' }).rows.map((r) => [r.key, r.runs]), [['普通', 2], ['喷溅', 1]])
+  assert.deepEqual(summarize(records, { by: 'kind' }).rows.map((r) => [r.key, r.runs]), [['药水配方', 2], ['换瓶子配方', 1]])
+  assert.match(formatSummary(summarize(records, { by: 'kind' })).split('\n')[0], /^配方种类\t/)
+  assert.equal(summarize([{ target: 'x', outcome: 'success', cookTicks: 200, station: 'furnace', fuel: { band: 300 } }]).brewer, false, 'furnace records are not brew records')
 })

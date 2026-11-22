@@ -212,3 +212,69 @@ test('smithing data (锻造台方案 M9): smithing.json entries, trim material k
   assert.equal(props['minecraft:gold_ingot'].trimMaterial, 'minecraft:gold')
   assert.equal(props['minecraft:netherite_ingot'].trimMaterial, undefined)
 })
+
+test('brewing data (酿造台方案 P10): mixes, start mixes expanded, container recipes, fuel tag, constants; unknown lines are errors', async () => {
+  const { parseBrewing, potionNames, brewingItemIds } = await import('../scripts/extract-item-props.js')
+  const potions = potionNames([
+    'public static final Holder<Potion> WATER = register("water", new Potion("water"));',
+    'public static final Holder<Potion> MUNDANE = register("mundane", new Potion("mundane"));',
+    'public static final Holder<Potion> AWKWARD = register("awkward", new Potion("awkward"));',
+    'public static final Holder<Potion> LEAPING = register(',
+    '\t\t"leaping", new Potion("leaping", new MobEffectInstance(MobEffects.JUMP_BOOST, 3600))',
+    '\t);'
+  ].join('\n'))
+  assert.deepEqual([...potions], [['WATER', 'minecraft:water'], ['MUNDANE', 'minecraft:mundane'], ['AWKWARD', 'minecraft:awkward'], ['LEAPING', 'minecraft:leaping']])
+  const items = new Map(['POTION', 'SPLASH_POTION', 'GUNPOWDER', 'NETHER_WART', 'RABBIT_FOOT'].map((f) => [f, { id: f.toLowerCase() }]))
+  const source = [
+    'public class PotionBrewing {',
+    '\tpublic static void addVanillaMixes(PotionBrewing.Builder builder) {',
+    '\t\tbuilder.addContainer(Items.POTION);',
+    '\t\tbuilder.addContainerRecipe(Items.POTION, Items.GUNPOWDER, Items.SPLASH_POTION);',
+    '\t\tbuilder.addMix(Potions.WATER, Items.NETHER_WART, Potions.AWKWARD);',
+    '\t\tbuilder.addStartMix(Items.RABBIT_FOOT, Potions.LEAPING);',
+    '\t}',
+    '\tpublic static class Builder {',
+    '\t\tpublic void addStartMix(Item item, Holder<Potion> holder) {',
+    '\t\t\tif (holder.value().isEnabled(this.enabledFeatures)) {',
+    '\t\t\t\tthis.addMix(Potions.WATER, item, Potions.MUNDANE);',
+    '\t\t\t\tthis.addMix(Potions.AWKWARD, item, holder);',
+    '\t\t\t}',
+    '\t\t}',
+    '\t}',
+    '}'
+  ].join('\n')
+  const stand = 'public static final int FUEL_USES = 20;\n\t\t\t} else if (!bl || x) {\n\t\t\t\tbrewingStandBlockEntity.brewTime = 0;\n\t\t} else if (bl && brewingStandBlockEntity.fuel > 0) {\n\t\t\tbrewingStandBlockEntity.fuel--;\n\t\t\tbrewingStandBlockEntity.brewTime = 400;'
+  const resolveTag = Object.assign((tag) => (tag === 'minecraft:brewing_fuel' ? ['minecraft:blaze_powder'] : []), { has: (tag) => tag === 'minecraft:brewing_fuel' })
+  const { brewing, problems } = parseBrewing(source, { items, potions, resolveTag, stand })
+  assert.deepEqual(problems, [])
+  assert.deepEqual(brewing, {
+    fuel: [{ id: 'minecraft:blaze_powder', charges: 20 }],
+    containers: [{ id: 'minecraft:potion' }],
+    potionMixes: [
+      { from: 'minecraft:water', ingredient: 'minecraft:nether_wart', to: 'minecraft:awkward', time: 400 },
+      { from: 'minecraft:water', ingredient: 'minecraft:rabbit_foot', to: 'minecraft:mundane', time: 400 },
+      { from: 'minecraft:awkward', ingredient: 'minecraft:rabbit_foot', to: 'minecraft:leaping', time: 400 }
+    ],
+    containerMixes: [{ from: 'minecraft:potion', ingredient: 'minecraft:gunpowder', to: 'minecraft:splash_potion', time: 400 }]
+  })
+  assert.deepEqual([...brewingItemIds(brewing)].sort(), ['minecraft:blaze_powder', 'minecraft:gunpowder', 'minecraft:nether_wart', 'minecraft:potion', 'minecraft:rabbit_foot', 'minecraft:splash_potion'])
+  const odd = parseBrewing(source.replace('builder.addMix(Potions.WATER', 'builder.addFancyMix(Potions.WATER'), { items, potions, resolveTag, stand })
+  assert.equal(odd.brewing, null)
+  assert.match(odd.problems.join('\n'), /认不出的写法 builder\.addFancyMix/)
+  assert.match(parseBrewing(source.replace('Items.NETHER_WART', 'Items.MISSING'), { items, potions, resolveTag, stand }).problems.join('\n'), /Items\.MISSING 没有注册名/)
+  assert.match(parseBrewing(source, { items, potions, resolveTag, stand: 'nothing' }).problems.join('\n'), /找不到 FUEL_USES/)
+})
+
+test('brewing data (酿造台方案 P10): the extracted brewing.json matches 1.21.11 (41 mixes + 2×11 start mixes, 2 container recipes, blaze powder)', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const brewing = JSON.parse(await readFile(new URL('../data/brewing.json', import.meta.url), 'utf8'))
+  assert.equal(brewing.potionMixes.length, 63)
+  assert.equal(brewing.containerMixes.length, 2)
+  assert.deepEqual(brewing.fuel, [{ id: 'minecraft:blaze_powder', charges: 20 }])
+  assert.deepEqual(brewing.containers.map((c) => c.id), ['minecraft:potion', 'minecraft:splash_potion', 'minecraft:lingering_potion'])
+  assert.ok(brewing.potionMixes.every((m) => m.time === 400 && m.from.startsWith('minecraft:') && m.to.startsWith('minecraft:')))
+  const props = JSON.parse(await readFile(new URL('../data/item-props.json', import.meta.url), 'utf8')).items
+  for (const m of [...brewing.potionMixes, ...brewing.containerMixes]) assert.ok(props[m.ingredient], `${m.ingredient} is in item-props`)
+  assert.equal(props['minecraft:turtle_helmet'].maxStack, 1)
+  assert.equal(props['minecraft:potion'].maxStack, 1)
+})

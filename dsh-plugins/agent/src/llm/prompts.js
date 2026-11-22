@@ -7,7 +7,7 @@ import path from 'node:path'
  *   system/*.md    常驻系统提示词分段（§6.3），只放很少变化的东西
  *   skills/*.md    skill 正文，由代码按场景放进请求（I6），不让大模型自己挑
  *   requests/*.md  执行器各类请求的消息模板，`{{名字}}` 是占位
- *   training/*.md  训练场发给 agent 的任务描述（合成题 <场地>_<模式>，训练场设计方案 T5；箱子题 chest_<取/放>，箱子训练场设计方案 C7；切石题 stonecut，切石机训练场设计方案 Q7；熔炉题 cook，熔炉训练场设计方案 K11；附魔台题 enchant，附魔台训练场设计方案 N6；信标题 beacon，信标训练场设计方案 G5；铁砧题 anvil_<任务>，铁砧训练场设计方案 A5；锻造台题 smithing，锻造台训练场设计方案 M5；坐骑题 mount_<装上 / 卸下>，坐骑训练场设计方案 H4）
+ *   training/*.md  训练场发给 agent 的任务描述（合成题 <场地>_<模式>，训练场设计方案 T5；箱子题 chest_<取/放>，箱子训练场设计方案 C7；切石题 stonecut，切石机训练场设计方案 Q7；熔炉题 cook，熔炉训练场设计方案 K11；附魔台题 enchant，附魔台训练场设计方案 N6；信标题 beacon，信标训练场设计方案 G5；铁砧题 anvil_<任务>，铁砧训练场设计方案 A5；锻造台题 smithing，锻造台训练场设计方案 M5；坐骑题 mount_<装上 / 卸下>，坐骑训练场设计方案 H4；织布机题 loom，织布机训练场设计方案 L7；制图台题 cartography，制图台训练场设计方案 K7；酿造台题 brew，酿造台训练场设计方案 P12）
  *
  * 缺文件、空文件、仍带占位标记 → 装载时报错，不允许静默用空提示词上线（同路由 prompts.js）。
  */
@@ -17,7 +17,7 @@ export const PROMPT_FILES = Object.freeze({
   system: ['identity', 'authoring'],
   skills: ['outline', 'expand', 'recover', 'reflect', 'review', 'fast_reflect', 'fast_author', 'fact_check', 'fact_record', 'curate'],
   requests: ['plan', 'expand', 'recover', 'escalate', 'failed', 'died', 'reminder', 'retry', 'task_end', 'reflect', 'reflect_reminder', 'reflect_retry', 'curate', 'curate_reminder', 'fast_batch', 'fast_reminder', 'fast_retry', 'fact_check', 'fact_reminder'],
-  training: ['craft2x2_named', 'craft2x2_hidden', 'craft2x2_multi', 'craft3x3_named', 'craft3x3_hidden', 'craft3x3_multi', 'chest_take', 'chest_put', 'chest_take_multi', 'chest_put_multi', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil_merge', 'anvil_rename', 'anvil_both', 'smithing', 'mount_equip', 'mount_unequip']
+  training: ['craft2x2_named', 'craft2x2_hidden', 'craft2x2_multi', 'craft3x3_named', 'craft3x3_hidden', 'craft3x3_multi', 'chest_take', 'chest_put', 'chest_take_multi', 'chest_put_multi', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil_merge', 'anvil_rename', 'anvil_both', 'smithing', 'mount_equip', 'mount_unequip', 'loom', 'cartography', 'brew']
 })
 
 export function loadPrompts(dir) {

@@ -744,6 +744,9 @@
   "minecraft:cobblestone_wall": {
    "maxStack": 64
   },
+  "minecraft:cobweb": {
+   "maxStack": 64
+  },
   "minecraft:cocoa_beans": {
    "maxStack": 64
   },
@@ -1244,6 +1247,10 @@
   },
   "minecraft:dispenser": {
    "maxStack": 64
+  },
+  "minecraft:dragon_breath": {
+   "maxStack": 64,
+   "remainder": "minecraft:glass_bottle"
   },
   "minecraft:dried_ghast": {
    "maxStack": 64
@@ -1989,6 +1996,9 @@
    "maxStack": 64,
    "burn": 100
   },
+  "minecraft:lingering_potion": {
+   "maxStack": 1
+  },
   "minecraft:lodestone": {
    "maxStack": 64
   },
@@ -2563,6 +2573,9 @@
   "minecraft:peony": {
    "maxStack": 64
   },
+  "minecraft:phantom_membrane": {
+   "maxStack": 64
+  },
   "minecraft:pink_banner": {
    "maxStack": 16,
    "burn": 300
@@ -2713,6 +2726,9 @@
   "minecraft:potato": {
    "maxStack": 64
   },
+  "minecraft:potion": {
+   "maxStack": 1
+  },
   "minecraft:powered_rail": {
    "maxStack": 64
   },
@@ -2741,6 +2757,9 @@
    "maxStack": 64
   },
   "minecraft:prismarine_wall": {
+   "maxStack": 64
+  },
+  "minecraft:pufferfish": {
    "maxStack": 64
   },
   "minecraft:pumpkin": {
@@ -2823,6 +2842,9 @@
    "maxStack": 64
   },
   "minecraft:rabbit": {
+   "maxStack": 64
+  },
+  "minecraft:rabbit_foot": {
    "maxStack": 64
   },
   "minecraft:rabbit_hide": {
@@ -3126,6 +3148,9 @@
   },
   "minecraft:spire_armor_trim_smithing_template": {
    "maxStack": 64
+  },
+  "minecraft:splash_potion": {
+   "maxStack": 1
   },
   "minecraft:sponge": {
    "maxStack": 64

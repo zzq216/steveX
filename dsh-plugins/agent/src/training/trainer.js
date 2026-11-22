@@ -11,6 +11,9 @@ import { beacon, parseAmplifier, parseBeaconCountSpec, parseLevelSpec } from './
 import { ANVIL_CHOICES, anvil, parseEnchantsSpec } from './anvil.js'
 import { SMITHING_CHOICES, parseTasksSpec, smithing } from './smithing.js'
 import { MOUNT_CHOICES, mount, parseMountMove, parseMountTotal } from './mount.js'
+import { LOOM_CHOICES, loom, parseBannersSpec, parseSpareSpec } from './loom.js'
+import { CARTOGRAPHY_CHOICES, cartography, parseCopiesSpec, parseMapScaleSpec, parseMapsSpec, parseOpsSpec } from './cartography.js'
+import { brew, loadBrewing, parseBottlesSpec } from './brew.js'
 
 export { judge, resolveCounts }
 
@@ -26,7 +29,7 @@ export { judge, resolveCounts }
  *   → arena/finish（读最终状态、传送出场）→ 判定 → 等本轮会话空闲（复盘结束）→ 统计回合与 token → 追加一行 jsonl
  *
  * 题型（箱子训练场设计方案 C11）：场地配置的 type 选题型模块——craft（craft.js，合成，缺省）、storage（storage.js，
- * 箱子存取）、stonecut（stonecut.js，切石机，docs/切石机训练场设计方案.md）、cook（cook.js，熔炉 / 高炉 / 烟熏炉，docs/熔炉训练场设计方案.md）、enchant（enchant.js，附魔台，docs/附魔台训练场设计方案.md）、beacon（beacon.js，信标，docs/信标训练场设计方案.md）、anvil（anvil.js，铁砧，docs/铁砧训练场设计方案.md）、smithing（smithing.js，锻造台，docs/锻造台训练场设计方案.md）、mount（mount.js，坐骑，docs/坐骑训练场设计方案.md）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
+ * 箱子存取）、stonecut（stonecut.js，切石机，docs/切石机训练场设计方案.md）、cook（cook.js，熔炉 / 高炉 / 烟熏炉，docs/熔炉训练场设计方案.md）、enchant（enchant.js，附魔台，docs/附魔台训练场设计方案.md）、beacon（beacon.js，信标，docs/信标训练场设计方案.md）、anvil（anvil.js，铁砧，docs/铁砧训练场设计方案.md）、smithing（smithing.js，锻造台，docs/锻造台训练场设计方案.md）、mount（mount.js，坐骑，docs/坐骑训练场设计方案.md）、loom（loom.js，织布机，docs/织布机训练场设计方案.md）、cartography（cartography.js，制图台，docs/制图台训练场设计方案.md）、brew（brew.js，酿造台，docs/酿造台训练场设计方案.md）。题型管出题、发放参数、指令、判定和题型自己的记录字段；训练器只管轮次、会话、超时、记录这套公共流程。
  * 有工作站的场地：prepare 的服务器射线自检不过（题型的 afterPrepare 报错）时本轮记 aborted 并停止整组（W2）；
  * 记录里有 openedMs、stationIntact（W8、W9）。
  * 题型可选的异步钩子（信标训练场设计方案 G2、G6）：ready 在 afterPrepare 之后、发任务之前等场地真正就绪（信标数出底座等级），
@@ -34,7 +37,7 @@ export { judge, resolveCounts }
  */
 
 /** 场地配置的 type → 题型模块 */
-const TASK_TYPES = { craft, storage, stonecut, cook, enchant, beacon, anvil, smithing, mount }
+const TASK_TYPES = { craft, storage, stonecut, cook, enchant, beacon, anvil, smithing, mount, loom, cartography, brew }
 /** prepare 之后等客户端更新准星目标（W2）：客户端要过 1 个 tick 才知道准星指着工作站 */
 const AIM_SETTLE_MS = 100
 /** 中止之后等任务真正停下的上限 */
@@ -48,9 +51,9 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const seconds = (label, ms) => (ms === null || ms === undefined ? '' : `，${label} ${(ms / 1000).toFixed(1)} 秒`)
 
 /** 题型选项的命令行名 → start() 的参数名（n、m 是合成题的份数与次数） */
-const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types', targets: 'targets', materials: 'materials', slots: 'slots', styles: 'styles', bypass: 'bypass', material: 'material', station: 'station', raw: 'raw', fuel: 'fuel', rawSlots: 'rawSlots', fuelSlots: 'fuelSlots', input: 'input', fuelItem: 'fuelItem', bookshelves: 'bookshelves', xpLevel: 'xpLevel', effect: 'effect', amplifier: 'amplifier', primary: 'primary', level: 'level', payment: 'payment', count: 'count', task: 'task', second: 'second', enchants: 'enchants', curses: 'curses', tasks: 'tasks', base: 'base', pattern: 'pattern', group: 'group', animal: 'animal', total: 'total', move: 'move' }
+const OPTION_NAMES = { n: 'portions', m: 'crafts', kind: 'kind', rel: 'rel', chest: 'chest', stack: 'stack', fill: 'fill', types: 'types', targets: 'targets', materials: 'materials', slots: 'slots', styles: 'styles', bypass: 'bypass', material: 'material', station: 'station', raw: 'raw', fuel: 'fuel', rawSlots: 'rawSlots', fuelSlots: 'fuelSlots', input: 'input', fuelItem: 'fuelItem', bookshelves: 'bookshelves', xpLevel: 'xpLevel', effect: 'effect', amplifier: 'amplifier', primary: 'primary', level: 'level', payment: 'payment', count: 'count', task: 'task', second: 'second', enchants: 'enchants', curses: 'curses', tasks: 'tasks', base: 'base', pattern: 'pattern', group: 'group', animal: 'animal', total: 'total', move: 'move', banners: 'banners', spare: 'spare', itemPatterns: 'itemPatterns', banner: 'banner', ops: 'ops', scale: 'scale', maps: 'maps', copies: 'copies', bottles: 'bottles' }
 /** 写成 k 或 a-b 的选项 → 校验函数（原样留成字符串，start 里解析） */
-const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSpec(v, 'm'), types: parseTypesSpec, targets: parseTargetsSpec, materials: parseMaterialsSpec, slots: parseSlotsSpec, styles: parseStylesSpec, raw: (v) => parseTotalSpec('raw', v), fuel: (v) => parseTotalSpec('fuel', v), rawSlots: (v) => parseCookSlotsSpec('rawSlots', v), fuelSlots: (v) => parseCookSlotsSpec('fuelSlots', v), level: parseLevelSpec, count: parseBeaconCountSpec, enchants: parseEnchantsSpec, tasks: parseTasksSpec, total: parseMountTotal, move: parseMountMove }
+const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSpec(v, 'm'), types: parseTypesSpec, targets: parseTargetsSpec, materials: parseMaterialsSpec, slots: parseSlotsSpec, styles: parseStylesSpec, raw: (v) => parseTotalSpec('raw', v), fuel: (v) => parseTotalSpec('fuel', v), rawSlots: (v) => parseCookSlotsSpec('rawSlots', v), fuelSlots: (v) => parseCookSlotsSpec('fuelSlots', v), level: parseLevelSpec, count: parseBeaconCountSpec, enchants: parseEnchantsSpec, tasks: parseTasksSpec, total: parseMountTotal, move: parseMountMove, banners: parseBannersSpec, spare: parseSpareSpec, ops: parseOpsSpec, scale: parseMapScaleSpec, maps: parseMapsSpec, copies: parseCopiesSpec, bottles: parseBottlesSpec }
 
 /**
  * `/bt train` 的参数：`<场地> [item=…] [runs=…] [seed=…]`，合成题另有 `[n=…] [m=…]`，箱子题另有
@@ -59,17 +62,20 @@ const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSp
  * 附魔台题另有 `[item=…] [bookshelves=…] [xpLevel=…]`，信标题另有 `[effect=…] [amplifier=…] [primary=…] [level=…] [payment=…] [count=…]`（信标训练场设计方案 §5），
  * 铁砧题另有 `[task=…] [second=…] [item=…] [enchants=…] [curses=…] [xpLevel=…]`（铁砧训练场设计方案 §5），
  * 锻造台题另有 `[tasks=…] [kind=upgrade|trim] [base=…] [pattern=…] [material=…]`（锻造台训练场设计方案 §5；kind 和箱子题共用一个名字，取值按场地分别校验），
- * 坐骑题另有 `[group=…] [animal=…] [task=equip|unequip] [item=…] [total=…] [move=…]`（坐骑训练场设计方案 §5；task 和铁砧题共用一个名字，取值按场地分别校验）。
- * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles、raw、fuel、rawSlots、fuelSlots、level、count、enchants、tasks、total、move 原样留成字符串（"4" / "2-5"），start 里解析。
- * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types, targets, materials, slots, styles, bypass, material, station, raw, fuel, rawSlots, fuelSlots, input, fuelItem, bookshelves, xpLevel, effect, amplifier, primary, level, payment, count, task, second, enchants, curses, tasks, base, pattern, group, animal, total, move } | { ok: false, error }}
+ * 坐骑题另有 `[group=…] [animal=…] [task=equip|unequip] [item=…] [total=…] [move=…]`（坐骑训练场设计方案 §5；task 和铁砧题共用一个名字，取值按场地分别校验），
+ * 织布机题另有 `[banners=…] [slots=…] [fill=…] [styles=…] [spare=…] [itemPatterns=off|on] [banner=…]`（织布机训练场设计方案 §5；slots、styles、fill 和切石题共用名字，范围由场地的 setup 再查）。
+ * 制图台题另有 `[task=zoom|lock|clone|mix|chain] [scale=…] [maps=…] [copies=…] [ops=…] [spare=…]`（制图台训练场设计方案 §5；task 和铁砧题、坐骑题共用，spare 和织布机题共用）。
+ * 酿造台题另有 `[fuel=…] [raw=…] [bottles=…] [n=…] [m=…] [input=…]`（酿造台训练场设计方案 §5；fuel / raw / n / m / input 和熔炉题共用名字）。
+ * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles、raw、fuel、rawSlots、fuelSlots、level、count、enchants、tasks、total、move、banners、spare、ops、scale、maps、copies、bottles 原样留成字符串（"4" / "2-5"），start 里解析。
+ * @returns {{ ok: true, arena, item, runs, seed, portions, crafts, kind, rel, chest, stack, fill, types, targets, materials, slots, styles, bypass, material, station, raw, fuel, rawSlots, fuelSlots, input, fuelItem, bookshelves, xpLevel, effect, amplifier, primary, level, payment, count, task, second, enchants, curses, tasks, base, pattern, group, animal, total, move, banners, spare, itemPatterns, banner, ops, scale, maps, copies, bottles } | { ok: false, error }}
  */
 export function parseTrainArgs(words) {
   const [arena, ...options] = words
   if (!arena) return { ok: false, error: '缺场地名，例如 /bt train craft2x2' }
-  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null, station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null, effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null }
+  const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null, station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null, effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null }
   for (const option of options) {
-    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types|targets|materials|slots|styles|bypass|material|station|raw|fuel|rawSlots|fuelSlots|input|fuelItem|bookshelves|xpLevel|effect|amplifier|primary|level|payment|count|task|second|enchants|curses|tasks|base|pattern|group|animal|total|move)=(.+)$/.exec(option)
-    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=；熔炉题 station= / raw= / fuel= / rawSlots= / fuelSlots= / n= / m= / input= / fuelItem=；附魔台题 item= / bookshelves= / xpLevel=；信标题 effect= / amplifier= / primary= / level= / payment= / count=；铁砧题 task= / second= / item= / enchants= / curses= / xpLevel=；锻造台题 tasks= / kind= / base= / pattern= / material=；坐骑题 group= / animal= / task= / item= / total= / move=）` }
+    const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types|targets|materials|slots|styles|bypass|material|station|raw|fuel|rawSlots|fuelSlots|input|fuelItem|bookshelves|xpLevel|effect|amplifier|primary|level|payment|count|task|second|enchants|curses|tasks|base|pattern|group|animal|total|move|banners|spare|itemPatterns|banner|ops|scale|maps|copies|bottles)=(.+)$/.exec(option)
+    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=；熔炉题 station= / raw= / fuel= / rawSlots= / fuelSlots= / n= / m= / input= / fuelItem=；附魔台题 item= / bookshelves= / xpLevel=；信标题 effect= / amplifier= / primary= / level= / payment= / count=；铁砧题 task= / second= / item= / enchants= / curses= / xpLevel=；锻造台题 tasks= / kind= / base= / pattern= / material=；坐骑题 group= / animal= / task= / item= / total= / move=；织布机题 banners= / slots= / fill= / styles= / spare= / itemPatterns= / banner=；制图台题 task= / scale= / maps= / copies= / ops= / spare=；酿造台题 fuel= / raw= / bottles= / n= / m= / input=）` }
     const [, key, value] = match
     if (RANGE_OPTIONS[key]) {
       try {
@@ -79,9 +85,10 @@ export function parseTrainArgs(words) {
       }
       out[OPTION_NAMES[key]] = value
     } else if (key === 'task') {
-      // 铁砧题（merge / rename / both）和坐骑题（equip / unequip）共用 task，这里只查是不是其中之一，场地自己的 setup 再按题型校验
-      const choices = [...ANVIL_CHOICES.task, ...MOUNT_CHOICES.task]
-      if (!choices.includes(value)) return { ok: false, error: `task 只能是 ${ANVIL_CHOICES.task.join(' / ')}（铁砧题）或 ${MOUNT_CHOICES.task.join(' / ')}（坐骑题）` }
+      // 铁砧题（merge / rename / both）、坐骑题（equip / unequip）和制图台题（zoom / lock / clone / mix / chain）共用 task，
+      // 这里只查是不是其中之一，场地自己的 setup 再按题型校验
+      const choices = [...ANVIL_CHOICES.task, ...MOUNT_CHOICES.task, ...CARTOGRAPHY_CHOICES.task]
+      if (!choices.includes(value)) return { ok: false, error: `task 只能是 ${ANVIL_CHOICES.task.join(' / ')}（铁砧题）、${MOUNT_CHOICES.task.join(' / ')}（坐骑题）或 ${CARTOGRAPHY_CHOICES.task.join(' / ')}（制图台题）` }
       out[key] = value
     } else if (key === 'group') {
       if (!MOUNT_CHOICES.group.includes(value)) return { ok: false, error: `group 只能是 ${MOUNT_CHOICES.group.join(' / ')}` }
@@ -100,6 +107,9 @@ export function parseTrainArgs(words) {
     } else if (COOK_CHOICES[key]) {
       if (!COOK_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${COOK_CHOICES[key].join(' / ')}` }
       out[key] = value
+    } else if (key === 'itemPatterns') {
+      if (!LOOM_CHOICES.itemPatterns.includes(value)) return { ok: false, error: `itemPatterns 只能是 ${LOOM_CHOICES.itemPatterns.join(' / ')}` }
+      out[key] = value
     } else if (ANVIL_CHOICES[key]) {
       if (!ANVIL_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${ANVIL_CHOICES[key].join(' / ')}` }
       out[key] = value
@@ -115,7 +125,7 @@ export function parseTrainArgs(words) {
       } catch (error) {
         return { ok: false, error: error.message }
       }
-    } else if (key === 'item' || key === 'material' || key === 'input' || key === 'fuelItem' || key === 'payment' || key === 'effect' || key === 'primary' || key === 'base' || key === 'pattern' || key === 'animal') {
+    } else if (key === 'item' || key === 'material' || key === 'input' || key === 'fuelItem' || key === 'payment' || key === 'effect' || key === 'primary' || key === 'base' || key === 'pattern' || key === 'animal' || key === 'banner') {
       if (!/^([a-z0-9_.-]+:)?[a-z0-9_/.-]+$/.test(value)) return { ok: false, error: `${key} 不像${key === 'effect' || key === 'primary' ? '效果' : key === 'pattern' ? '纹饰样式' : key === 'animal' ? '动物' : '物品'} id：${value}` }
       out[key] = value
     } else {
@@ -319,6 +329,12 @@ export class Trainer {
   cooking() {
     if (this.cookingRecipes === undefined) this.cookingRecipes = this.config.cooking && fs.existsSync(this.config.cooking) ? loadCooking(this.config.cooking) : null
     return this.cookingRecipes
+  }
+
+  /** data/brewing.json（酿造台题出题用）；没配置或文件不在 → null */
+  brewing() {
+    if (this.brewingData === undefined) this.brewingData = this.config.brewing && fs.existsSync(this.config.brewing) ? loadBrewing(this.config.brewing) : null
+    return this.brewingData
   }
 
   /** data/item-props.json（合成题的多份模式、箱子题、熔炉题要用）；文件不在 → null */
