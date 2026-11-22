@@ -75,6 +75,25 @@ test('统计：同一任务只并一次；草稿转正把数字拷到新条目�
   assert.deepEqual(stats.curateState(), { sinceLast: 0, lastAt: 'now', lastRequestId: 'k1', lastTaskAt: 'x' })
 })
 
+test('统计（2026-11-21）：从任务树的节点存子树，把那个节点在本任务里的退出拷到新条目的 origin；算"执行过"；按名字汇总', () => {
+  const stats = new CapsuleStats()
+  stats.observe({ taskId: 't1', event: 'node', phase: 'exit', id: 'n1.2', type: 'Sequence', status: 'FAILURE' })
+  stats.observe({ taskId: 't1', event: 'node', phase: 'exit', id: 'n1.2', type: 'Sequence', status: 'SUCCESS' })
+  stats.observe({ taskId: 't1', event: 'node', phase: 'exit', id: 'n1', type: 'Sequence', status: 'SUCCESS' })
+  stats.observe({ taskId: 't1', event: 'task/done', at: 'x' })
+  const ref = 'trees/mount.equip@aaaaaaaa'
+  assert.equal(stats.ran(ref), false)
+  const saved = { taskId: 't1', event: 'capsule/saved', folder: 'trees', from: 'n1.2', ref }
+  assert.equal(stats.observe(saved), true)
+  assert.equal(stats.observe(saved), false, '同一次保存只记一次')
+  assert.equal(stats.observe({ taskId: 't1', event: 'capsule/saved', folder: 'trees', from: 'n9', ref: 'trees/other@bbbbbbbb' }), false, '没执行过的节点不记')
+  const row = stats.get(ref)
+  assert.deepEqual([row.calls, row.origin.calls, row.origin.ok, row.origin.error, row.origin.tasks, row.origin.tasksDone, row.origin.nodes], [0, 2, 1, 1, 1, 1, ['t1 n1.2']])
+  assert.equal(stats.ran(ref), true, '版本链不再标"未执行"')
+  assert.equal(usageSummary(row, 'subtree'), '保存前作为任务树里的原节点（存时可能改过）：执行 2 次 / 1 个任务（1 成 0 败），成功 1 / 失败 1')
+  assert.equal(stats.byName('trees/mount.equip').total.origin.calls, 2)
+})
+
 test('统计：落盘到 stats.json；重建从 events.jsonl 重算，结果与在线累计一致，整理计数保留', () => {
   const dir = tempDir()
   const runtimeDir = path.join(dir, 'runtime')

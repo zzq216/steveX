@@ -51,6 +51,12 @@ public class InventoryApi {
         if (stack.has(DataComponents.CUSTOM_NAME))
             item.put("name", stack.getHoverName().getString());
 
+        // 锻造台训练场设计方案 M8：加了纹饰的盔甲带 trim { pattern, material }，能当纹饰材料的物品带 trimMaterial（都是注册名）
+        var trim = name.modid.arena.SmithingArena.trim(stack);
+        if (trim != null) item.put("trim", trim);
+        String trimMaterial = name.modid.arena.SmithingArena.trimMaterial(stack);
+        if (trimMaterial != null) item.put("trimMaterial", trimMaterial);
+
         var rarity = stack.get(DataComponents.RARITY);
         if (rarity != null) item.put("rarity", rarity.name().toLowerCase());
 

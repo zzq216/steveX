@@ -14,7 +14,11 @@
 		"BeaconBlockEntityAccessor",
 		"BeaconPaymentMixin",
 		"AnvilTakeMixin",
-		"AnvilQuickMoveMixin"
+		"CombinerQuickMoveMixin",
+		"SmithingTakeMixin",
+		"MountMenuAccessor",
+		"AbstractHorseAccessor",
+		"LlamaAccessor"
 	],
 	"client": [
 		"LevelRendererMixin",

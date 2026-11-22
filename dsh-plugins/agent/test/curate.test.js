@@ -9,7 +9,8 @@ import { Bridge, REQUEST_TOOLS, CURATE_ONLY_TOOLS } from '../src/llm/bridge.js'
 import { loadPrompts } from '../src/llm/prompts.js'
 import { createTools } from '../src/tools/index.js'
 import { CapsuleStats } from '../src/capsules/stats.js'
-import { libraryRows, renderLibrary } from '../src/capsules/curate.js'
+import { libraryRows, renderLibrary, curateScope, renderScope, scopeCounts, domainOf, lastDoneCurate, lastCurateSeq } from '../src/capsules/curate.js'
+import { CapsuleLibrary } from '../src/capsules/library.js'
 import { planGc, applyGc } from '../src/capsules/gc.js'
 import { saveCapsule } from '../src/capsules/save.js'
 import { METHODS, READ_METHODS } from '../src/game/index.js'
@@ -68,11 +69,12 @@ test('/bt curate：全库清单（按名字排序、带统计与旧版本数）�
   await runUntil(ctx.executor, () => ctx.executor.task.state === 'done')
 
   const started = bridge.startCurate({ sessionId: 's1' })
-  assert.deepEqual(started, { ok: true, requestId: 'k1' })
+  assert.deepEqual(started, { ok: true, requestId: 'k1', mode: 'all' }, '从没完成过整理：按全库发（整理范围方案 R1）')
   const message = delivered.at(-1)
   assert.deepEqual(message.source, { kind: 'stevex-bt', requestId: 'k1', reason: 'curate' })
   assert.match(message.text, /# 整理请求 k1（胶囊库）\n\n（人用 \/bt curate 发起）/)
-  assert.match(message.text, /还没有整理过；统计里已经记了 1 个任务/)
+  assert.match(message.text, /还没有完成过整理，这次整理全库。\n还没有整理过，之后结束了 1 个任务/)
+  assert.match(message.text, /## 胶囊库\n/)
   assert.match(message.text, /skill：胶囊库整理/)
   // 写明本回合放行的工具（取自守卫的同一份名单），其他工具会被拒绝
   assert.match(message.text, /本回合只能调用这些 steveX 工具：`command_docs`、.*`capsule_get`、.*`capsule_retire`、`capsule_describe`、`bt_curate_done`。其他工具（如任务历史 `task_search` \/ `task_get`/)
@@ -122,7 +124,7 @@ test('capsule_retire：reason 必填；下架后搜索不出、get 能取、带�
   assert.equal(ctx.executor.task.state, 'done')
   assert.match(submitted.warnings.join('\n'), /code\/test\.has-item is retired \(被 air-below 取代（演示）\); superseded by code\/test\.air-below\. The tree still runs/)
 
-  bridge.startCurate({ sessionId: 's1' })
+  bridge.startCurate({ sessionId: 's1', mode: 'all' })
   ctx.claim(4)
   await assert.rejects(() => call('capsule_retire', { requestId: 'k2', ref: 'code/test.has-item', undo: true }), /missing required property "reason"/)
   assert.match(bridge.retireCapsule({ sessionId: 's1', requestId: 'k2', ref: 'code/test.has-item', undo: true }).error, /reason is required/)
@@ -223,11 +225,16 @@ test('清单超过 listLimit（C5）：只给目录——各前缀下几条、�
   const ctx = setup()
   const rows = libraryRows(ctx.library, ctx.stats)
   const full = renderLibrary(rows, { listLimit: 150 })
-  assert.match(full, /^胶囊库共 4 条（内置 2，已下架 0）\n\n- code\//)
+  assert.match(full, /^胶囊库在用 4 条（内置 2）；已下架 0 条不列，要看用 capsule_search 加 includeRetired\n\n- code\//)
   const dir = renderLibrary(rows, { listLimit: 3 })
-  assert.match(dir, /超过 3 条，只给目录；条目用 capsule_search/)
-  assert.match(dir, /- code\/core\.\*：2 条，已下架 0，尚无记录 2/)
-  assert.match(dir, /- code\/test\.\*：2 条，已下架 0，尚无记录 2/)
+  assert.match(dir, /在用的超过 3 条，只给目录；条目用 capsule_search/)
+  assert.match(dir, /- code\/core\.\*：2 条，尚无记录 2/)
+  assert.match(dir, /- code\/test\.\*：2 条，尚无记录 2/)
+  // 已下架的不列、不算进 listLimit（整理范围方案 R4）
+  const withRetired = rows.map((r) => (r.key === 'code/test.air-below' ? { ...r, retired: { reason: 'x' } } : r))
+  const listed = renderLibrary(withRetired, { listLimit: 3 })
+  assert.match(listed, /^胶囊库在用 3 条（内置 2）；已下架 1 条不列/)
+  assert.doesNotMatch(listed, /test\.air-below|只给目录/)
 })
 
 test('GC（S2）：三处树的引用、子树传递闭包、当前版本、locked、近期用过的都保留；默认只演练；归档移文件并记索引；装载归档的引用报明原因', () => {
@@ -287,4 +294,115 @@ test('GC（S2）：三处树的引用、子树传递闭包、当前版本、lock
   assert.match(index.to, /^archive[\\/]2026-10-29[\\/]trees[\\/]gc\.t@/)
   library.cache.clear()
   assert.throws(() => library.get(oldTree), /was archived by GC \(no saved tree referenced it\): archive[\\/]2026-10-29/)
+})
+
+// ── 整理范围（docs/胶囊库整理范围设计方案.md）──────────────────────────────
+
+test('整理范围（R2、R3）：核心 = 之后用过 / 新存；相关 = 引用关系一层；同领域只列名字；内置、已下架、草稿不算', () => {
+  const since = '2026-11-21T10:00:00.000Z'
+  const row = (key, extra = {}) => ({ key, ref: `${key}@aaaa1111`, kind: key.startsWith('trees/') ? 'tree' : 'compute', description: `${key} 的说明`, olderVersions: 0, stat: null, issues: 0, ...extra })
+  const used = { calls: 3, ok: 3, fail: 0, error: 0, tasks: 1, tasksDone: 1, tasksFailed: 0, lastUsed: '2026-11-21T11:00:00.000Z' }
+  const rows = [
+    row('trees/smithing.make-one', { stat: used }),
+    row('code/smithing.plan', { savedAt: '2026-11-21T10:30:00.000Z' }),
+    row('code/smithing.old', { stat: { ...used, lastUsed: '2026-11-20T00:00:00.000Z' }, savedAt: '2026-11-01T00:00:00.000Z' }),
+    row('code/inv.count', {}),
+    row('trees/craft.outer', {}),
+    row('code/craft.other', {}),
+    row('code/core.json.query', { builtin: true, stat: used }),
+    row('code/smithing.gone', { retired: { reason: 'x' }, stat: used }),
+    row('task/scratch', { draft: true, stat: used })
+  ]
+  const refs = { 'trees/smithing.make-one': ['code/inv.count', 'code/core.json.query'], 'trees/craft.outer': ['code/smithing.plan'] }
+  const scope = curateScope(rows, { since, refsOf: (key) => (refs[key] ? new Set(refs[key]) : null) })
+  assert.deepEqual(scope.core.map((r) => [r.key, r.why]), [['trees/smithing.make-one', ['用过']], ['code/smithing.plan', ['新存']]])
+  assert.deepEqual(scope.related.map((r) => [r.key, r.usedBy, r.uses]), [['code/inv.count', ['trees/smithing.make-one'], []], ['trees/craft.outer', [], ['code/smithing.plan']]])
+  assert.deepEqual([...scope.domains], [['smithing', ['code/smithing.old']]], '同领域：smithing 的其余条目；craft 不是核心条目的领域')
+  assert.deepEqual(scopeCounts(scope), { core: 2, related: 2, domain: 1, outside: 1, retired: 1 })
+  const text = renderScope(scope)
+  assert.match(text, /^核心条目 2 条：上次整理之后在任务里用过的、之后新存的（含新版本）。\n相关条目 2 条/)
+  assert.match(text, /库里还有 1 条在用的条目不在范围里；已下架的 1 条不列。/)
+  assert.match(text, /## 核心条目\n- trees\/smithing\.make-one@aaaa1111（子树）用过 3 次.*｜之后：用过｜trees\/smithing\.make-one 的说明/)
+  assert.match(text, /- code\/inv\.count@aaaa1111（Compute）.*｜被 trees\/smithing\.make-one 引用｜/)
+  assert.match(text, /- trees\/craft\.outer@aaaa1111（子树）.*｜引用了 code\/smithing\.plan｜/)
+  assert.match(text, /## 同领域的其余条目（只列名字，要看用 capsule_get）\n- smithing：code\/smithing\.old$/)
+  assert.doesNotMatch(text, /core\.json\.query|smithing\.gone|task\/scratch|craft\.other/)
+  assert.equal(domainOf('trees/smithing.make-one'), 'smithing')
+  assert.equal(curateScope(rows, { since: '2026-11-22T00:00:00.000Z', refsOf: () => null }).core.length, 0, '之后什么都没发生：范围是空的')
+})
+
+test('savedAt（R2）：存新版本时记下；同一哈希再存一次、改说明、下架都不改它', () => {
+  let clock = Date.parse('2026-11-21T10:00:00.000Z')
+  const dir = tempDir('stevex-savedat-')
+  const library = new CapsuleLibrary({ dir, now: () => clock })
+  const entry = { name: 'inv.x', description: 'x', signature: { inputs: {}, returns: 'bool' }, body: 'function main() { return true }' }
+  library.write('code', entry)
+  assert.equal(library.readManifest()['code/inv.x'].savedAt, '2026-11-21T10:00:00.000Z')
+  clock += 60000
+  library.write('code', entry)
+  library.describe('code/inv.x', '新说明')
+  library.retire('code/inv.x', { reason: 'r', at: new Date(clock).toISOString() })
+  assert.equal(library.readManifest()['code/inv.x'].savedAt, '2026-11-21T10:00:00.000Z')
+  assert.equal(library.list().find((r) => r.ref.startsWith('code/inv.x@')).savedAt, '2026-11-21T10:00:00.000Z')
+  library.write('code', { ...entry, body: 'function main() { return false }' })
+  assert.equal(library.readManifest()['code/inv.x'].savedAt, '2026-11-21T10:01:00.000Z', '新版本')
+})
+
+test('lastDoneCurate（R1）：取最后一次完成的整理；放弃的不算；没有记录 → null', () => {
+  const dir = tempDir('stevex-curatelog-')
+  assert.equal(lastDoneCurate(dir), null)
+  fs.writeFileSync(path.join(dir, 'curate.jsonl'), [
+    JSON.stringify({ requestId: 'k1', at: '2026-11-21T10:00:00.000Z', outcome: 'done' }),
+    JSON.stringify({ requestId: 'k2', at: '2026-11-21T11:00:00.000Z', outcome: 'done', mode: 'scoped' }),
+    JSON.stringify({ requestId: 'k3', at: '2026-11-21T12:00:00.000Z', outcome: 'abandoned', mode: 'scoped' }),
+    'not json'
+  ].join('\n') + '\n')
+  assert.deepEqual(lastDoneCurate(dir), { at: '2026-11-21T11:00:00.000Z', requestId: 'k2', mode: 'scoped' })
+  assert.equal(lastCurateSeq(dir), 3, '放弃的整理也占号')
+  assert.equal(lastCurateSeq(tempDir('stevex-curatelog-empty-')), 0)
+})
+
+test('/bt curate 按范围（R1、R5、R6、R8）：上次完成整理之后用过的条目进范围；范围是空的不发、计数清零；all 整理全库；curate.jsonl 记模式与范围', async () => {
+  const ctx = setup()
+  const { bridge, delivered, library } = ctx
+  const first = bridge.startCurate({ sessionId: 's1' })
+  assert.equal(first.mode, 'all', '从没完成过整理')
+  ctx.claim(1)
+  bridge.curateDone({ sessionId: 's1', requestId: first.requestId, reason: '第一次' })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+
+  const tree = { seq: '演示', do: [{ sel: '有或无', do: [{ cond: 'code/test.has-item', read: ['inventory'], params: { item: 'diamond', count: 999 } }, { steps: '切栏', do: [['key/hotbar', { slot: 1 }]] }] }] }
+  const plan = bridge.startPlanning({ sessionId: 's1', instruction: '演示' })
+  ctx.claim(2)
+  assert.equal(bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree }).ok, true)
+  await runUntil(ctx.executor, () => ctx.executor.task.state === 'done' || ctx.executor.task.state === 'failed')
+
+  const scoped = bridge.startCurate({ sessionId: 's1' })
+  assert.deepEqual([scoped.ok, scoped.mode], [true, 'scoped'], JSON.stringify(scoped))
+  const message = delivered.at(-1).text
+  assert.match(message, /（人用 \/bt curate 发起）\n\n上次整理完成于 \S+（k1，全库），之后结束了 1 个任务/)
+  assert.match(message, /## 本次整理范围\n\n```text\n核心条目 1 条/)
+  assert.match(message, /- code\/test\.has-item@\w+（条件）.*｜之后：用过｜/)
+  assert.match(message, /请按下面的「胶囊库整理」先看一遍本次整理范围，/)
+  assert.doesNotMatch(message, /test\.air-below@/, '没用过的同领域条目只列名字')
+  assert.match(message, /- test：code\/test\.air-below/)
+  assert.match(bridge.curating().map((r) => r.mode).join(), /scoped/)
+  ctx.claim(3)
+  bridge.curateDone({ sessionId: 's1', requestId: scoped.requestId, reason: '看过了' })
+  const log = fs.readFileSync(path.join(library.dir, 'curate.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  assert.deepEqual([log[0].mode, log[0].since, log[0].scope], ['all', null, null])
+  assert.deepEqual([log[1].mode, log[1].since, log[1].scope], ['scoped', log[0].at, { core: 1, related: 0, domain: 1, outside: 0, retired: 0 }])
+
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const count = delivered.length
+  const empty = bridge.startCurate({ sessionId: 's1' })
+  assert.deepEqual([empty.ok, empty.skipped], [true, true])
+  assert.match(empty.text, /之后没有任务用过、也没有新存的胶囊，不需要整理。要整理全库用 \/bt curate all/)
+  assert.equal(delivered.length, count, '没发请求')
+  assert.equal(ctx.stats.curateState().sinceLast, 0)
+
+  bridge.curateSeq = 0 // 模拟 DSH 重启：请求号接着 curate.jsonl 编，不从 k1 重来
+  const all = bridge.startCurate({ sessionId: 's1', mode: 'all' })
+  assert.deepEqual([all.mode, all.requestId], ['all', 'k3'])
+  assert.match(delivered.at(-1).text, /（人用 \/bt curate all 发起：整理全库）[\s\S]*## 胶囊库\n\n```text\n胶囊库在用 4 条/)
 })

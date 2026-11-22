@@ -16,12 +16,14 @@
  *     另记 enchantingTable: false
  * 物品 id：registerItem("名字", …) 取名字；registerBlock(Blocks.X, …) 取方块 X 的注册名（Blocks.java）。
  *
- * 同样的内容另存一份数组格式的 data/items.json（{ source, items: [{ id, maxStack, remainder?, burn?, enchantable?, enchantingTable? }] }），给 agent 的 json.items 查。
- * 只输出 recipes.json、cooking.json 里出现过的材料、产物、全部燃料、全部可附魔物品和它们的剩余物；有一个找不到或写法认不出就报错退出，不按 64 猜。
+ *   - 纹饰材料（trimMaterial，锻造台训练场设计方案 M9）：.trimMaterial(TrimMaterials.X)，按 TrimMaterials.java 的 registryKey("名字") 换成注册名
+ *     （如金锭 → minecraft:gold）。这个对应关系只在源码里，配方 json 里没有
+ * 同样的内容另存一份数组格式的 data/items.json（{ source, items: [{ id, maxStack, remainder?, burn?, enchantable?, enchantingTable?, trimMaterial? }] }），给 agent 的 json.items 查。
+ * 只输出 recipes.json、cooking.json、smithing.json 里出现过的材料、产物、全部燃料、全部可附魔物品和它们的剩余物；有一个找不到或写法认不出就报错退出，不按 64 猜。
  *
  * 用法：
- *   node scripts/extract-item-props.js                  # 源码基准 steveX/1.21.11_src，配方 data/recipes.json + data/cooking.json
- *   node scripts/extract-item-props.js --src <dir> --recipes <file> --cooking <file> --jar <path>
+ *   node scripts/extract-item-props.js                  # 源码基准 steveX/1.21.11_src，配方 data/recipes.json + data/cooking.json + data/smithing.json
+ *   node scripts/extract-item-props.js --src <dir> --recipes <file> --cooking <file> --smithing <file> --jar <path>
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -95,7 +97,7 @@ export function blockIds(source, refs = new Map()) {
  * WeatheringCopperItems（铜栏杆、铜链、铜灯笼……）每组 8 个变体，按 Items::registerBlock 注册，堆叠上限 64。
  * @returns {{ items: Map<string, {id, maxStack, remainderField}>, problems: Array<{ id: string|null, text: string }> }}
  */
-export function parseItems(source, { ids: blocks, copper }, refs = new Map(), materials = null) {
+export function parseItems(source, { ids: blocks, copper }, refs = new Map(), materials = null, trimKeys = null) {
   const items = new Map()
   const problems = []
   for (const [field, text] of declarations(source, 'WeatheringCopperItems')) {
@@ -135,6 +137,14 @@ export function parseItems(source, { ids: blocks, copper }, refs = new Map(), ma
       const value = enchantabilityOf(text, materials)
       if (value?.problem) problems.push({ id, text: `${id}: ${value.problem}` })
       else if (value !== null) entry.enchantable = value
+    }
+    // 锻造台训练场设计方案 M9：能当哪种纹饰材料
+    const trim = /\.trimMaterial\(([^)]*)\)/.exec(text)
+    if (trim && trimKeys) {
+      const key = /^TrimMaterials\.(\w+)$/.exec(trim[1].trim())
+      const name = key ? trimKeys.get(key[1]) : null
+      if (name) entry.trimMaterial = name
+      else problems.push({ id, text: `${id}: 认不出的纹饰材料 ${trim[1]}` })
     }
     items.set(field, entry)
   }
@@ -319,10 +329,28 @@ export function parseFuels(source, { items, blocks, tags, resolveTag }) {
   return { fuels, problems }
 }
 
-/** 配方里出现过的全部物品 id（材料的每个可选项 + 产物）。烹饪配方（cooking.json）的材料是 input：物品 id 列表。 */
+/**
+ * TrimMaterials.java 里的纹饰材料：字段名 → 注册名（`public static final ResourceKey<TrimMaterial> GOLD = registryKey("gold")` → GOLD → minecraft:gold）。
+ */
+export function trimMaterialKeys(source) {
+  const out = new Map()
+  for (const m of source.matchAll(/ResourceKey<TrimMaterial>\s+(\w+)\s*=\s*registryKey\("([a-z0-9_]+)"\)/g)) out.set(m[1], `minecraft:${m[2]}`)
+  return out
+}
+
+/**
+ * 配方里出现过的全部物品 id（材料的每个可选项 + 产物）。烹饪配方（cooking.json）的材料是 input：物品 id 列表。
+ * 锻造配方（smithing.json）：模板、底材、材料（单个 id 或列表）和升级的产物。
+ */
 export function recipeItemIds(recipes) {
   const ids = new Set()
   for (const recipe of recipes) {
+    if (recipe.type === 'transform' || recipe.type === 'trim') {
+      for (const value of [recipe.template, recipe.base, recipe.addition, recipe.result]) {
+        for (const id of [value].flat()) if (id) ids.add(id)
+      }
+      continue
+    }
     ids.add(recipe.result)
     const options = recipe.type === 'shaped' ? Object.values(recipe.key ?? {}) : Array.isArray(recipe.input) ? [recipe.input] : recipe.ingredients ?? []
     for (const list of options) for (const id of list) ids.add(id)
@@ -334,7 +362,7 @@ export function recipeItemIds(recipes) {
  * @param {Map<string, number>} [fuels]  id → 熔炉基准燃料时长；全部燃料都输出，并带上 burn
  * @param {Set<string>|null} [tableItems]  附魔台能出附魔的物品（enchantingTableItems）；给了就输出全部有"可附魔"属性的物品，
  *   带上 enchantable（可附魔程度），附魔台出不了附魔的另记 enchantingTable: false（书总是出得了）
- * @returns {{ props: object, missing: string[] }}  props: id → { maxStack, remainder?, burn?, enchantable?, enchantingTable? }
+ * @returns {{ props: object, missing: string[] }}  props: id → { maxStack, remainder?, burn?, enchantable?, enchantingTable?, trimMaterial? }
  */
 export function buildProps(recipes, items, fuels = new Map(), tableItems = null) {
   const byId = new Map([...items.values()].map((item) => [`minecraft:${item.id}`, item]))
@@ -358,6 +386,7 @@ export function buildProps(recipes, items, fuels = new Map(), tableItems = null)
       entry.enchantable = item.enchantable
       if (id !== 'minecraft:book' && !tableItems.has(id)) entry.enchantingTable = false
     }
+    if (item.trimMaterial) entry.trimMaterial = item.trimMaterial
     props[id] = entry
     if (entry.remainder) add(entry.remainder)
   }
@@ -374,19 +403,23 @@ function main() {
   const src = path.resolve(take('--src') ?? path.join(steveXRoot, '1.21.11_src'))
   const recipesFile = path.resolve(take('--recipes') ?? path.join(pluginRoot, 'data', 'recipes.json'))
   const cookingFile = path.resolve(take('--cooking') ?? path.join(pluginRoot, 'data', 'cooking.json'))
+  const smithingFile = path.resolve(take('--smithing') ?? path.join(pluginRoot, 'data', 'smithing.json'))
   const jar = take('--jar') ?? findJar(steveXRoot)
   if (!jar) {
     console.error('找不到 minecraft-merged-*.jar（燃料表要展开物品标签）；先跑一次 npm run mc:capture 让 loom 生成缓存，或用 --jar 指定')
     process.exit(1)
   }
-  if (!fs.existsSync(cookingFile)) {
-    console.error(`找不到 ${cookingFile}（先运行 npm run extract-recipes）`)
-    process.exit(1)
+  for (const file of [cookingFile, smithingFile]) {
+    if (!fs.existsSync(file)) {
+      console.error(`找不到 ${file}（先运行 npm run extract-recipes）`)
+      process.exit(1)
+    }
   }
   const read = (rel) => fs.readFileSync(path.join(src, rel), 'utf8')
   const blocks = blockIds(read('net/minecraft/world/level/block/Blocks.java'), referenceKeys(read('net/minecraft/references/Blocks.java')))
   const materials = materialValues(read('net/minecraft/world/item/ToolMaterial.java'), read('net/minecraft/world/item/equipment/ArmorMaterials.java'), read('net/minecraft/world/item/Item.java'))
-  const { items, problems } = parseItems(read('net/minecraft/world/item/Items.java'), blocks, referenceKeys(read('net/minecraft/references/Items.java')), materials)
+  const trimKeys = trimMaterialKeys(read('net/minecraft/world/item/equipment/trim/TrimMaterials.java'))
+  const { items, problems } = parseItems(read('net/minecraft/world/item/Items.java'), blocks, referenceKeys(read('net/minecraft/references/Items.java')), materials, trimKeys)
   // 构造函数里定堆叠上限的物品类（斧、锹、锄……），在 world/item 下按类名找源码
   const classFiles = new Map()
   const walk = (dir) => {
@@ -407,7 +440,8 @@ function main() {
   if (!tableItems.size) fuelProblems.push('jar 里找不到附魔台附魔（in_enchanting_table）')
   const recipes = [
     ...JSON.parse(fs.readFileSync(recipesFile, 'utf8')).recipes,
-    ...JSON.parse(fs.readFileSync(cookingFile, 'utf8')).recipes
+    ...JSON.parse(fs.readFileSync(cookingFile, 'utf8')).recipes,
+    ...JSON.parse(fs.readFileSync(smithingFile, 'utf8')).recipes
   ]
   const { props, missing } = buildProps(recipes, items, fuels, tableItems)
   // 认不出的写法只在落到要输出的物品上时才算错；连 id 都认不出的，要用到它就会出现在 missing 里
@@ -432,6 +466,8 @@ function main() {
   const enchantables = Object.entries(props).filter(([, p]) => p.enchantable !== undefined)
   const notOnTable = enchantables.filter(([, p]) => p.enchantingTable === false).map(([id]) => id)
   console.log(`可附魔 ${enchantables.length} 种${notOnTable.length ? `（其中附魔台出不了附魔的：${notOnTable.join('，')}）` : ''}`)
+  const trims = Object.entries(props).filter(([, p]) => p.trimMaterial).map(([id, p]) => `${id} → ${p.trimMaterial}`)
+  console.log(`纹饰材料 ${trims.length} 种：${trims.join('，')}`)
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

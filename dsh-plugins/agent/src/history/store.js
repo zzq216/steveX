@@ -14,6 +14,8 @@ import { buildProfile } from './profile.js'
  * 系统给证据、agent 写结论：成本画像由 profile.js 算；问题与改进设想只来自复盘里的 task_assess。
  * 问题状态 open（待验证）→ resolved / wrong / blocked，由下一次参考了这条记录（task_get）的任务在复盘时核对（H7）。
  * blocked = 受现有能力限制：不再进核对队列，仍作为胶囊的已知问题可见；记问题时也可以直接标 blocked（2026-11-07）。
+ * 只列这次能核对的（2026-11-21）：挂在胶囊上的问题，这次没执行到那个胶囊就不列；已经被 reviewOpenMax 次复盘核为 open
+ * （一直没有新证据）的不再列。没列的照样是 open，task_get 与 capsule_get 里看得到。
  */
 const VERSION = 1
 const KINDS = ['cost', 'time', 'turns', 'fragile', 'other']
@@ -23,7 +25,7 @@ const ISSUE_STATUS = ['open', 'blocked']
 const KEEP_EVENT_TASKS = 3
 
 export const HISTORY_DEFAULTS = Object.freeze({
-  profileTop: 10, repeatMin: 3, reviewMax: 10, issuesMax: 5,
+  profileTop: 10, repeatMin: 3, reviewMax: 10, issuesMax: 5, reviewOpenMax: 2,
   treeChars: 8000, archiveUnseenDays: 30, maxActive: 500
 })
 
@@ -134,7 +136,7 @@ export class TaskHistory {
       })
     }
     const review = []
-    const openRecords = this.openIssues(predecessors)
+    const openRecords = this.openIssues(predecessors, { taskId })
     const open = new Map(openRecords.flatMap((r) => r.issues.map((issue) => [`${r.taskId}#${issue.index}`, issue])))
     const listed = [...open.keys()].map((key) => { const [record, index] = key.split('#'); return `{ record: "${record}", issue: ${index} }` })
     for (const [i, item] of (Array.isArray(args.review) ? args.review : []).entries()) {
@@ -237,15 +239,40 @@ export class TaskHistory {
     }
   }
 
-  /** 这些记录里还待验证的问题（复盘请求列给 agent 核对，H7）。 */
-  openIssues(taskIds) {
+  /**
+   * 这些记录里还待验证的问题（复盘请求列给 agent 核对，H7）。
+   * 给了 taskId（正在复盘的任务）：只列这次能核对的（见文件头）；omitted = 没列的条数。
+   */
+  openIssues(taskIds, { taskId = null } = {}) {
+    const ran = taskId ? this.ranCapsules(taskId) : null
     const out = []
     for (const id of taskIds) {
       const rec = this.read(id)
-      const issues = (rec?.assessment?.issues ?? []).filter((issue) => issue.status === 'open')
-      if (issues.length) out.push({ taskId: id, goal: rec.goal, issues: issues.slice(0, this.config.reviewMax) })
+      const open = (rec?.assessment?.issues ?? []).filter((issue) => issue.status === 'open')
+      const issues = taskId ? open.filter((issue) => this.reviewable(issue, ran)) : open
+      const omitted = open.length - issues.length
+      if (issues.length || omitted) out.push({ taskId: id, goal: rec.goal, issues: issues.slice(0, this.config.reviewMax), ...(omitted ? { omitted } : {}) })
     }
     return out
+  }
+
+  /** 一条 open 的问题这次还要不要列出来核对。ran = 这次执行过的胶囊名字（null = 不知道，不按它筛） */
+  reviewable(issue, ran) {
+    const opens = (issue.reviews ?? []).filter((r) => r.status === 'open').length
+    if (opens >= this.config.reviewOpenMax) return false
+    if (ran && /^(code|trees)\//.test(issue.where)) return ran.has(issue.where.split('@')[0])
+    return true
+  }
+
+  /** 这个任务里执行过的胶囊名字（节点退出事件的 ref，不含草稿）。事件不在内存里 → null */
+  ranCapsules(taskId) {
+    const events = this.events.get(taskId)
+    if (!events) return null
+    const names = new Set()
+    for (const e of events) {
+      if (e.event === 'node' && e.phase === 'exit' && typeof e.ref === 'string' && !e.ref.startsWith('task/')) names.add(e.ref.split('@')[0])
+    }
+    return names
   }
 
   // ── 检索（H5）────────────────────────────────────────────────────────────

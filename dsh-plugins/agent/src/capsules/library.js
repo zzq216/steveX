@@ -52,8 +52,10 @@ export class CapsuleLibrary {
    * @param {string|null} options.dir    库目录；null = 只用内置条目（测试 / 未配置）
    * @param {Array<{ folder, entry, host }>} [options.builtins]  宿主实现的内置条目
    */
-  constructor({ dir, builtins = [] }) {
+  constructor({ dir, builtins = [], now = () => Date.now() }) {
     this.dir = dir
+    /** manifest 的 savedAt 用（胶囊库整理范围设计方案 R2） */
+    this.now = now
     this.builtins = new Map() // "folder/name@hash" → { entry, host }
     this.builtinLatest = new Map() // "folder/name" → hash
     for (const { folder, entry, host } of builtins) {
@@ -128,7 +130,7 @@ export class CapsuleLibrary {
     }
     for (const [key, info] of Object.entries(this.readManifest())) {
       const entry = this.tryGet(`${key}@${info.hash}`)
-      out.push({ ref: `${key}@${info.hash}`, description: info.description ?? '', locked: Boolean(info.locked), builtin: false, kind: entry ? kindOf(key, entry) : 'missing', ...(info.retired ? { retired: info.retired } : {}) })
+      out.push({ ref: `${key}@${info.hash}`, description: info.description ?? '', locked: Boolean(info.locked), builtin: false, kind: entry ? kindOf(key, entry) : 'missing', ...(info.savedAt ? { savedAt: info.savedAt } : {}), ...(info.retired ? { retired: info.retired } : {}) })
     }
     for (const [name, hash] of this.drafts?.latest ?? []) {
       const entry = this.drafts.entries.get(`task/${name}@${hash}`)
@@ -258,7 +260,10 @@ export class CapsuleLibrary {
       writeAtomic(file, JSON.stringify(stored, null, 2) + '\n')
     }
     const manifest = this.readManifest()
-    manifest[`${folder}/${entry.name}`] = { hash, description: entry.description ?? '', ...(entry.locked ? { locked: true } : {}) }
+    // savedAt（整理范围方案 R2）：这个名字的最新版是什么时候存的；同一哈希再存一次（最新版没变）保留原来的时刻
+    const prev = manifest[`${folder}/${entry.name}`]
+    const savedAt = prev?.hash === hash && prev.savedAt ? prev.savedAt : new Date(this.now()).toISOString()
+    manifest[`${folder}/${entry.name}`] = { hash, description: entry.description ?? '', ...(entry.locked ? { locked: true } : {}), savedAt }
     fs.mkdirSync(this.dir, { recursive: true })
     writeAtomic(this.manifestPath(), JSON.stringify(sortKeys(manifest), null, 2) + '\n')
     return { ref: `${folder}/${entry.name}@${hash}`, hash, created }

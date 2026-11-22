@@ -53,6 +53,8 @@ test('胶囊改名（2026-11-21）：同一哈希搬到新名字下、旧名字�
   assert.deepEqual(after.get(outerNow).body.children.map((c) => c.ref), [innerNow])
   assert.ok(after.get(outer), '旧版子树照常装载')
   assert.equal(manifest['trees/craft.inner'].retired.supersededBy, 'trees/craft.inner-step')
+  // savedAt（整理范围方案 R2）：新名字、换了版本的子树记迁移时刻，下一次整理会看到
+  for (const key of ['code/inv.always-true', 'trees/craft.inner-step', 'trees/craft.outer']) assert.equal(manifest[key].savedAt, plan.at, key)
 
   // 说明：带前缀的旧名字换掉，前缀相同的别的名字不动
   assert.equal(manifest['code/inv.keep'].description, '和 code/inv.always-true 一起用；不要和 code/old-cond-x 混')

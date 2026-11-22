@@ -82,7 +82,8 @@
    "maxStack": 64
   },
   "minecraft:amethyst_shard": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:amethyst"
   },
   "minecraft:ancient_debris": {
    "maxStack": 64
@@ -834,7 +835,8 @@
    "maxStack": 1
   },
   "minecraft:copper_ingot": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:copper"
   },
   "minecraft:copper_lantern": {
    "maxStack": 64
@@ -1167,7 +1169,8 @@
    "maxStack": 64
   },
   "minecraft:diamond": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:diamond"
   },
   "minecraft:diamond_axe": {
    "maxStack": 1,
@@ -1192,9 +1195,15 @@
    "maxStack": 1,
    "enchantable": 10
   },
+  "minecraft:diamond_horse_armor": {
+   "maxStack": 1
+  },
   "minecraft:diamond_leggings": {
    "maxStack": 1,
    "enchantable": 10
+  },
+  "minecraft:diamond_nautilus_armor": {
+   "maxStack": 1
   },
   "minecraft:diamond_ore": {
    "maxStack": 64
@@ -1262,7 +1271,8 @@
    "maxStack": 16
   },
   "minecraft:emerald": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:emerald"
   },
   "minecraft:emerald_block": {
    "maxStack": 64
@@ -1437,7 +1447,8 @@
    "maxStack": 64
   },
   "minecraft:gold_ingot": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:gold"
   },
   "minecraft:gold_nugget": {
    "maxStack": 64
@@ -1672,7 +1683,8 @@
    "maxStack": 1
   },
   "minecraft:iron_ingot": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:iron"
   },
   "minecraft:iron_leggings": {
    "maxStack": 1,
@@ -1801,7 +1813,8 @@
    "maxStack": 64
   },
   "minecraft:lapis_lazuli": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:lapis"
   },
   "minecraft:lapis_ore": {
    "maxStack": 64
@@ -2245,12 +2258,19 @@
    "maxStack": 1,
    "enchantable": 15
   },
+  "minecraft:netherite_horse_armor": {
+   "maxStack": 1
+  },
   "minecraft:netherite_ingot": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:netherite"
   },
   "minecraft:netherite_leggings": {
    "maxStack": 1,
    "enchantable": 15
+  },
+  "minecraft:netherite_nautilus_armor": {
+   "maxStack": 1
   },
   "minecraft:netherite_pickaxe": {
    "maxStack": 1,
@@ -2784,7 +2804,8 @@
    "maxStack": 64
   },
   "minecraft:quartz": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:quartz"
   },
   "minecraft:quartz_block": {
    "maxStack": 64
@@ -2910,7 +2931,8 @@
    "burn": 100
   },
   "minecraft:redstone": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:redstone"
   },
   "minecraft:redstone_block": {
    "maxStack": 64
@@ -2931,7 +2953,8 @@
    "maxStack": 64
   },
   "minecraft:resin_brick": {
-   "maxStack": 64
+   "maxStack": 64,
+   "trimMaterial": "minecraft:resin"
   },
   "minecraft:resin_brick_slab": {
    "maxStack": 64

@@ -64,7 +64,7 @@ const USAGE = [
   '/bt pause | resume         暂停 / 继续任务树（快树照跑）',
   '/bt abort [理由]            放弃当前任务（默认中止流程：松键、关容器；不复盘）',
   '/bt reflect                对最近结束的任务手动发复盘请求（任务对象只留到下一个任务开始）',
-  '/bt curate                 整理胶囊库：发一个整理请求（看全库清单、下架 / 改说明）；有任务或请求没结束时不发、不排队',
+  '/bt curate [all]           整理胶囊库：发一个整理请求（下架 / 改说明）。缺省只整理上次整理完成之后用过、新存的条目和与它们相关的条目，没有就不发；all = 全库在用的条目。有任务或请求没结束时不发、不排队',
   '/bt fact <陈述>             让大模型查 MC 源码确认一条事实，确认了就带引用写进事实库',
   '/bt facts [词] | check      列出事实库（按词筛）；check 重算所有引用，列出失效的',
   '/bt nodes                  任务树每个节点的状态',
@@ -81,6 +81,8 @@ const USAGE = [
   '/bt train enchanting [runs=…] [seed=…] [item=<物品>] [bookshelves=0-15] [xpLevel=…]  附魔台训练场：读附魔台三档的提示，把物品附魔成带有指定附魔和等级的物品，然后关掉界面；物品从 77 种可附魔物品里按类别抽，bookshelves 是附魔台周围的书架数（缺省 15），xpLevel 是每轮的经验等级（缺省 30），item 固定物品',
   '/bt train beacon [runs=…] [seed=…] [effect=<效果>] [amplifier=1|2|mix] [primary=<效果>] [level=k|a-b] [payment=<物品>] [count=k|a-b]  信标训练场：底座已搭好，用付款物品让信标提供指定的效果，然后关掉界面；effect 固定目标效果（6 个信标效果之一，再生题另要求一个主效果），amplifier 是目标级数（mix = 前 5 个效果 I、II 级各一半），primary 固定再生题的主效果，level 限定底座等级（1–4，不低于所需等级），payment 固定付款物品（铁锭、金锭、钻石、绿宝石、下界合金锭之一），count 是付款物品的数量（缺省 32–64）',
   '/bt train anvil [runs=…] [seed=…] [task=merge|rename|both] [second=same|book] [item=<物品>] [enchants=k|a-b] [curses=0|1] [xpLevel=…]  铁砧训练场：用铁砧合并附魔、改名或两样都做，把做好的物品放在物品栏里；task 固定任务（三种等概率），second 固定第二件物品是同种物品还是附魔书，item 固定物品（能附上耐久的物品之一），enchants 是第二件带几个附魔（缺省 1–3），curses=1 时第二件的附魔里可能有诅咒，xpLevel 是每轮的经验等级（缺省 216，不低于 39）',
+  '/bt train smithing [runs=…] [seed=…] [tasks=k|a-b] [kind=upgrade|trim] [base=<底材>] [pattern=<纹饰样式>] [material=<纹饰材料>]  锻造台训练场：物品栏里有做出 1–4 件物品的材料（每件一份），用锻造台把钻石装备升级成下界合金、给盔甲加指定的纹饰，做好的放在物品栏里；tasks 是一轮几道题（缺省 1-4），kind 只出一类题（缺省每道题两类等概率），base 固定底材，pattern / material 固定纹饰样式和纹饰材料（写注册名，如 minecraft:sentry、minecraft:gold）',
+  '/bt train mount [runs=…] [seed=…] [group=horse|donkey|camel|llama|nautilus] [animal=<动物>] [task=equip|unequip] [item=<物品>] [total=k|a-b] [move=k|a-b]  坐骑训练场：正前方一只已驯服、不会动的动物（马、僵尸马、驴、骡、骆驼、骆驼尸壳、羊驼、行商羊驼、鹦鹉螺、僵尸鹦鹉螺），给它装上或卸下鞍 / 马铠 / 地毯 / 鹦鹉螺铠，驴骡羊驼另要往它的箱子里放、取恰好 move 个物品；group 固定组（缺省 5 组等概率），animal 固定动物，task 固定装上 / 卸下，item / total / move 只用于驴、羊驼组',
   '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
   '注意：DSH Web 只在会话开过回合后才显示命令结果。新会话里先说一句话（或 /bt task …），再用 status / nodes / capsules 这类查看命令'
@@ -552,8 +554,12 @@ export function runCommand(executor, rawInput, { library = null, bridge = null, 
       case 'curate': {
         if (!bridge) return { kind: 'error', text: '大模型侧没有启用（planner.enabled = false）' }
         if (!sessionId) return { kind: 'error', text: '/bt curate 只能在会话里用' }
-        const result = bridge.startCurate({ sessionId, trigger: 'manual' })
-        return result.ok ? { kind: 'success', text: `整理请求 ${result.requestId} 已发给大模型` } : { kind: 'error', text: result.error }
+        // 胶囊库整理范围设计方案 R5：/bt curate = 按范围；/bt curate all = 全库
+        if (rest.length > 1 || (rest.length === 1 && rest[0] !== 'all')) return { kind: 'error', text: '用法：/bt curate | /bt curate all' }
+        const result = bridge.startCurate({ sessionId, trigger: 'manual', mode: rest[0] === 'all' ? 'all' : 'scoped' })
+        if (!result.ok) return { kind: 'error', text: result.error }
+        if (result.skipped) return { kind: 'success', text: result.text }
+        return { kind: 'success', text: `整理请求 ${result.requestId} 已发给大模型（${result.mode === 'all' ? '全库' : '按范围'}）` }
       }
       case 'fact': {
         if (!factTurns) return { kind: 'error', text: '大模型侧没有启用（planner.enabled = false）' }
@@ -687,7 +693,7 @@ function formatStatus(snap, bridge) {
   const plan = bridge?.planning ? bridge.requests.get(bridge.planning) : null
   if (plan) lines.push(`规划中：请求 ${plan.requestId}（任务 ${plan.taskId}）— ${plan.instruction}`)
   for (const r of bridge?.reflecting?.() ?? []) lines.push(`复盘中：请求 ${r.requestId}（任务 ${r.taskId}）；已存 ${r.saved.join(', ') || '无'}`)
-  for (const r of bridge?.curating?.() ?? []) lines.push(`整理中：请求 ${r.requestId}（${r.trigger === 'auto' ? '自动' : '手动'}）；已改 ${r.changes} 处`)
+  for (const r of bridge?.curating?.() ?? []) lines.push(`整理中：请求 ${r.requestId}（${r.trigger === 'auto' ? '自动' : '手动'}，${r.mode === 'all' ? '全库' : '按范围'}）；已改 ${r.changes} 处`)
   if (!snap.task) lines.push('任务：无')
   else {
     const t = snap.task

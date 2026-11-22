@@ -2,7 +2,7 @@
 /**
  * 训练记录汇总（训练场设计方案 T10；工作台训练场设计方案 W9、W10；箱子训练场设计方案 C12）。
  *
- *   node scripts/training-report.js [场地=craft2x2] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second] [--last <N>] [--batch <批次>] [--runtime <dir>]
+ *   node scripts/training-report.js [场地=craft2x2] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second|tasks|pattern|material|group|animal] [--last <N>] [--batch <批次>] [--runtime <dir>]
  *
  * 箱子场地（type: storage）缺省按 task（取放 / 数量关系）分组，也可以按 chest（箱子大小）、stack（堆叠上限）、fill（每格数量随机 / 取满）、targets（每轮几种目标）、target 分组。
  *
@@ -11,6 +11,8 @@
  * 附魔台场地（type: enchant）缺省按 kind（物品类别）分组，也可以按 slot（目标档）、enchantment（目标附魔）、target（物品）分组。
  * 信标场地（type: beacon）缺省按 effect（目标效果，I、II 级分开）分组，也可以按 level（底座等级）、payment（付款物品）、target 分组。
  * 铁砧场地（type: anvil）缺省按 task（合并 / 改名 / 合并加改名）分组，也可以按 item（物品）、second（第二件的种类）、target 分组。
+ * 坐骑场地（type: mount）缺省按 group（马 / 驴 / 骆驼 / 羊驼 / 鹦鹉螺）分组，也可以按 animal、task、target 分组。
+ * 锻造台场地（type: smithing）缺省按 kind（升级 / 纹饰 / 混合）分组，也可以按 tasks（题数）、pattern（纹饰样式）、material（纹饰材料）、target 分组。
  *
  * 读 runtime/training/<场地>.jsonl，按目标物品（或配方形状）输出成功率、虚报 / 失败 / 超时次数、成功轮的合成与任务中位用时、token 中位数。
  * 带工作站的场地另有"打开工作台"中位用时、工作台被挖掉的轮数，并列出每轮引用了哪些在该场地第一轮之前就有的胶囊。
@@ -28,13 +30,13 @@ const runtimeDir = flag('--runtime')
 const last = flag('--last')
 const batch = flag('--batch')
 const byFlag = flag('--by')
-if (args.length > 1 || (byFlag !== null && !['target', 'shape', 'portions', 'task', 'chest', 'stack', 'fill', 'targets', 'materials', 'styles', 'yield', 'family', 'station', 'band', 'kind', 'slot', 'enchantment', 'effect', 'level', 'payment', 'item', 'second'].includes(byFlag)) || (last !== null && !(Number.isInteger(Number(last)) && Number(last) > 0))) {
-  console.error('usage: node scripts/training-report.js [arena] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second] [--last <N>] [--batch <id>] [--runtime <dir>]')
+if (args.length > 1 || (byFlag !== null && !['target', 'shape', 'portions', 'task', 'chest', 'stack', 'fill', 'targets', 'materials', 'styles', 'yield', 'family', 'station', 'band', 'kind', 'slot', 'enchantment', 'effect', 'level', 'payment', 'item', 'second', 'tasks', 'pattern', 'material', 'group', 'animal'].includes(byFlag)) || (last !== null && !(Number.isInteger(Number(last)) && Number(last) > 0))) {
+  console.error('usage: node scripts/training-report.js [arena] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second|tasks|pattern|material|group|animal] [--last <N>] [--batch <id>] [--runtime <dir>]')
   process.exit(2)
 }
 const config = normalizeConfig({ ...(runtimeDir ? { runtimeDir: path.resolve(runtimeDir) } : {}), logger: null })
 const arena = args[0] ?? 'craft2x2'
-const DEFAULT_BY = { storage: 'task', stonecut: 'family', cook: 'station', enchant: 'kind', beacon: 'effect', anvil: 'task' }
+const DEFAULT_BY = { storage: 'task', stonecut: 'family', cook: 'station', enchant: 'kind', beacon: 'effect', anvil: 'task', smithing: 'kind', mount: 'group' }
 const by = byFlag ?? DEFAULT_BY[config.training.arenas[arena]?.type] ?? 'target'
 const file = path.join(config.runtimeDir, 'training', `${arena}.jsonl`)
 const records = readRecords(file)

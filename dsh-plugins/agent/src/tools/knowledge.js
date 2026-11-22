@@ -105,7 +105,8 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     recipes: 'key / ingredients 里的标签已经展开成具体物品 id（数据里没有 #minecraft:… 形式的标签）；shaped 的 pattern 按配方生成器里的写法原样保留，可能带空格组成的空列或空行（如 [" M ", " M "]）。',
     stonecutting: '切石机配方（minecraft:stonecutting）：input 是单个物品 id，result 是产物，count 是切一次（消耗 1 个 input）得到的产物个数。',
     cooking: '烹饪配方：type 是 smelting（熔炉）/ blasting（高炉）/ smoking（烟熏炉）/ campfire_cooking（营火）；input 是能用的原料 id 列表（标签已展开），任选一种；result 是产物，count 是烧一个原料得到的产物个数；time 是烧一个所需的 tick 数。',
-    items: '物品属性，每条一个物品：id；maxStack 是堆叠上限；remainder 是合成后留在格子里的剩余物；burn 是当燃料时在熔炉里燃烧的 tick 数（只有燃料才有这一项）；enchantable 是可附魔程度（只有能上附魔台的物品才有这一项），enchantingTable: false 表示附魔台给它出不了附魔。只收了配方表、烹饪配方里出现过的物品、全部燃料和全部可附魔物品。高炉、烟熏炉里的燃烧时长是 burn 的一半（整数除法，BlastFurnaceBlockEntity / SmokerBlockEntity 的 getBurnDuration）。'
+    smithing: '锻造台配方，两种 type：transform（升级）是 { template, base, addition, result }，template、base 是单个物品 id，addition 是能用的材料 id 列表，产物 result 保留底材的组件；trim（纹饰）是 { template, base, addition, pattern }，base、addition 是能用的物品 id 列表（标签已展开），pattern 是纹饰样式的注册名，和做出来的物品上 trim.pattern 的值相同，产物和底材是同一种物品。',
+    items: '物品属性，每条一个物品：id；maxStack 是堆叠上限；remainder 是合成后留在格子里的剩余物；burn 是当燃料时在熔炉里燃烧的 tick 数（只有燃料才有这一项）；enchantable 是可附魔程度（只有能上附魔台的物品才有这一项），enchantingTable: false 表示附魔台给它出不了附魔；trimMaterial 是它当纹饰材料时对应的纹饰材料注册名（只有纹饰材料才有这一项，和做出来的物品上 trim.material 的值相同）。只收了配方表、烹饪配方、锻造配方里出现过的物品、全部燃料和全部可附魔物品。高炉、烟熏炉里的燃烧时长是 burn 的一半（整数除法，BlastFurnaceBlockEntity / SmokerBlockEntity 的 getBurnDuration）。'
   }
   const sourceNames = [
     ...STATE_SOURCES.map((s) => `state.${s}`),
@@ -238,7 +239,7 @@ export function knowledgeTools({ registry, library, stats = null, history = null
     {
       name: 'capsule_get',
       description: [
-        '取一个胶囊条目的说明（做什么、什么前提下用）、完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字、在几种参数组合上成功过与没成功过的组合）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions；versions = 同名版本数（≥2 才有），untested = 这一版还没在任务里执行过，olderBetterWhen = 替换时记下的"旧版在什么情况下更好"（最多 2 条；要用旧版就写带 @hash 的引用）。',
+        '取一个胶囊条目的说明（做什么、什么前提下用）、完整契约（signature：inputs / outputs / returns）、正文（代码或子树）与使用统计（这个版本、同名所有版本、最近的错误样本、转正前作为草稿时的数字、从任务树的节点存下的子树保存前那个原节点的执行数字、在几种参数组合上成功过与没成功过的组合）。ref 可以省略 @hash，取最新版。同名有多个版本时带 versionChain：从最新版沿替换关系往前最多 5 版，每版写改了什么、替换时记下的判断（哪一版在什么情况下更好、实测 / 推测、核对状态）、这一版的使用（"未执行" / "已归档"）与已知问题数；不在链上的旧版本列在 otherVersions；versions = 同名版本数（≥2 才有），untested = 这一版还没在任务里执行过，olderBetterWhen = 替换时记下的"旧版在什么情况下更好"（最多 2 条；要用旧版就写带 @hash 的引用）。',
         '正文按行号列在最后（子树按 JSON 分行）；放不下时只列前面能放下的行，并写明共几行——后面的用 start（从第几行起）/ lines（读几行）接着读，这时只返回那一段正文。只要契约与统计、不要正文：withBody: false。'
       ].join('\n'),
       parameters: {

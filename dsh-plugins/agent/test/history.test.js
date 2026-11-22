@@ -8,6 +8,7 @@ import { Bridge, REQUEST_TOOLS, REFLECT_ONLY_TOOLS } from '../src/llm/bridge.js'
 import { loadPrompts } from '../src/llm/prompts.js'
 import { buildProfile, formatProfile, splitCalls } from '../src/history/profile.js'
 import { TaskHistory } from '../src/history/store.js'
+import { CapsuleStats } from '../src/capsules/stats.js'
 import { historyTools } from '../src/tools/history.js'
 import { makeRuntime, runUntil, tempDir } from './helpers.js'
 
@@ -160,13 +161,14 @@ test('history gc: never-retrieved old records and the active cap are archived (d
 
 const OUTLINE = { seq: '演示任务', do: [{ steps: '切到 1 号栏', do: [['key/hotbar', { slot: 1 }], ['key/hotbar', { slot: 2 }]] }] }
 
-function setup() {
+function setup({ reflect } = {}) {
   const rt = makeRuntime()
   const history = new TaskHistory({ dir: null })
   rt.executor.on('event', (record) => history.observe(record))
   const delivered = []
   const bridge = new Bridge({
     executor: rt.executor, library: rt.library, sandbox: rt.sandbox, registry: rt.registry, prompts, history,
+    ...(reflect ? { reflect } : {}),
     taskUsage: () => ({ turns: 1, tokens: null }),
     deliver: (sessionId, message) => { delivered.push({ sessionId, ...message }); return true },
     notify: () => {}
@@ -186,7 +188,7 @@ async function runTask(ctx, turn) {
 }
 
 test('bridge: the review shows the cost profile; done tasks must be assessed; task_get during planning makes a predecessor that the next review checks', async () => {
-  const ctx = setup()
+  const ctx = setup({ reflect: { onDone: 'always' } })
   const { bridge, executor, tools, history } = ctx
   assert.ok(REQUEST_TOOLS.plan.includes('task_search') && REQUEST_TOOLS.reflect.includes('task_assess') && !REQUEST_TOOLS.curate.includes('task_search'))
   assert.ok(REFLECT_ONLY_TOOLS.includes('task_assess'))
@@ -232,6 +234,71 @@ test('bridge: the review shows the cost profile; done tasks must be assessed; ta
   assert.equal(bridge.reflectDone({ sessionId: 's1', requestId: 'c2', summary: '核对了上一条' }).ok, true)
   assert.equal(history.read(firstId).assessment.issues[0].status, 'wrong')
   assert.deepEqual(history.read(second.taskId).predecessors, [firstId])
+})
+
+test('reflect.onDone = changed（2026-11-21）：参考过同类任务、同样的调用次数、没有新情况的 done 任务不复盘，只写历史；调用次数不同照常复盘', async () => {
+  const ctx = setup()
+  const { bridge, executor, tools, history } = ctx
+  const first = await runTask(ctx, 1)
+  assert.equal(bridge.submitTree({ sessionId: 's1', requestId: first.requestId, tree: OUTLINE }).ok, true)
+  await runUntil(executor, () => executor.task.state === 'done')
+  assert.match(ctx.delivered.at(-1).text, /# 复盘请求 c1/, '没参考过同类任务：复盘')
+  ctx.claim(2)
+  assert.equal(bridge.assess({ sessionId: 's1', requestId: 'c1', none: '没问题' }).ok, true)
+  assert.equal(bridge.reflectDone({ sessionId: 's1', requestId: 'c1', summary: '没存' }).ok, true)
+  const firstId = executor.task.taskId
+
+  const second = await runTask(ctx, 3)
+  await tools.task_get.execute({ taskId: firstId }, { agent: { id: 's1' } })
+  assert.equal(bridge.submitTree({ sessionId: 's1', requestId: second.requestId, tree: OUTLINE }).ok, true)
+  await runUntil(executor, () => executor.task.state === 'done' && executor.task.taskId === second.taskId)
+  assert.doesNotMatch(ctx.delivered.at(-1).text, /# 复盘请求/, '同类、同样 2 次调用、没有新情况：不复盘')
+  assert.ok(executor.task.events.some((e) => e.event === 'reflect/skipped'))
+  const rec = history.read(second.taskId)
+  assert.deepEqual([rec.outcome, rec.assessment, rec.predecessors], ['done', null, [firstId]], '照样写任务历史')
+  assert.deepEqual(bridge.doneChanges(executor.task), [])
+
+  const third = await runTask(ctx, 4)
+  await tools.task_get.execute({ taskId: firstId }, { agent: { id: 's1' } })
+  const three = { seq: '演示任务', do: [{ steps: '切三次栏', do: [['key/hotbar', { slot: 1 }], ['key/hotbar', { slot: 2 }], ['key/hotbar', { slot: 3 }]] }] }
+  assert.equal(bridge.submitTree({ sessionId: 's1', requestId: third.requestId, tree: three }).ok, true)
+  await runUntil(executor, () => executor.task.state === 'done' && executor.task.taskId === third.taskId)
+  assert.match(ctx.delivered.at(-1).text, /# 复盘请求 c2/, '调用次数和参考任务不同：复盘')
+  assert.deepEqual(bridge.doneChanges(executor.task), ['mod 调用次数和参考任务不同'])
+})
+
+test('reflect.onDone = changed（2026-11-22）：第一次执行的胶囊版本也算新情况；这次的数字已并进统计时扣掉再看', () => {
+  const stats = new CapsuleStats()
+  const bridge = Object.assign(Object.create(Bridge.prototype), { stats, history: null, historyViews: new Map() })
+  const exit = (taskId, ref) => ({ taskId, event: 'node', phase: 'exit', id: 'n1', type: 'SubTree', ref, status: 'SUCCESS' })
+  const task = { taskId: 't2', versions: [{}], events: [exit('t2', 'trees/x@aaaaaaaa'), exit('t2', 'trees/y@bbbbbbbb'), exit('t2', 'task/d@cccccccc')] }
+  stats.observe(exit('t1', 'trees/x@aaaaaaaa'))
+  stats.observe({ taskId: 't1', event: 'task/done', at: 'a' })
+  for (const e of task.events) stats.observe(e)
+  assert.deepEqual(bridge.firstRuns(task), ['trees/y@bbbbbbbb'], '任务还没并进统计')
+  stats.observe({ taskId: 't2', event: 'task/done', at: 'b' })
+  assert.deepEqual(bridge.firstRuns(task), ['trees/y@bbbbbbbb'], '已并进统计：扣掉这次的再看')
+  assert.ok(bridge.doneChanges(task).includes('第一次执行这些胶囊版本：trees/y@bbbbbbbb'))
+  stats.data.refs['trees/z@dddddddd'] = { calls: 0, origin: { calls: 1 } }
+  assert.deepEqual(bridge.firstRuns({ taskId: 't3', events: [exit('t3', 'trees/z@dddddddd')] }), [], '保存前作为原节点跑过的不算第一次')
+  assert.deepEqual(Object.assign(Object.create(Bridge.prototype), { stats: null }).firstRuns(task), [])
+})
+
+test('只列这次能核对的以往问题（2026-11-21）：挂在没执行到的胶囊上的、已被两次复盘核为 open 的不列，并写明没列几条', () => {
+  const history = new TaskHistory({ dir: null })
+  const issue = (index, where, reviews = []) => ({ index, where, kind: 'cost', problem: `p${index}`, evidence: 'e', status: 'open', reviews })
+  const opened = (n) => Array.from({ length: n }, (_, i) => ({ by: `t${i}`, status: 'open', evidence: '没走到' }))
+  history.writeRecord({ taskId: 'task-a', goal: 'g', assessment: { issues: [
+    issue(0, 'n1.2'), issue(1, 'trees/x.ran@aaaaaaaa'), issue(2, 'trees/x.idle'), issue(3, 'n1.3', opened(1)), issue(4, 'n1.4', opened(2))
+  ] } })
+  history.observe({ taskId: 'task-b', event: 'node', phase: 'exit', id: 'n1', type: 'SubTree', ref: 'trees/x.ran@bbbbbbbb', status: 'SUCCESS' })
+  history.observe({ taskId: 'task-b', event: 'node', phase: 'exit', id: 'n2', type: 'Compute', ref: 'task/draft@cccccccc', status: 'SUCCESS' })
+  assert.deepEqual([...history.ranCapsules('task-b')], ['trees/x.ran'])
+  const [rec] = history.openIssues(['task-a'], { taskId: 'task-b' })
+  assert.deepEqual([rec.issues.map((i) => i.index), rec.omitted], [[0, 1, 3], 2])
+  assert.equal(history.openIssues(['task-a'])[0].issues.length, 5, '不给 taskId：全列（task_get 等）')
+  const checked = history.checkAssessment({ none: 'n', review: [{ record: 'task-a', issue: 4, status: 'open', evidence: 'e' }] }, { taskId: 'task-b', spec: null, predecessors: ['task-a'] })
+  assert.ok(checked.errors.some((e) => /对不上待验证的问题/.test(e)), '没列的不能核对')
 })
 
 test('profile：旧事件没有 calls.observe 时，Steps / Action 的读取按执行器观察读取算；条件 / Compute 的读取照旧算树的（2026-11-13）', () => {

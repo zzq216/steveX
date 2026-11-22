@@ -175,3 +175,40 @@ test('enchantingTableItems: primary items of in_enchanting_table enchantments; b
     'minecraft:trident': { maxStack: 1, enchantable: 1, enchantingTable: false }
   })
 })
+
+test('smithing data (锻造台方案 M9): smithing.json entries, trim material keys, trimMaterial on items, smithing items are covered', async () => {
+  const { smithingEntry } = await import('../scripts/extract-recipes.js')
+  const { trimMaterialKeys, parseItems } = await import('../scripts/extract-item-props.js')
+  const tags = { 'minecraft:trimmable_armor': ['minecraft:iron_chestplate', 'minecraft:turtle_helmet'], 'minecraft:trim_materials': ['minecraft:gold_ingot', 'minecraft:redstone'], 'minecraft:netherite_tool_materials': ['minecraft:netherite_ingot'] }
+  const ingredient = (spec) => [...new Set([spec].flat().flatMap((id) => (id.startsWith('#') ? tags[id.slice(1)] : [id])))].sort()
+  assert.deepEqual(
+    smithingEntry('netherite_sword_smithing', { type: 'minecraft:smithing_transform', template: 'minecraft:netherite_upgrade_smithing_template', base: 'minecraft:diamond_sword', addition: '#minecraft:netherite_tool_materials', result: { id: 'minecraft:netherite_sword' } }, ingredient),
+    { name: 'netherite_sword_smithing', type: 'transform', template: 'minecraft:netherite_upgrade_smithing_template', base: 'minecraft:diamond_sword', addition: ['minecraft:netherite_ingot'], result: 'minecraft:netherite_sword' })
+  assert.deepEqual(
+    smithingEntry('sentry', { type: 'minecraft:smithing_trim', template: 'minecraft:sentry_armor_trim_smithing_template', base: '#minecraft:trimmable_armor', addition: '#minecraft:trim_materials', pattern: 'minecraft:sentry' }, ingredient),
+    { name: 'sentry', type: 'trim', template: 'minecraft:sentry_armor_trim_smithing_template', base: ['minecraft:iron_chestplate', 'minecraft:turtle_helmet'], addition: ['minecraft:gold_ingot', 'minecraft:redstone'], pattern: 'minecraft:sentry' })
+  assert.throws(() => smithingEntry('x', { type: 'minecraft:smithing_trim', template: '#minecraft:trimmable_armor', base: 'a', addition: 'b', pattern: 'p' }, ingredient), /template is not a single item id/)
+
+  const keys = trimMaterialKeys('public static final ResourceKey<TrimMaterial> GOLD = registryKey("gold");\n\tpublic static final ResourceKey<TrimMaterial> LAPIS = registryKey("lapis");')
+  assert.deepEqual([...keys], [['GOLD', 'minecraft:gold'], ['LAPIS', 'minecraft:lapis']])
+  const source = [
+    'public static final Item GOLD_INGOT = registerItem("gold_ingot", new Item.Properties().trimMaterial(TrimMaterials.GOLD));',
+    'public static final Item STICK = registerItem("stick");',
+    'public static final Item ODD = registerItem("odd", new Item.Properties().trimMaterial(TrimMaterials.UNKNOWN));'
+  ].join('\n')
+  const { items, problems } = parseItems(source, { ids: new Map(), copper: new Map() }, new Map(), null, keys)
+  assert.equal(items.get('GOLD_INGOT').trimMaterial, 'minecraft:gold')
+  assert.equal(items.get('STICK').trimMaterial, undefined)
+  assert.match(problems.map((p) => p.text).join('\n'), /odd: 认不出的纹饰材料 TrimMaterials\.UNKNOWN/)
+
+  const smithing = [
+    { name: 'up', type: 'transform', template: 'minecraft:netherite_upgrade_smithing_template', base: 'minecraft:diamond_sword', addition: ['minecraft:netherite_ingot'], result: 'minecraft:netherite_sword' },
+    { name: 'trim', type: 'trim', template: 'minecraft:sentry_armor_trim_smithing_template', base: ['minecraft:iron_chestplate'], addition: ['minecraft:gold_ingot'], pattern: 'minecraft:sentry' }
+  ]
+  assert.deepEqual([...recipeItemIds(smithing)].sort(), ['minecraft:diamond_sword', 'minecraft:gold_ingot', 'minecraft:iron_chestplate', 'minecraft:netherite_ingot', 'minecraft:netherite_sword', 'minecraft:netherite_upgrade_smithing_template', 'minecraft:sentry_armor_trim_smithing_template'])
+  const all = new Map(['diamond_sword', 'gold_ingot', 'iron_chestplate', 'netherite_ingot', 'netherite_sword', 'netherite_upgrade_smithing_template', 'sentry_armor_trim_smithing_template'].map((id) => [id.toUpperCase(), { id, maxStack: id.includes('_s') || id.includes('chestplate') ? 1 : 64, remainderField: null, ...(id === 'gold_ingot' ? { trimMaterial: 'minecraft:gold' } : {}) }]))
+  const { props, missing } = buildProps(smithing, all)
+  assert.deepEqual(missing, [])
+  assert.equal(props['minecraft:gold_ingot'].trimMaterial, 'minecraft:gold')
+  assert.equal(props['minecraft:netherite_ingot'].trimMaterial, undefined)
+})

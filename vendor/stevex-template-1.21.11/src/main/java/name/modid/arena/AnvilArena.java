@@ -125,7 +125,10 @@ public final class AnvilArena {
         return name == null ? null : name.getString();
     }
 
-    /** 一件物品的摘要：{ id, count, enchantments, name }；空 → null。 */
+    /**
+     * 一件物品的摘要：{ id, count, enchantments, name, trim?, trimMaterial? }；空 → null。
+     * trim、trimMaterial 只在物品有纹饰、能当纹饰材料时才有（锻造台方案 M8，场地 status 和 agent 看到的一致）。
+     */
     public static Map<String, Object> describe(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return null;
         Map<String, Object> out = new LinkedHashMap<>();
@@ -133,6 +136,10 @@ public final class AnvilArena {
         out.put("count", stack.getCount());
         out.put("enchantments", enchantments(stack));
         out.put("name", customName(stack));
+        Map<String, Object> trim = SmithingArena.trim(stack);
+        if (trim != null) out.put("trim", trim);
+        String trimMaterial = SmithingArena.trimMaterial(stack);
+        if (trimMaterial != null) out.put("trimMaterial", trimMaterial);
         return out;
     }
 

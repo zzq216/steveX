@@ -42,15 +42,17 @@ public class ArenaApi {
             List<ArenaManager.Give> chestItems = params.get("chestItems") == null ? List.of() : gives(params.get("chestItems"), "chestItems");
             ArenaManager.Expect expect = expect(params.get("expect"));
             List<String> watch = params.get("watch") == null ? List.of() : strings(params.get("watch"), "watch");
-            if (items.isEmpty() && chestItems.isEmpty()) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
+            if (items.isEmpty() && chestItems.isEmpty() && params.get("mount") == null) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
             long dayTime = AgentWebSocketServer.num(params, "dayTime", 1000);
             long seed = params.get("seed") instanceof Number n ? n.longValue() : 0L;
             // 附魔台训练场（附魔台方案 N2、N4）：书架数、经验等级、附魔种子；不给 = 书架 15 个，经验和种子不动；其他工作站忽略
             ArenaManager.EnchantSetup enchantSetup = new ArenaManager.EnchantSetup(optionalInt(params, "bookshelves"), optionalInt(params, "xpLevel"), optionalInt(params, "enchantSeed"));
             // 信标训练场（信标方案 G2）：底座层数 1–4；不给 = 4；其他工作站忽略
             Integer beaconLevel = optionalInt(params, "beaconLevel");
+            // 坐骑训练场（坐骑方案 H2）：本轮生成什么动物；其他工作站不给
+            ArenaManager.MountSetup mountSetup = mountSetup(params.get("mount"));
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup));
         });
         // 附魔台训练场（附魔台方案 N5）：三档预览，只读、不碰世界
         handlers.put("arena/enchant-preview", params -> {
@@ -74,6 +76,17 @@ public class ArenaApi {
             UUID uuid = localPlayer();
             return onServer(5_000, server -> ArenaManager.anvilPreview(server, player(server, uuid), left, right, (String) name));
         });
+        // 锻造台训练场（锻造台方案 M2）：全部锻造配方、可加纹饰的盔甲、纹饰材料，只读
+        handlers.put("arena/smithing-catalog", params -> onServer(5_000, ArenaManager::smithingCatalog));
+        // 锻造台训练场（锻造台方案 M4）：用服务器的锻造配方算产物，只读
+        handlers.put("arena/smithing-preview", params -> {
+            if (!(params.get("template") instanceof String template) || !(params.get("base") instanceof String base) || !(params.get("addition") instanceof String addition)) {
+                throw new IllegalArgumentException("template, base and addition must be item ids");
+            }
+            return onServer(5_000, server -> ArenaManager.smithingPreview(server, template, base, addition));
+        });
+        // 坐骑训练场（坐骑方案 H10）：每种动物能装什么、箱子几格，只读
+        handlers.put("arena/mount-catalog", params -> onServer(10_000, ArenaManager::mountCatalog));
         handlers.put("arena/status", params -> onServer(5_000, ArenaManager::status));
         handlers.put("arena/finish", params -> {
             String arena = arena(params);
@@ -183,12 +196,39 @@ public class ArenaApi {
     /**
      * 三种写法：箱子 { inventory: { id: n }, container: { id: n } }；切石机 { targets: { id: n }, allowed: [id...] }（切石机方案 Q9）；
      * 炉子 { cook: { raw, rawLeft, fuel, fuelLeft, product } }（熔炉方案 K8）；附魔台 { enchant: { item, result, enchantment, level } }（附魔台方案 N8）；
-     * 信标 { beacon: { payment, effects: [{ effect, amplifier }] } }（信标方案 G7）；铁砧 { anvil: { item, enchantments: { id: level }, name } }（铁砧方案 A7）。
+     * 信标 { beacon: { payment, effects: [{ effect, amplifier }] } }（信标方案 G7）；铁砧 { anvil: { item, enchantments: { id: level }, name } }（铁砧方案 A7）；
+     * 锻造台 { smithing: [{ item, trim: { pattern, material } | null }] }（锻造台方案 M7）；
+     * 坐骑 { mount: { saddle?: id | null, body?: id | null, chest: { id: n }, inventory: { id: n } } }（坐骑方案 H6；写了 saddle / body 才检查，null = 要空着）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
     private static ArenaManager.Expect expect(Object v) {
         if (v == null) return null;
         if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("expect must be { inventory: { id: n }, container: { id: n } }, { targets: { id: n }, allowed: [id...] } or { cook: { raw, rawLeft, fuel, fuelLeft, product } }");
+        if (m.containsKey("mount")) {
+            String usage = "expect.mount must be { saddle?: string | null, body?: string | null, chest: { id: n }, inventory: { id: n } }";
+            if (!(m.get("mount") instanceof Map<?, ?> g)) throw new IllegalArgumentException(usage);
+            for (String key : List.of("saddle", "body")) if (g.get(key) != null && !(g.get(key) instanceof String)) throw new IllegalArgumentException(usage);
+            return new ArenaManager.Expect(new ArenaManager.MountGoal(
+                    g.containsKey("saddle"), (String) g.get("saddle"), g.containsKey("body"), (String) g.get("body"),
+                    Map.copyOf(counts(g.get("chest"), "expect.mount.chest")), Map.copyOf(counts(g.get("inventory"), "expect.mount.inventory"))));
+        }
+        if (m.containsKey("smithing")) {
+            String usage = "expect.smithing must be a non-empty list of { item:string, trim: { pattern:string, material:string } | null }";
+            if (!(m.get("smithing") instanceof List<?> list) || list.isEmpty()) throw new IllegalArgumentException(usage);
+            List<ArenaManager.Smith> goals = new ArrayList<>();
+            for (Object o : list) {
+                if (!(o instanceof Map<?, ?> g) || !(g.get("item") instanceof String item)) throw new IllegalArgumentException(usage);
+                Object trim = g.get("trim");
+                if (trim == null) {
+                    goals.add(new ArenaManager.Smith(item, null, null));
+                } else if (trim instanceof Map<?, ?> t && t.get("pattern") instanceof String pattern && t.get("material") instanceof String material) {
+                    goals.add(new ArenaManager.Smith(item, pattern, material));
+                } else {
+                    throw new IllegalArgumentException(usage);
+                }
+            }
+            return new ArenaManager.Expect(List.copyOf(goals));
+        }
         if (m.containsKey("anvil")) {
             if (!(m.get("anvil") instanceof Map<?, ?> a) || !(a.get("item") instanceof String item) || !(a.get("enchantments") instanceof Map<?, ?>)
                     || (a.get("name") != null && !(a.get("name") instanceof String))) {
@@ -235,6 +275,18 @@ public class ArenaApi {
             return new ArenaManager.Expect(Map.of(), Map.of(), targets, Set.copyOf(allowed));
         }
         return new ArenaManager.Expect(counts(m.get("inventory"), "expect.inventory"), counts(m.get("container"), "expect.container"));
+    }
+
+    /** 坐骑方案 H2：{ animal, saddle?, body?, chest?: [{ slot, id, count }], strength? }；null → null。 */
+    private static ArenaManager.MountSetup mountSetup(Object v) {
+        if (v == null) return null;
+        String usage = "mount must be { animal:string, saddle?:string, body?:string, chest?: [{ slot, id, count }], strength?:int }";
+        if (!(v instanceof Map<?, ?> m) || !(m.get("animal") instanceof String animal)) throw new IllegalArgumentException(usage);
+        for (String key : List.of("saddle", "body")) if (m.get(key) != null && !(m.get(key) instanceof String)) throw new IllegalArgumentException(usage);
+        Object strength = m.get("strength");
+        if (strength != null && !(strength instanceof Number n && n.doubleValue() == Math.rint(n.doubleValue()))) throw new IllegalArgumentException(usage);
+        List<ArenaManager.Give> chest = m.get("chest") == null ? List.of() : gives(m.get("chest"), "mount.chest");
+        return new ArenaManager.MountSetup(animal, (String) m.get("saddle"), (String) m.get("body"), chest, strength == null ? null : ((Number) strength).intValue());
     }
 
     /** 可选的整数参数：缺省或 null → null；不是整数 → 报错。 */

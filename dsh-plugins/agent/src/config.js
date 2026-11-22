@@ -7,6 +7,8 @@ import { COOK_CHOICES, parseCookSlotsSpec, parseTotalSpec } from './training/coo
 import { parseBookshelves, parseXpLevel } from './training/enchant.js'
 import { beaconPool, parseAmplifier, parseBeaconCountSpec } from './training/beacon.js'
 import { parseAnvilXpLevel, parseCurses, parseEnchantsSpec } from './training/anvil.js'
+import { parseTasksSpec } from './training/smithing.js'
+import { parseMountGroups, parseMountMove, parseMountTotal } from './training/mount.js'
 import { parseCountSpec } from './training/sampler.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
@@ -20,6 +22,10 @@ const ENCHANT_ARENA_DEFAULTS = Object.freeze({ bookshelves: 15, xpLevel: 30, exc
 const BEACON_ARENA_DEFAULTS = Object.freeze({ amplifier: 'mix', count: '32-64', exclude: [] })
 /** 用户自己加的铁砧场地（type: 'anvil'）没写的字段（铁砧训练场设计方案 §6） */
 const ANVIL_ARENA_DEFAULTS = Object.freeze({ xpLevel: 216, enchants: '1-3', curses: false, exclude: [] })
+/** 用户自己加的锻造台场地（type: 'smithing'）没写的字段（锻造台训练场设计方案 §6） */
+const SMITHING_ARENA_DEFAULTS = Object.freeze({ tasks: '1-4', exclude: [] })
+/** 用户自己加的坐骑场地（type: 'mount'）没写的字段（坐骑训练场设计方案 §6） */
+const MOUNT_ARENA_DEFAULTS = Object.freeze({ groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] })
 const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
 const steveXRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -43,7 +49,9 @@ export const DEFAULTS = Object.freeze({
     stonecutting: 'dsh-plugins/agent/data/stonecutting.json',
     /** 熔炉 / 高炉 / 烟熏炉 / 营火配方（熔炉训练场设计方案 K10） */
     cooking: 'dsh-plugins/agent/data/cooking.json',
-    /** 物品的堆叠上限、合成剩余物、燃料时长（熔炉训练场设计方案 K10） */
+    /** 锻造台配方：升级和纹饰（锻造台训练场设计方案 M9） */
+    smithing: 'dsh-plugins/agent/data/smithing.json',
+    /** 物品的堆叠上限、合成剩余物、燃料时长、可附魔程度、纹饰材料（熔炉训练场设计方案 K10；锻造台训练场设计方案 M9） */
     items: 'dsh-plugins/agent/data/items.json'
   },
   /** core.nbt.query 读的采集端落盘目录（相对 steveX/） */
@@ -116,6 +124,11 @@ export const DEFAULTS = Object.freeze({
     enabled: true,
     /** failed 的任务也复盘（人 /bt abort、会话没了的除外，P4-D1） */
     onFailed: true,
+    /**
+     * done 的任务什么时候复盘（2026-11-21）：'changed' = 有新情况才复盘——没有参考过同类任务、树展开或修补过、
+     * 有节点报错、执行了新草稿、第一次执行某个胶囊版本、mod 调用次数和参考任务里最少的那次不一样；都没有就只写任务历史。'always' = 每次都复盘
+     */
+    onDone: 'changed',
     /** 保存胶囊时查写死的值（P4 §5）；false 只用于调试 */
     literalCheck: true,
     /** 自动复盘在哪个会话里做：'new' = 另开新会话（不带规划回合的上下文，2026-11-07）；'same' = 任务会话。/bt reflect 手动复盘总在当前会话 */
@@ -170,6 +183,10 @@ export const DEFAULTS = Object.freeze({
      *     exclude: 不出的效果 id（也不当再生题的主效果）, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/信标训练场设计方案.md
      * 'anvil' = 铁砧，字段是 { origin, xpLevel: 每轮的经验等级（39–1000）, enchants: 第二件物品带几个附魔 "k" | "a-b"（1–5）, curses: 第二件的附魔里能不能有诅咒,
      *     exclude: 不用的物品 id, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/铁砧训练场设计方案.md
+     * 'smithing' = 锻造台，字段是 { origin, tasks: 一轮几道题 "k" | "a-b"（1–4）, exclude: 不出的底材、升级结果、模板、纹饰样式、纹饰材料或材料物品的 id,
+     *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/锻造台训练场设计方案.md
+     * 'mount' = 坐骑（动物身上的物品栏），字段是 { origin, groups: 出哪几组动物（horse / donkey / camel / llama / nautilus）, total: 两格物品的总数 "k" | "a-b"（2–128）,
+     *     move: 要搬的数量 "k" | "a-b"（1–64）, exclude: 物品池里不抽的物品 id, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/坐骑训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
@@ -180,7 +197,9 @@ export const DEFAULTS = Object.freeze({
       enchanting: { type: 'enchant', origin: [10000, 120, 10150], timeoutSec: 600, bookshelves: 15, xpLevel: 30, exclude: [] },
       // 信标场地换到 x = 10100（信标训练场设计方案 G1）：4 级信标的水平范围是 50 格，和其他场地要隔开 50 格以上
       beacon: { type: 'beacon', origin: [10100, 120, 10000], timeoutSec: 600, amplifier: 'mix', count: '32-64', exclude: [] },
-      anvil: { type: 'anvil', origin: [10000, 120, 10180], timeoutSec: 600, xpLevel: 216, enchants: '1-3', curses: false, exclude: [] }
+      anvil: { type: 'anvil', origin: [10000, 120, 10180], timeoutSec: 600, xpLevel: 216, enchants: '1-3', curses: false, exclude: [] },
+      smithing: { type: 'smithing', origin: [10000, 120, 10210], timeoutSec: 600, tasks: '1-4', exclude: [] },
+      mount: { type: 'mount', origin: [10000, 120, 10240], timeoutSec: 600, groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] }
     }
   },
   planner: {
@@ -222,6 +241,7 @@ export function normalizeConfig(raw = {}) {
   for (const key of ['batchSize', 'batchMaxEvents', 'reflectMaxParallel', 'incidentQuietMs', 'episodeMergeMs', 'snapshotKeep', 'maxArms', 'maxNodesPerArm', 'maxEpisodeMs']) {
     if (!(Number.isInteger(config.fast[key]) && config.fast[key] > 0)) throw new Error(`stevex-agent config: fast.${key} must be a positive integer`)
   }
+  if (!['changed', 'always'].includes(config.reflect.onDone)) throw new Error('stevex-agent config: reflect.onDone must be "changed" or "always"')
   if (!(Number.isInteger(config.curate.everyTasks) && config.curate.everyTasks >= 0)) throw new Error('stevex-agent config: curate.everyTasks must be a non-negative integer (0 = manual only)')
   if (!(Number.isInteger(config.curate.listLimit) && config.curate.listLimit > 0)) throw new Error('stevex-agent config: curate.listLimit must be a positive integer')
   for (const key of ['timeoutSec', 'wallTimeoutSec', 'pollMs']) {
@@ -236,10 +256,29 @@ export function normalizeConfig(raw = {}) {
       throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
     }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
-      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil'].includes(arena.type) ? 'item ids' : 'recipe names'}`)
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon" or "anvil"`)
+    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing" or "mount"`)
+    if (type === 'mount') {
+      try {
+        parseMountGroups(arena.groups)
+        const total = parseMountTotal(arena.total)
+        const move = parseMountMove(arena.move)
+        if (move.lo > total.lo) throw new Error(`move 的下限 ${move.lo} 大于 total 的下限 ${total.lo}`)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'smithing') {
+      try {
+        parseTasksSpec(arena.tasks)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (type === 'anvil') {
       try {
         parseAnvilXpLevel(arena.xpLevel)
@@ -356,6 +395,10 @@ function normalizeTraining(raw = {}) {
             ? { ...BEACON_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
           : type === 'anvil'
             ? { ...ANVIL_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'smithing'
+            ? { ...SMITHING_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'mount'
+            ? { ...MOUNT_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
         : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }

@@ -32,6 +32,17 @@ import net.minecraft.world.inventory.StonecutterMenu;
 import net.minecraft.world.inventory.EnchantmentMenu;
 import net.minecraft.world.inventory.BeaconMenu;
 import net.minecraft.world.inventory.AnvilMenu;
+import net.minecraft.world.inventory.SmithingMenu;
+import net.minecraft.world.inventory.AbstractMountInventoryMenu;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.animal.equine.AbstractHorse;
+import net.minecraft.world.entity.animal.nautilus.AbstractNautilus;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.phys.EntityHitResult;
+import name.modid.mixin.MountMenuAccessor;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.block.AnvilBlock;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.core.Holder;
@@ -107,6 +118,16 @@ import net.minecraft.world.phys.Vec3;
  * 开裂、损坏的铁砧也算工作站还在。arena/anvil-catalog、arena/anvil-preview 是出题用的只读接口（{@link AnvilArena}，A2、A4）；
  * prepare 发带附魔的物品、设经验等级，登记"铁砧"写法的目标（{@link Anvil}，A7）；取出产物由 {@code AnvilTakeMixin} 报给 {@link #onAnvilTake}；
  * status 另报物品栏、光标、铁砧两格、地上掉落物、界面开没开、铁砧的状态、经验等级、取出记录。
+ *
+ * <p>锻造台场地（docs/锻造台训练场设计方案.md）：工作站是锻造台（{@code smithing_table}，不会损坏，M1）。arena/smithing-catalog、
+ * arena/smithing-preview 是出题用的只读接口（{@link SmithingArena}，M2、M4）；prepare 登记"锻造"写法的目标（{@link Smith}，可以有多个，M7）；
+ * 取出产物由 {@code SmithingTakeMixin} 报给 {@link #onSmithingTake}；status 另报物品栏（每件带纹饰）、光标、锻造台三格、地上掉落物、
+ * 界面开没开、取出记录。
+ *
+ * <p>坐骑场地（docs/坐骑训练场设计方案.md）：工作站是一只动物（{@code mount}，实体工作站）。方块上只留空气；鹦鹉螺组把下面那格地板换成水坑（H1）。
+ * prepare 先让玩家下坐骑、清掉场内的坐骑类动物，再按 {@link MountSetup} 生成本轮的动物（{@link MountArena#spawn}，H2），记下 UUID；
+ * 准星自检改成实体射线检测；登记"坐骑"写法的目标（{@link MountGoal}，H6）；status 另报动物身上的东西、物品栏、光标、地上掉落物、
+ * 界面开没开、骑没骑着、第一次骑上的时刻、有没有不开界面直接装备；finish 先让玩家下来再传送（H8）。动物不在了算工作站被毁。
  */
 public final class ArenaManager {
 
@@ -128,21 +149,26 @@ public final class ArenaManager {
             Map.entry("smoker", Blocks.SMOKER),
             Map.entry("enchanting_table", Blocks.ENCHANTING_TABLE),
             Map.entry("beacon", Blocks.BEACON),
-            Map.entry("anvil", Blocks.ANVIL));
+            Map.entry("anvil", Blocks.ANVIL),
+            Map.entry("smithing_table", Blocks.SMITHING_TABLE),
+            // 坐骑场地（坐骑方案 H1）：工作站是动物，方块位置上只留空气
+            Map.entry("mount", Blocks.AIR));
 
     /**
      * 已知场地：名字 → Site。arena/build 会登记或更新；/arena 命令按这里传送。
      * 信标场地换到 x = 10100（信标方案 G1）：4 级信标的水平范围是 50 格，沿 z 轴每隔 30 格排会覆盖附魔台场地。
      */
-    private static final Map<String, Site> KNOWN = new ConcurrentHashMap<>(Map.of(
-            "craft2x2", new Site(DEFAULT_ORIGIN, null),
-            "craft3x3", new Site(new BlockPos(10000, 120, 10030), "crafting_table"),
-            "chest", new Site(new BlockPos(10000, 120, 10060), "chest"),
-            "stonecutter", new Site(new BlockPos(10000, 120, 10090), "stonecutter"),
-            "furnace", new Site(new BlockPos(10000, 120, 10120), "furnace"),
-            "enchanting", new Site(new BlockPos(10000, 120, 10150), "enchanting_table"),
-            "beacon", new Site(new BlockPos(10100, 120, 10000), "beacon"),
-            "anvil", new Site(new BlockPos(10000, 120, 10180), "anvil")));
+    private static final Map<String, Site> KNOWN = new ConcurrentHashMap<>(Map.ofEntries(
+            Map.entry("craft2x2", new Site(DEFAULT_ORIGIN, null)),
+            Map.entry("craft3x3", new Site(new BlockPos(10000, 120, 10030), "crafting_table")),
+            Map.entry("chest", new Site(new BlockPos(10000, 120, 10060), "chest")),
+            Map.entry("stonecutter", new Site(new BlockPos(10000, 120, 10090), "stonecutter")),
+            Map.entry("furnace", new Site(new BlockPos(10000, 120, 10120), "furnace")),
+            Map.entry("enchanting", new Site(new BlockPos(10000, 120, 10150), "enchanting_table")),
+            Map.entry("beacon", new Site(new BlockPos(10100, 120, 10000), "beacon")),
+            Map.entry("anvil", new Site(new BlockPos(10000, 120, 10180), "anvil")),
+            Map.entry("smithing", new Site(new BlockPos(10000, 120, 10210), "smithing_table")),
+            Map.entry("mount", new Site(new BlockPos(10000, 120, 10240), "mount"))));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -158,34 +184,65 @@ public final class ArenaManager {
      *   <li>附魔台方案 N8（enchant 不为 null）：见 {@link Enchant}。</li>
      *   <li>信标方案 G7（beacon 不为 null）：见 {@link Beacon}。</li>
      *   <li>铁砧方案 A7（anvil 不为 null）：见 {@link Anvil}。</li>
+     *   <li>锻造台方案 M7（smithing 不为 null）：见 {@link Smith}。</li>
+     *   <li>坐骑方案 H6（mount 不为 null）：见 {@link MountGoal}。</li>
      * </ul>
      * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil) {
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount) {
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
-            this(inventory, container, null, null, null, null, null, null);
+            this(inventory, container, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
-            this(inventory, container, targets, allowed, null, null, null, null);
+            this(inventory, container, targets, allowed, null, null, null, null, null, null);
         }
 
         public Expect(Cook cook) {
-            this(Map.of(), Map.of(), null, null, cook, null, null, null);
+            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null);
         }
 
         public Expect(Enchant enchant) {
-            this(Map.of(), Map.of(), null, null, null, enchant, null, null);
+            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null);
         }
 
         public Expect(Beacon beacon) {
-            this(Map.of(), Map.of(), null, null, null, null, beacon, null);
+            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null);
         }
 
         public Expect(Anvil anvil) {
-            this(Map.of(), Map.of(), null, null, null, null, null, anvil);
+            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null);
+        }
+
+        public Expect(List<Smith> smithing) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null);
+        }
+
+        public Expect(MountGoal mount) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount);
         }
     }
+
+    /**
+     * 坐骑方案 H5、H6 的目标：本轮的动物还在；checkSaddle / checkBody 为真时鞍槽、身体槽里恰好是 saddle / body（null = 空着）；
+     * 动物的箱子按物品 id 合计恰好是 chest；玩家身上（不含光标）按物品 id 合计恰好是 inventory；光标为空。不要求关界面、不要求下坐骑。
+     */
+    public record MountGoal(boolean checkSaddle, String saddle, boolean checkBody, String body, Map<String, Integer> chest, Map<String, Integer> inventory) {}
+
+    /**
+     * 坐骑方案 H2：本轮生成什么动物。animal = 注册名（10 种之一）；saddle / body = 一开始装着的（null = 空）；
+     * chest = 箱子里一开始放的（slot 是箱子格号，从 0 起）；strength = 羊驼的力量（null = 不设，只有羊驼能设）。
+     */
+    public record MountSetup(String animal, String saddle, String body, List<Give> chest, Integer strength) {}
+
+    /** 鹦鹉螺组的水坑（坐骑方案 H1）：prepare 按本轮的动物设，build 据此把动物脚下那格地板换成水源或换回石头 */
+    private static boolean mountWater = false;
+
+    /**
+     * 锻造台方案 M6、M7 的一个目标：物品 id 是 item，纹饰是 { pattern, material }（注册名；两者都为 null = 不带纹饰）。
+     * 玩家身上（不含光标）能给每个目标配上各不相同的一件物品，就算到达（{@link SmithingArena#assign}）。不要求关界面。
+     */
+    public record Smith(String item, String pattern, String material) {}
 
     /**
      * 铁砧方案 A6、A7 的目标：玩家身上（不含光标）有一件物品，类型是 item，附魔恰好是 enchantments（附魔书读存储的附魔），
@@ -248,6 +305,14 @@ public final class ArenaManager {
         final List<Map<String, Object>> beaconSets = new ArrayList<>();
         // 铁砧方案 A7：每次取出产物的花费、产物和时刻（AnvilTakeMixin 报来）
         final List<Map<String, Object>> anvilTakes = new ArrayList<>();
+        // 锻造台方案 M7：每次取出的产物和时刻（SmithingTakeMixin 报来）
+        final List<Map<String, Object>> smithingTakes = new ArrayList<>();
+        // 坐骑方案 H2、H6：本轮的动物、第一次骑上的时刻、有没有不开界面直接装备（上一 tick 看到的鞍槽 / 身体槽）
+        UUID mountUuid;
+        Long rodeAtMs;
+        boolean equippedWithoutMenu;
+        String lastSaddle;
+        String lastBody;
 
         Run(String arena, BlockPos origin, UUID player, List<Watch> watch, long startedAtMs, String stationName, Block station, Expect expect) {
             this.arena = arena;
@@ -319,17 +384,78 @@ public final class ArenaManager {
         return "anvil".equals(station);
     }
 
+    /** 坐骑工作站（坐骑方案）：工作站是一只动物，不是方块。 */
+    public static boolean isMount(String station) {
+        return "mount".equals(station);
+    }
+
+    /** 坐骑方案 H10：每种动物能装什么、箱子几格（只读）。 */
+    public static Map<String, Object> mountCatalog(MinecraftServer server) {
+        return MountArena.catalog(server.overworld());
+    }
+
+    /** 本轮的动物；不在了（被清掉、跑出场地范围）→ null */
+    private static Mob mountOf(ServerLevel level, Run run) {
+        if (run == null || run.mountUuid == null) return null;
+        Entity entity = level.getEntity(run.mountUuid);
+        if (!(entity instanceof Mob mob) || !mob.isAlive() || !box(run.origin).contains(mob.position())) return null;
+        return mob;
+    }
+
+    /** 场内的坐骑类动物（马类、羊驼、骆驼、鹦鹉螺）：坐骑场地每轮开局清掉（H2） */
+    private static boolean isMountEntity(Entity e) {
+        return e instanceof AbstractHorse || e instanceof AbstractNautilus;
+    }
+
+    /** 动物生成的位置（H1）：工作站那一格的中心；鹦鹉螺组站在水坑里，低一格 */
+    private static Vec3 mountPos(BlockPos o, String animal) {
+        BlockPos at = stationPos(o);
+        return new Vec3(at.getX() + 0.5, MountArena.needsWater(animal) ? at.getY() - 1 : at.getY(), at.getZ() + 0.5);
+    }
+
+    /** 站在场内中心朝 +z 时，眼睛 → 动物身上一点的俯角（H1）。瞄准点取身高的 0.7（不超过顶下 0.2），鹦鹉螺在坑里时视线不擦过地板边 */
+    private static float mountPitch(ServerPlayer player, BlockPos o, String animal) {
+        Vec3 at = mountPos(o, animal);
+        float height = MountArena.type(animal).getHeight();
+        double aimY = at.y + Math.min(height * 0.7, height - 0.2);
+        double dy = (o.getY() + 1 + player.getEyeHeight()) - aimY;
+        double dz = at.z - (o.getZ() + 0.5);
+        return (float) Math.toDegrees(Math.atan2(dy, dz));
+    }
+
+    /** 服务器侧按玩家当前位置与朝向做一次实体射线检测：准星命中的是这只动物，且中间没有方块挡着（H1 自检） */
+    private static boolean aimsAtEntity(ServerPlayer player, Entity target) {
+        Vec3 eye = player.getEyePosition();
+        Vec3 dir = Vec3.directionFromRotation(player.getXRot(), player.getYRot());
+        double range = player.entityInteractionRange();
+        Vec3 end = eye.add(dir.scale(range));
+        EntityHitResult hit = ProjectileUtil.getEntityHitResult(player, eye, end, player.getBoundingBox().expandTowards(dir.scale(range)).inflate(1.0), e -> !e.isSpectator() && e.isPickable(), range * range);
+        if (hit == null || !hit.getEntity().getUUID().equals(target.getUUID())) return false;
+        BlockHitResult block = player.level().clip(new ClipContext(eye, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+        return block.getType() != HitResult.Type.BLOCK || eye.distanceToSqr(hit.getLocation()) <= eye.distanceToSqr(block.getLocation());
+    }
+
+    /** 当前界面是不是这只动物的物品栏 */
+    private static boolean opensMount(Run run, AbstractContainerMenu menu) {
+        if (!(menu instanceof AbstractMountInventoryMenu) || run.mountUuid == null) return false;
+        var mount = ((MountMenuAccessor) menu).stevex$mount();
+        return mount != null && run.mountUuid.equals(mount.getUUID());
+    }
+
+    /** 锻造台工作站（锻造台方案）：没有方块实体，关界面时三个输入格退回物品栏（F9）；不会损坏（F11）。 */
+    public static boolean isSmithing(String station) {
+        return "smithing_table".equals(station);
+    }
+
     /**
      * 铁砧方案 A7：玩家即将从铁砧取出产物（{@code AnvilTakeMixin} 调用，服务器线程；此时还没扣经验）。
      * 本轮的玩家在铁砧场地取的才记：花费、产物的附魔和名字、时刻。
      */
     public static void onAnvilTake(ServerPlayer player, int cost, ItemStack result) {
-        ItemStack noted = player.getUUID().equals(anvilResultOwner) ? anvilResult : ItemStack.EMPTY;
-        anvilResultOwner = null;
-        anvilResult = ItemStack.EMPTY;
+        ItemStack noted = takeNoted(player);
         Run run = active;
         if (run == null || !isAnvil(run.stationName) || !player.getUUID().equals(run.player)) return;
-        // Shift 点击取出时 onTake 拿到的是已经移空的叠，改用 quickMoveStack 开头复制的那份（AnvilQuickMoveMixin）
+        // Shift 点击取出时 onTake 拿到的是已经移空的叠，改用 quickMoveStack 开头复制的那份（CombinerQuickMoveMixin）
         if (result.isEmpty()) result = noted;
         Map<String, Object> take = new LinkedHashMap<>();
         take.put("cost", cost);
@@ -339,14 +465,75 @@ public final class ArenaManager {
         run.anvilTakes.add(take);
     }
 
-    /** Shift 点击铁砧产物格时，移走之前的产物副本（AnvilQuickMoveMixin 记，onAnvilTake 取用后清掉；服务器线程，不加锁） */
-    private static UUID anvilResultOwner;
-    private static ItemStack anvilResult = ItemStack.EMPTY;
+    /**
+     * 锻造台方案 M7：玩家即将从锻造台取出产物（{@code SmithingTakeMixin} 调用，服务器线程）。本轮的玩家在锻造台场地取的才记：产物的 id、纹饰、时刻。
+     * Shift 点击取出时拿到的是空物品（F8），改用 quickMoveStack 开头复制的那份。
+     */
+    public static void onSmithingTake(ServerPlayer player, ItemStack result) {
+        ItemStack noted = takeNoted(player);
+        Run run = active;
+        if (run == null || !isSmithing(run.stationName) || !player.getUUID().equals(run.player)) return;
+        if (result.isEmpty()) result = noted;
+        Map<String, Object> take = new LinkedHashMap<>();
+        take.put("result", SmithingArena.describe(result));
+        take.put("atMs", System.currentTimeMillis());
+        run.smithingTakes.add(take);
+    }
 
-    /** AnvilQuickMoveMixin：quickMoveStack 开头、对铁砧产物格的那一次，记下产物的副本。 */
-    public static void noteAnvilResult(ServerPlayer player, ItemStack result) {
-        anvilResultOwner = player.getUUID();
-        anvilResult = result.copy();
+    /**
+     * Shift 点击铁砧、锻造台产物格时，移走之前的产物副本（CombinerQuickMoveMixin 记，onAnvilTake / onSmithingTake 取用后清掉；
+     * 服务器线程，不加锁）
+     */
+    private static UUID combinerResultOwner;
+    private static ItemStack combinerResult = ItemStack.EMPTY;
+
+    /** CombinerQuickMoveMixin：quickMoveStack 开头、对铁砧或锻造台产物格的那一次，记下产物的副本。 */
+    public static void noteCombinerResult(ServerPlayer player, ItemStack result) {
+        combinerResultOwner = player.getUUID();
+        combinerResult = result.copy();
+    }
+
+    /** 取走这个玩家记下的产物副本（不是这个玩家的 → 空），并清掉。 */
+    private static ItemStack takeNoted(ServerPlayer player) {
+        ItemStack noted = player.getUUID().equals(combinerResultOwner) ? combinerResult : ItemStack.EMPTY;
+        combinerResultOwner = null;
+        combinerResult = ItemStack.EMPTY;
+        return noted;
+    }
+
+    /** 锻造台方案 M2：全部锻造配方、可加纹饰的盔甲、纹饰材料（只读）。 */
+    public static Map<String, Object> smithingCatalog(MinecraftServer server) {
+        return SmithingArena.catalog(server);
+    }
+
+    /** 锻造台方案 M4：用服务器的锻造配方算产物（只读）。 */
+    public static Map<String, Object> smithingPreview(MinecraftServer server, String template, String base, String addition) {
+        return SmithingArena.preview(server, item(template), item(base), item(addition));
+    }
+
+    /** 当前界面是锻造台时三个输入格：{ template, base, addition }（各是物品摘要或 null）；不是锻造台界面 → null。 */
+    private static Map<String, Object> smithingSlots(AbstractContainerMenu menu) {
+        if (!(menu instanceof SmithingMenu sm)) return null;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("template", SmithingArena.describe(sm.getSlot(SmithingMenu.TEMPLATE_SLOT).getItem()));
+        out.put("base", SmithingArena.describe(sm.getSlot(SmithingMenu.BASE_SLOT).getItem()));
+        out.put("addition", SmithingArena.describe(sm.getSlot(SmithingMenu.ADDITIONAL_SLOT).getItem()));
+        return out;
+    }
+
+    /** 锻造台方案 M7：目标里的物品、纹饰样式、纹饰材料都要存在；不存在 → 报错。 */
+    private static void checkSmith(MinecraftServer server, Smith goal) {
+        item(goal.item());
+        if ((goal.pattern() == null) != (goal.material() == null)) throw new IllegalArgumentException("expect.smithing: pattern and material must both be set or both be null");
+        if (goal.pattern() == null) return;
+        Identifier pattern = Identifier.tryParse(goal.pattern());
+        if (pattern == null || server.registryAccess().lookupOrThrow(Registries.TRIM_PATTERN).get(ResourceKey.create(Registries.TRIM_PATTERN, pattern)).isEmpty()) {
+            throw new IllegalArgumentException("unknown trim pattern: " + goal.pattern());
+        }
+        Identifier material = Identifier.tryParse(goal.material());
+        if (material == null || server.registryAccess().lookupOrThrow(Registries.TRIM_MATERIAL).get(ResourceKey.create(Registries.TRIM_MATERIAL, material)).isEmpty()) {
+            throw new IllegalArgumentException("unknown trim material: " + goal.material());
+        }
     }
 
     /** 铁砧方案 A2：物品池和每件物品能附的附魔（只读）。 */
@@ -493,6 +680,11 @@ public final class ArenaManager {
             }
             // 铁砧方案 A1：朝向固定；开裂、损坏的铁砧状态不同，build 会把它换回完好的
             case "anvil" -> out.put(at, Blocks.ANVIL.defaultBlockState().setValue(AnvilBlock.FACING, Direction.EAST));
+            case "mount" -> {
+                // 坐骑方案 H1：动物站的那一格是空气；鹦鹉螺组下面那格地板换成水源（四周是地板，水不会流出去）
+                out.put(at, Blocks.AIR.defaultBlockState());
+                out.put(at.below(), mountWater ? Blocks.WATER.defaultBlockState() : Blocks.STONE.defaultBlockState());
+            }
             default -> out.put(at, station(station).defaultBlockState());
         }
         return out;
@@ -701,13 +893,23 @@ public final class ArenaManager {
      */
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
                                               List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
-                                              Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel) {
+                                              Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel, MountSetup mountSetup) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         Block stationBlock = station(station);
         checkChestItems(chestItems, storageCapacity(station));
         int baseLevel = requestedBeaconLevel != null ? requestedBeaconLevel : BeaconArena.MAX_LEVEL;
         if (isBeacon(station) && (baseLevel < 1 || baseLevel > BeaconArena.MAX_LEVEL)) throw new IllegalArgumentException("beaconLevel must be within 1-" + BeaconArena.MAX_LEVEL + ": " + baseLevel);
-        if (expect != null && expect.anvil() != null) {
+        if (isMount(station)) {
+            if (mountSetup == null) throw new IllegalArgumentException("the mount station needs mount: { animal, saddle?, body?, chest?, strength? }");
+            MountArena.type(mountSetup.animal()); // 不认识的动物在这里报错
+        }
+        if (expect != null && expect.mount() != null) {
+            if (!isMount(station)) throw new IllegalArgumentException("expect { mount } needs the mount station");
+        } else if (expect != null && expect.smithing() != null) {
+            if (!isSmithing(station)) throw new IllegalArgumentException("expect { smithing } needs the smithing_table station");
+            if (expect.smithing().isEmpty()) throw new IllegalArgumentException("expect.smithing is empty");
+            for (Smith goal : expect.smithing()) checkSmith(server, goal);
+        } else if (expect != null && expect.anvil() != null) {
             if (!isAnvil(station)) throw new IllegalArgumentException("expect { anvil } needs the anvil station");
             AnvilArena.stack(server.registryAccess(), item(expect.anvil().item()), 1, expect.anvil().enchantments()); // 未知 id、级数不对在这里报错
         } else if (expect != null && expect.beacon() != null) {
@@ -751,6 +953,11 @@ public final class ArenaManager {
             shelfCount = shelves;
         }
         // 信标（信标方案 G2、F8）：本轮的底座层数决定 build 铺哪几层、工作站完好检查看哪些格子；旧信标拆掉，build 放一个新的（效果清空）
+        // 坐骑（坐骑方案 H1、H2、H8）：先让玩家下来；鹦鹉螺组的水坑由 build 按 mountWater 铺
+        if (isMount(station)) {
+            player.stopRiding();
+            mountWater = MountArena.needsWater(mountSetup.animal());
+        }
         if (isBeacon(station)) {
             beaconLevel = baseLevel;
             if (level.getBlockState(stationAt).is(Blocks.BEACON)) level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
@@ -763,11 +970,17 @@ public final class ArenaManager {
         // 2. 清空物品栏（含盔甲、副手）
         player.getInventory().clearContent();
         player.inventoryMenu.getCraftSlots().clearContent();
-        teleportInside(server, player, o, stationBlock != null ? stationPitch(player, o) : 0f);
+        teleportInside(server, player, o, isMount(station) ? mountPitch(player, o, mountSetup.animal()) : stationBlock != null ? stationPitch(player, o) : 0f);
         // 3. 场内掉落物、经验球、敌对生物
         for (Entity e : level.getEntitiesOfClass(Entity.class, box(o),
-                e -> e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy)) {
+                e -> e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy || (isMount(station) && isMountEntity(e)))) {
             e.discard();
+        }
+        // 3b. 坐骑（坐骑方案 H2）：生成本轮的动物，参数不对在这里报错
+        Mob mount = null;
+        if (isMount(station)) {
+            Vec3 at = mountPos(o, mountSetup.animal());
+            mount = MountArena.spawn(level, player, mountSetup, at.x, at.y, at.z, 180f);
         }
         // 4. 状态
         player.setGameMode(GameType.SURVIVAL);
@@ -825,6 +1038,11 @@ public final class ArenaManager {
             baseline.put(watchIds.get(i), value);
         }
         active = new Run(arena, o.immutable(), player.getUUID(), watch, System.currentTimeMillis(), station, stationBlock, expect);
+        if (mount != null) {
+            active.mountUuid = mount.getUUID();
+            active.lastSaddle = MountArena.worn(mount, EquipmentSlot.SADDLE);
+            active.lastBody = MountArena.worn(mount, EquipmentSlot.BODY);
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("arena", arena);
@@ -844,7 +1062,7 @@ public final class ArenaManager {
         if (stationBlock != null) {
             out.put("station", station);
             out.put("pitch", player.getXRot());
-            out.put("aimOk", aimsAt(player, stationPos(o), stationBlock));
+            out.put("aimOk", mount != null ? aimsAtEntity(player, mount) : aimsAt(player, stationPos(o), stationBlock));
         }
         if (chest != null) {
             // 大箱子没连上时这里是 27（C2 自检）
@@ -867,6 +1085,18 @@ public final class ArenaManager {
             anvilInfo.put("xpLevel", player.experienceLevel);
             anvilInfo.put("items", itemDetails(player));
             out.put("anvil", anvilInfo);
+        }
+        if (mount != null) {
+            // 坐骑方案 H2：插件用它核对动物生成对了、物品发对了
+            Map<String, Object> mountInfo = new LinkedHashMap<>(MountArena.describe(mount));
+            mountInfo.put("items", itemDetails(player));
+            out.put("mount", mountInfo);
+        }
+        if (isSmithing(station)) {
+            // 锻造台方案 M7：插件用它核对材料发对了
+            Map<String, Object> smithingInfo = new LinkedHashMap<>();
+            smithingInfo.put("items", itemDetails(player));
+            out.put("smithing", smithingInfo);
         }
         return out;
     }
@@ -1004,12 +1234,40 @@ public final class ArenaManager {
             out.put("xpLevel", player.experienceLevel);
             out.put("takes", List.copyOf(active.anvilTakes));
         }
+        if (isMount(active.stationName)) {
+            // 坐骑方案 H5、H6、H8：动物身上的东西（不在了为 null）、物品栏（不含光标）、光标、地上掉落物、界面开没开、骑没骑着、
+            // 第一次骑上的时刻、有没有不开界面直接装备
+            Mob mount = mountOf(level, active);
+            out.put("mount", mount != null ? MountArena.describe(mount) : null);
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("containerOpen", containerOpen(player));
+            out.put("riding", mount != null && player.getVehicle() == mount);
+            out.put("rodeAtMs", active.rodeAtMs);
+            out.put("equippedWithoutMenu", active.equippedWithoutMenu);
+        }
+        if (isSmithing(active.stationName)) {
+            // 锻造台方案 M6、M7：物品栏（不含光标）的计数和每件的纹饰，光标，锻造台三格（界面开着时；关界面时退回物品栏），
+            // 场内地上（每件带纹饰），界面开没开，每次取出产物的记录
+            out.put("held", counts(player.getInventory()));
+            out.put("items", itemDetails(player));
+            out.put("carried", carried(player.containerMenu));
+            out.put("carriedItem", AnvilArena.describe(player.containerMenu.getCarried()));
+            out.put("slots", smithingSlots(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("droppedItems", droppedItems(level, active.origin));
+            out.put("containerOpen", containerOpen(player));
+            out.put("takes", List.copyOf(active.smithingTakes));
+        }
         return out;
     }
 
     /** 工作站的每一格都还是应有的方块（大箱子要两半都在，漏斗下面的红石块也要在，§8 S22）。铁砧开裂、损坏也算在（铁砧方案 A1）。 */
     private static boolean stationIntact(ServerLevel level, Run run) {
         if (isAnvil(run.stationName)) return level.getBlockState(stationPos(run.origin)).is(BlockTags.ANVIL);
+        // 坐骑方案 H2：动物还在（活着、在场地范围里）；鹦鹉螺组的水坑不算工作站
+        if (isMount(run.stationName)) return mountOf(level, run) != null;
         for (Map.Entry<BlockPos, Block> e : run.stationBlocks.entrySet()) if (!level.getBlockState(e.getKey()).is(e.getValue())) return false;
         return true;
     }
@@ -1023,6 +1281,8 @@ public final class ArenaManager {
         BlockPos o = active != null ? active.origin : fallbackOrigin;
         boolean beacon = active != null && isBeacon(active.stationName);
         active = null;
+        // 坐骑方案 H8：读完状态再让玩家下来（agent 可能骑在动物上）
+        player.stopRiding();
         player.containerMenu.setCarried(ItemStack.EMPTY);
         player.closeContainer();
         if (beacon) {
@@ -1049,7 +1309,8 @@ public final class ArenaManager {
                 }
             }
         }
-        if (run.station != null && run.openedAtMs == null && opensStation(run.stationName, player.containerMenu)) {
+        if (isMount(run.stationName)) trackMount(server.overworld(), player, run);
+        if (run.station != null && run.openedAtMs == null && (isMount(run.stationName) ? opensMount(run, player.containerMenu) : opensStation(run.stationName, player.containerMenu))) {
             run.openedAtMs = System.currentTimeMillis();
         }
         if (run.expect != null && run.reachedAtMs == null && reached(server.overworld(), player, run)) {
@@ -1058,6 +1319,19 @@ public final class ArenaManager {
         if (++tickCounter % MONSTER_SWEEP_TICKS == 0) {
             for (Entity e : server.overworld().getEntitiesOfClass(Entity.class, box(run.origin), e -> e instanceof Enemy)) e.discard();
         }
+    }
+
+    /** 坐骑方案 H6：记第一次骑上的时刻；鞍槽 / 身体槽变了而当时没开着这只动物的物品栏 = 拿在手上右键装上的 */
+    private static void trackMount(ServerLevel level, ServerPlayer player, Run run) {
+        Mob mount = mountOf(level, run);
+        if (mount == null) return;
+        if (run.rodeAtMs == null && player.getVehicle() == mount) run.rodeAtMs = System.currentTimeMillis();
+        String saddle = MountArena.worn(mount, EquipmentSlot.SADDLE);
+        String body = MountArena.worn(mount, EquipmentSlot.BODY);
+        boolean changed = !java.util.Objects.equals(saddle, run.lastSaddle) || !java.util.Objects.equals(body, run.lastBody);
+        if (changed && !opensMount(run, player.containerMenu)) run.equippedWithoutMenu = true;
+        run.lastSaddle = saddle;
+        run.lastBody = body;
     }
 
     /**
@@ -1077,13 +1351,17 @@ public final class ArenaManager {
             case "enchanting_table" -> menu instanceof EnchantmentMenu;
             case "beacon" -> menu instanceof BeaconMenu;
             case "anvil" -> menu instanceof AnvilMenu;
+            case "smithing_table" -> menu instanceof SmithingMenu;
             default -> menu instanceof CraftingMenu;
         };
     }
 
     /** 箱子方案 C9：物品栏（不含光标）与容器的计数恰好等于 expect，且光标为空。容器不在了 → 否。切石机见 {@link #reachedTargets}，炉子见 {@link #reachedCook}。 */
     private static boolean reached(ServerLevel level, ServerPlayer player, Run run) {
+        // 锻造台方案 M6：只看玩家身上（不含光标）的物品配不配得上，光标上拿着什么不影响
+        if (run.expect.smithing() != null) return reachedSmithing(player, run.expect.smithing());
         if (!player.containerMenu.getCarried().isEmpty()) return false;
+        if (run.expect.mount() != null) return reachedMount(level, player, run);
         if (run.expect.anvil() != null) return reachedAnvil(player, run.expect.anvil());
         if (run.expect.beacon() != null) return reachedBeacon(level, player, run);
         if (run.expect.enchant() != null) return reachedEnchant(player, run.expect.enchant());
@@ -1162,6 +1440,20 @@ public final class ArenaManager {
         return false;
     }
 
+    /** 坐骑方案 H5、H6（光标为空已由调用方检查）：动物还在，鞍槽、身体槽、箱子对上目标，玩家身上（不含光标）按物品 id 合计恰好是目标。 */
+    private static boolean reachedMount(ServerLevel level, ServerPlayer player, Run run) {
+        Mob mount = mountOf(level, run);
+        return mount != null && MountArena.matches(mount, run.expect.mount()) && counts(player.getInventory()).equals(run.expect.mount().inventory());
+    }
+
+    /** 锻造台方案 M6、M7：玩家身上（主物品栏、快捷栏、盔甲、副手，不含光标）能给每个目标配上各不相同的一件。不要求关界面。 */
+    private static boolean reachedSmithing(ServerPlayer player, List<Smith> goals) {
+        var inv = player.getInventory();
+        List<ItemStack> stacks = new ArrayList<>();
+        for (int i = 0; i < inv.getContainerSize(); i++) if (!inv.getItem(i).isEmpty()) stacks.add(inv.getItem(i));
+        return SmithingArena.assign(stacks, goals);
+    }
+
     /**
      * 本轮那件物品现在在哪：物品栏（原材料或附魔后的 result）→ 光标 → 附魔台物品格（界面开着时）。找不到 → 空。
      */
@@ -1234,6 +1526,16 @@ public final class ArenaManager {
         for (ItemEntity e : level.getEntitiesOfClass(ItemEntity.class, box(o))) {
             ItemStack stack = e.getItem();
             if (!stack.isEmpty()) out.merge(id(stack), stack.getCount(), Integer::sum);
+        }
+        return out;
+    }
+
+    /** 场内地上的每一件掉落物：[{ id, count, trim }]（锻造台方案 M6：底材和加了纹饰的盔甲扔在地上时要分得清）。 */
+    private static List<Map<String, Object>> droppedItems(ServerLevel level, BlockPos o) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ItemEntity e : level.getEntitiesOfClass(ItemEntity.class, box(o))) {
+            Map<String, Object> d = SmithingArena.describe(e.getItem());
+            if (d != null) out.add(d);
         }
         return out;
     }

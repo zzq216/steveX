@@ -12,7 +12,7 @@ import { registerRawCommands, isAgentMethod } from '../src/game/raw_commands.js'
 import { METHODS } from '../src/game/index.js'
 import { GameState } from '../src/game/state.js'
 import { normalizeConfig } from '../src/config.js'
-import { loadPrompts } from '../src/llm/prompts.js'
+import { loadPrompts, renderTemplate } from '../src/llm/prompts.js'
 import { tempDir } from './helpers.js'
 
 const PLANKS = ['minecraft:oak_planks', 'minecraft:birch_planks']
@@ -69,7 +69,7 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 test('parseTrainArgs', () => {
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
@@ -126,7 +126,7 @@ test('judge', () => {
 
 test('arena/* is listed for the trainer but hidden from the agent', () => {
   const arena = METHODS.filter((m) => m.method.startsWith('arena/')).map((m) => m.method)
-  assert.deepEqual(arena, ['arena/build', 'arena/prepare', 'arena/enchant-preview', 'arena/anvil-catalog', 'arena/anvil-preview', 'arena/status', 'arena/finish'])
+  assert.deepEqual(arena, ['arena/build', 'arena/prepare', 'arena/enchant-preview', 'arena/mount-catalog', 'arena/smithing-catalog', 'arena/smithing-preview', 'arena/anvil-catalog', 'arena/anvil-preview', 'arena/status', 'arena/finish'])
   const registry = new CommandRegistry()
   registerRawCommands(registry)
   for (const method of arena) {
@@ -1324,7 +1324,7 @@ test('config: the stonecutter arena has its own defaults and checks; json.stonec
   assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
-  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon" or "anvil"/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing" or "mount"/)
 })
 
 const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
@@ -2444,7 +2444,7 @@ test('anvil options: task, second, enchants, curses and xpLevel; rename has no s
 
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null }
   assert.deepEqual(parseTrainArgs(['anvil', 'task=merge', 'second=same', 'item=bow', 'enchants=1-2', 'curses=1', 'xpLevel=50']),
     { ok: true, arena: 'anvil', item: 'bow', runs: 1, seed: null, portions: null, crafts: null, ...none, task: 'merge', second: 'same', enchants: '1-2', curses: '1', xpLevel: 50 })
   assert.match(parseTrainArgs(['anvil', 'task=repair']).error, /task 只能是 merge \/ rename \/ both/)
@@ -2702,4 +2702,482 @@ test('report: anvil records group by task / item / second and count multi-take, 
   assert.deepEqual(summarize(records, { by: 'second' }).rows.map((r) => [r.key, r.runs]).sort(), [['附魔书', 2], ['同种物品', 1], ['无（改名）', 1]].sort())
   assert.equal(summarize(records).beaconer, false)
   assert.equal(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1, items: [] }]).anviler, false, 'craft records are not anvil records')
+})
+
+// ── 锻造台训练场（docs/锻造台训练场设计方案.md）──────────────────────────────
+
+const smithingModule = await import('../src/training/smithing.js')
+
+const mc = (id) => `minecraft:${id}`
+const UPGRADE = mc('netherite_upgrade_smithing_template')
+/** 假的 arena/smithing-catalog：两条升级、三种纹饰、三件盔甲、三种纹饰材料 */
+const SMITHING_CATALOG = {
+  upgrades: [
+    { template: UPGRADE, base: mc('diamond_chestplate'), addition: [mc('netherite_ingot')], result: mc('netherite_chestplate') },
+    { template: UPGRADE, base: mc('diamond_sword'), addition: [mc('netherite_ingot')], result: mc('netherite_sword') }
+  ],
+  trims: [
+    { template: mc('coast_armor_trim_smithing_template'), pattern: mc('coast') },
+    { template: mc('sentry_armor_trim_smithing_template'), pattern: mc('sentry') },
+    { template: mc('wild_armor_trim_smithing_template'), pattern: mc('wild') }
+  ],
+  armors: [mc('diamond_chestplate'), mc('iron_chestplate'), mc('leather_boots')],
+  materials: [{ item: mc('gold_ingot'), material: mc('gold') }, { item: mc('lapis_lazuli'), material: mc('lapis') }, { item: mc('redstone'), material: mc('redstone') }]
+}
+
+/** 假的 arena/smithing-preview：按 catalog 找配方，升级给产物，纹饰给带纹饰的底材；找不到 → 没有产物 */
+function fakeSmithingPreview({ template, base, addition }) {
+  const u = SMITHING_CATALOG.upgrades.find((x) => x.template === template && x.base === base && x.addition.includes(addition))
+  if (u) return { ok: true, data: { result: { id: u.result, count: 1, trim: null } } }
+  const t = SMITHING_CATALOG.trims.find((x) => x.template === template)
+  const m = SMITHING_CATALOG.materials.find((x) => x.item === addition)
+  if (t && m && SMITHING_CATALOG.armors.includes(base)) return { ok: true, data: { result: { id: base, count: 1, trim: { pattern: t.pattern, material: m.material } } } }
+  return { ok: true, data: { result: null } }
+}
+
+const ARENAS_SMITHING = { smithing: { type: 'smithing', origin: [0, 100, 210], timeoutSec: 600, tasks: '1-4', exclude: [] } }
+const smithingTables = () => smithingModule.smithingTables(SMITHING_CATALOG)
+
+test('smithing options: tasks, kind, base, pattern and material; upgrades have no trim; kind is shared with the chest arena (§5.2)', () => {
+  const { smithingOptions } = smithingModule
+  assert.deepEqual(smithingOptions({}, { tasks: '1-4' }), { tasks: { lo: 1, hi: 4 }, kind: null, base: null, pattern: null, material: null })
+  assert.deepEqual(smithingOptions({ tasks: '2', kind: 'trim', base: 'iron_chestplate', pattern: 'sentry', material: 'gold' }, {}),
+    { tasks: { lo: 2, hi: 2 }, kind: 'trim', base: mc('iron_chestplate'), pattern: mc('sentry'), material: mc('gold') })
+  assert.throws(() => smithingOptions({ tasks: '5' }), /tasks 要写 k 或 a-b（1–4/)
+  assert.throws(() => smithingOptions({ kind: 'upgrade', pattern: 'sentry' }), /升级题（kind=upgrade）没有纹饰，不能和 pattern 一起用/)
+  assert.throws(() => smithingOptions({ kind: 'take' }), /锻造台场地的 kind 只能是 upgrade \/ trim/)
+  const parsed = parseTrainArgs(['smithing', 'tasks=1-3', 'kind=trim', 'base=minecraft:iron_chestplate', 'pattern=minecraft:wild', 'material=minecraft:gold'])
+  assert.deepEqual([parsed.ok, parsed.tasks, parsed.kind, parsed.base, parsed.pattern, parsed.material], [true, '1-3', 'trim', 'minecraft:iron_chestplate', 'minecraft:wild', 'minecraft:gold'])
+  assert.match(parseTrainArgs(['smithing', 'kind=foo']).error, /kind 只能是 take \/ put \/ mix（箱子题）或 upgrade \/ trim（锻造台题）/)
+  assert.match(parseTrainArgs(['smithing', 'tasks=0']).error, /tasks 要写 k 或 a-b/)
+  const config = normalizeConfig({ logger: null })
+  assert.deepEqual(config.training.arenas.smithing, { type: 'smithing', origin: [10000, 120, 10210], timeoutSec: 600, tasks: '1-4', exclude: [] })
+  assert.ok(config.jsonSources.smithing.endsWith(path.join('data', 'smithing.json')))
+  assert.throws(() => normalizeConfig({ logger: null, training: { arenas: { s2: { type: 'smithing', origin: [0, 0, 0], tasks: '9', exclude: [] } } } }), /training\.arenas\.s2\.tasks 要写/)
+})
+
+test('smithing sampler: upgrade / trim about even, 1–4 distinct goals, templates and materials stacked, bases one per slot, reproducible', () => {
+  const tables = smithingTables()
+  const options = smithingModule.smithingOptions({}, { tasks: '1-4' })
+  const kinds = { upgrade: 0, trim: 0 }
+  const counts = new Set()
+  for (let seed = 0; seed < 300; seed++) {
+    const picked = smithingModule.sampleSmithing(tables, seed, options)
+    counts.add(picked.tasks.length)
+    const keys = picked.tasks.map((t) => JSON.stringify(t.goal))
+    assert.equal(new Set(keys).size, keys.length, 'no repeated goal in a round')
+    for (const t of picked.tasks) {
+      kinds[t.kind]++
+      if (t.kind === 'upgrade') assert.deepEqual([t.template, t.goal.trim], [UPGRADE, null])
+      else assert.deepEqual(t.goal, { item: t.base, trim: { pattern: SMITHING_CATALOG.trims.find((x) => x.template === t.template).pattern, material: SMITHING_CATALOG.materials.find((x) => x.item === t.addition).material } })
+    }
+    const slots = picked.layout.map((s) => s.slot)
+    assert.equal(new Set(slots).size, slots.length)
+    assert.ok(slots.every((s) => s >= 0 && s < 36))
+    assert.equal(picked.layout.reduce((n, s) => n + s.count, 0), picked.tasks.length * 3, 'three items per task')
+    const isBase = (s) => picked.tasks.some((t) => t.base === s.id)
+    assert.ok(picked.layout.filter(isBase).every((s) => s.count === 1), 'tools and armor take a slot each')
+    const stackable = picked.layout.filter((s) => !isBase(s)).map((s) => s.id)
+    assert.equal(new Set(stackable).size, stackable.length, 'same template / material share one stack')
+    assert.equal(picked.kind, new Set(picked.tasks.map((t) => t.kind)).size === 1 ? picked.tasks[0].kind : 'mix')
+  }
+  assert.deepEqual([...counts].sort(), [1, 2, 3, 4])
+  const ratio = kinds.upgrade / (kinds.upgrade + kinds.trim)
+  assert.ok(ratio > 0.3 && ratio < 0.6, `upgrade share ${ratio}`)
+  assert.deepEqual(smithingModule.sampleSmithing(tables, 42, options), smithingModule.sampleSmithing(tables, 42, options))
+
+  const fixed = (args) => smithingModule.sampleSmithing(tables, 7, smithingModule.smithingOptions({ tasks: '4', ...args }))
+  assert.ok(fixed({ base: 'iron_chestplate' }).tasks.every((t) => t.kind === 'trim' && t.base === mc('iron_chestplate')), 'an iron chestplate can only be trimmed')
+  assert.equal(fixed({ base: 'diamond_sword' }).tasks.length, 1, 'only one distinct upgrade goal for a fixed sword')
+  assert.ok(fixed({ material: 'gold' }).tasks.every((t) => t.goal.trim?.material === mc('gold')))
+  assert.throws(() => fixed({ kind: 'trim', base: 'diamond_sword' }), /minecraft:diamond_sword 只能出升级题，和 kind=trim 冲突/)
+  assert.throws(() => fixed({ base: 'stick' }), /minecraft:stick 不能锻造/)
+  assert.throws(() => fixed({ pattern: 'bolt' }), /没有纹饰样式 minecraft:bolt/)
+  assert.equal(smithingModule.smithingTables(SMITHING_CATALOG, ['minecraft:sentry', 'minecraft:gold_ingot']).trims.length, 2, 'exclude takes patterns')
+  assert.equal(smithingModule.smithingTables(SMITHING_CATALOG, ['minecraft:gold_ingot']).materials.length, 2, 'exclude takes material items')
+})
+
+test('smithing judge: every goal needs its own item with the right trim; swapped materials and partial work are false_success; the cursor does not count; missing items are lost', () => {
+  const { judgeSmithing, maxAssigned } = smithingModule
+  const trim = (pattern, material) => ({ pattern: mc(pattern), material: mc(material) })
+  const picked = {
+    tasks: [
+      { kind: 'trim', base: mc('iron_chestplate'), goal: { item: mc('iron_chestplate'), trim: trim('sentry', 'gold') } },
+      { kind: 'trim', base: mc('iron_chestplate'), goal: { item: mc('iron_chestplate'), trim: trim('wild', 'redstone') } },
+      { kind: 'upgrade', base: mc('diamond_sword'), goal: { item: mc('netherite_sword'), trim: null } }
+    ]
+  }
+  const item = (id, t = null, slot = 0) => ({ slot, id: mc(id), count: 1, trim: t })
+  const done = [item('iron_chestplate', trim('wild', 'redstone')), item('iron_chestplate', trim('sentry', 'gold')), item('netherite_sword')]
+  const judge = (final, extra = {}) => judgeSmithing({ stopped: false, timedOut: false, taskState: 'done', picked, final: { stationIntact: true, carriedItem: null, slots: null, droppedItems: [], takes: [], ...final }, ...extra })
+  assert.deepEqual(judge({ items: done }), { outcome: 'success', reached: true, goalsMet: 3, takes: 0, wrongTakes: 0 })
+  const swapped = [item('iron_chestplate', trim('wild', 'gold')), item('iron_chestplate', trim('sentry', 'redstone')), item('netherite_sword')]
+  const takes = swapped.map((s) => ({ result: s, atMs: 1 }))
+  assert.deepEqual(judge({ items: swapped, takes }), { outcome: 'false_success', reached: false, goalsMet: 1, takes: 3, wrongTakes: 2 })
+  assert.equal(judge({ items: [done[0], item('iron_chestplate'), item('diamond_sword')] }).goalsMet, 1, 'one of three done')
+  assert.equal(judge({ items: [done[0], done[0], item('diamond_sword')] }).goalsMet, 1, 'one goal per item')
+  assert.equal(judge({ items: done.slice(0, 2), carriedItem: done[2] }).outcome, 'false_success', 'the product on the cursor is not in the inventory')
+  assert.equal(judge({ items: done.slice(0, 2), droppedItems: [done[2]] }).outcome, 'false_success', 'dropped in the arena is not lost')
+  assert.equal(judge({ items: done.slice(0, 2), slots: { template: null, base: item('diamond_sword'), addition: null } }).outcome, 'false_success', 'still in the smithing table is not lost')
+  assert.equal(judge({ items: done.slice(0, 2) }).outcome, 'lost', 'the third item is gone')
+  assert.equal(judge({ items: done, stationIntact: false }).outcome, 'lost')
+  assert.equal(judge({ items: done }, { timedOut: true }).outcome, 'timeout')
+  assert.equal(judge({ items: done }, { taskState: 'failed' }).outcome, 'failed')
+  assert.equal(judge({ items: done }, { stopped: true }).outcome, 'aborted')
+  assert.equal(maxAssigned([item('iron_chestplate', trim('sentry', 'gold'))], [{ item: mc('iron_chestplate'), trim: null }]), 0, 'a trimmed item does not answer an untrimmed goal')
+})
+
+/**
+ * 锻造台题的假世界：arena/smithing-catalog 回 SMITHING_CATALOG；arena/smithing-preview 按 previewOf（缺省 fakeSmithingPreview）；
+ * prepare 按参数发物品；任务结束时按 finalOf(params, world) 改状态（缺省：每道题都做出目标）。
+ */
+function smithingHarness({ finalOf = null, previewOf = fakeSmithingPreview, aimOk = true } = {}) {
+  const world = { params: null, state: {}, previews: 0 }
+  const defaultFinal = (params) => ({
+    items: params.expect.smithing.map((g, i) => ({ slot: i, id: g.item, count: 1, trim: g.trim })),
+    takes: params.expect.smithing.map((g) => ({ result: { id: g.item, count: 1, trim: g.trim }, atMs: 1 }))
+  })
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params, world))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_SMITHING,
+    onCall: (method, params) => {
+      if (method === 'arena/smithing-catalog') return { ok: true, data: SMITHING_CATALOG }
+      if (method === 'arena/smithing-preview') {
+        world.previews++
+        return previewOf(params, world)
+      }
+      return null
+    },
+    prepareData: (params) => {
+      world.params = params
+      const items = params.items.map((g) => ({ slot: g.slot, id: g.id, count: g.count, enchantments: {}, name: null }))
+      world.state = { held: {}, items, carried: {}, carriedItem: null, slots: null, dropped: {}, droppedItems: [], containerOpen: false, takes: [], stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk, station: 'smithing_table', smithing: { items } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('smithing run: the catalog is read once, every task is previewed, the text names the goals only; making them succeeds', async () => {
+  const h = smithingHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'smithing', runs: 5, seed: 11 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /每轮 1-4 道题，升级、纹饰等概率/)
+  await h.done()
+  const records = h.records('smithing')
+  assert.equal(records.length, 5)
+  assert.equal(h.calls.filter(([m]) => m === 'arena/smithing-catalog').length, 1)
+  assert.equal(h.world.previews, records.reduce((n, r) => n + r.tasks.length, 0))
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.goalsMet, record.wrongTakes, record.takes.length], [record.tasks.length, 0, record.tasks.length])
+    const prepare = prepares[i]
+    assert.deepEqual([prepare.station, prepare.items], ['smithing_table', record.layout])
+    assert.deepEqual(prepare.expect, { smithing: record.tasks.map((t) => ({ item: t.goal.item, trim: t.goal.trim })) })
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你正前方有一个锻造台，视角已经对准它。\n你的物品栏里有做出下面 ${record.tasks.length} 件物品所需的材料，每件正好一份：\n1. `), text)
+    for (const t of record.tasks) assert.ok(text.includes(smithingModule.goalText(t.goal)), text)
+    assert.doesNotMatch(text, /template|ingot|格子|右键|lapis_lazuli/, 'name the goals, not the materials or the moves')
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/5 轮：会话 run-1，锻造 \d 件：/)
+  assert.doesNotMatch(prompts.training.smithing, /格子|右键|Shift|模板/, 'describe the goal, do not teach the move')
+})
+
+test('smithing run: a mismatched preview resamples the whole set; wrong trim materials are false_success; conflicts are refused', async () => {
+  const flaky = smithingHarness({ previewOf: (params, world) => (world.previews === 1 ? { ok: true, data: { result: null } } : fakeSmithingPreview(params)) })
+  assert.equal(flaky.trainer.start({ sessionId: 'console', arena: 'smithing', seed: 4 }).ok, true)
+  await flaky.done()
+  const record = flaky.records('smithing')[0]
+  assert.deepEqual([record.outcome, record.retries], ['success', 1], JSON.stringify(record))
+
+  const never = smithingHarness({ previewOf: () => ({ ok: true, data: { result: null } }) })
+  assert.equal(never.trainer.start({ sessionId: 'console', arena: 'smithing', runs: 2 }).ok, true)
+  await never.done()
+  assert.match(never.records('smithing')[0].error, /preview: 抽不出能做的题：连续 21 次预览/)
+
+  // 材料用错（emerald 不是这几道题的材料）：两件盔甲都对不上
+  const swapped = smithingHarness({
+    finalOf: (params) => {
+      const items = params.expect.smithing.map((g, i) => ({ slot: i, id: g.item, count: 1, trim: { ...g.trim, material: 'minecraft:emerald' } }))
+      return { items, takes: items.map((s) => ({ result: s, atMs: 1 })) }
+    }
+  })
+  assert.equal(swapped.trainer.start({ sessionId: 'console', arena: 'smithing', tasks: '2', kind: 'trim', base: 'iron_chestplate', pattern: 'sentry' }).ok, true)
+  await swapped.done()
+  const r = swapped.records('smithing')[0]
+  assert.deepEqual([r.outcome, r.goalsMet, r.wrongTakes, r.kind], ['false_success', 0, 2, 'trim'], JSON.stringify(r))
+
+  const h = smithingHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'smithing', kind: 'upgrade', material: 'gold' }).error, /升级题（kind=upgrade）没有纹饰/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'smithing', xpLevel: 50 }).error, /不认这些选项：xpLevel/)
+  const prepared = smithingHarness({ aimOk: false })
+  assert.equal(prepared.trainer.start({ sessionId: 'console', arena: 'smithing' }).ok, true)
+  await prepared.done()
+  assert.match(prepared.records('smithing')[0].error, /crosshair is not on the smithing table/)
+})
+
+test('report: smithing records group by kind / tasks / pattern / material and count over-take, wrong-take and partial runs', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const trimTask = (pattern, material) => ({ kind: 'trim', goal: { item: mc('iron_chestplate'), trim: { pattern: mc(pattern), material: mc(material) } } })
+  const upTask = { kind: 'upgrade', goal: { item: mc('netherite_sword'), trim: null } }
+  const rec = (kind, tasks, outcome, extra = {}) => ({
+    batch: 'b1', target: 'x', kind, tasks, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true,
+    goalsMet: outcome === 'success' ? tasks.length : 0, wrongTakes: 0, takes: tasks.map(() => ({})), ...extra
+  })
+  const records = [
+    rec('upgrade', [upTask], 'success'),
+    rec('trim', [trimTask('sentry', 'gold'), trimTask('wild', 'redstone')], 'false_success', { goalsMet: 1, wrongTakes: 1, takes: [{}, {}, {}] }),
+    rec('mix', [upTask, trimTask('sentry', 'lapis')], 'success')
+  ]
+  const byKind = summarize(records, { by: 'kind' })
+  assert.equal(byKind.smither, true)
+  assert.deepEqual(byKind.rows.map((r) => [r.key, r.runs]).sort(), [['升级', 1], ['混合', 1], ['纹饰', 1]].sort())
+  assert.deepEqual([byKind.total.overTake, byKind.total.wrongTake, byKind.total.partial], [1, 1, 1])
+  assert.match(formatSummary(byKind).split('\n')[0], /^类别\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t多做\t配错\t部分完成\t打开锻造台中位/)
+  assert.deepEqual(summarize(records, { by: 'tasks' }).rows.map((r) => [r.key, r.runs]), [['2 道', 2], ['1 道', 1]])
+  assert.deepEqual(summarize(records, { by: 'pattern' }).rows.map((r) => [r.key, r.runs]).sort(), [['sentry', 1], ['sentry+wild', 1], ['无（升级）', 1]].sort())
+  assert.deepEqual(summarize(records, { by: 'material' }).rows.map((r) => [r.key, r.runs]).sort(), [['gold+redstone', 1], ['lapis', 1], ['无（升级）', 1]].sort())
+  assert.equal(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1, items: [] }]).smither, false, 'craft records are not smithing records')
+})
+
+// ── 坐骑训练场（docs/坐骑训练场设计方案.md）──────────────────────────────
+
+const mountModule = await import('../src/training/mount.js')
+
+const HORSE_ARMORS = ['minecraft:diamond_horse_armor', 'minecraft:iron_horse_armor', 'minecraft:leather_horse_armor']
+/** 假的 arena/mount-catalog：10 种动物，装备按设计方案 F2 */
+const MOUNT_CATALOG = {
+  animals: [
+    { id: 'minecraft:horse', group: 'horse', saddle: ['minecraft:saddle'], body: HORSE_ARMORS, chest: 0 },
+    { id: 'minecraft:zombie_horse', group: 'horse', saddle: ['minecraft:saddle'], body: HORSE_ARMORS, chest: 0 },
+    { id: 'minecraft:donkey', group: 'donkey', saddle: ['minecraft:saddle'], body: [], chest: 15 },
+    { id: 'minecraft:mule', group: 'donkey', saddle: ['minecraft:saddle'], body: [], chest: 15 },
+    { id: 'minecraft:camel', group: 'camel', saddle: ['minecraft:saddle'], body: [], chest: 0 },
+    { id: 'minecraft:camel_husk', group: 'camel', saddle: ['minecraft:saddle'], body: [], chest: 0 },
+    { id: 'minecraft:llama', group: 'llama', saddle: [], body: ['minecraft:red_carpet', 'minecraft:white_carpet'], chest: 'strength' },
+    { id: 'minecraft:trader_llama', group: 'llama', saddle: [], body: ['minecraft:red_carpet', 'minecraft:white_carpet'], chest: 'strength' },
+    { id: 'minecraft:nautilus', group: 'nautilus', saddle: ['minecraft:saddle'], body: ['minecraft:iron_nautilus_armor'], chest: 0 },
+    { id: 'minecraft:zombie_nautilus', group: 'nautilus', saddle: ['minecraft:saddle'], body: ['minecraft:iron_nautilus_armor'], chest: 0 }
+  ]
+}
+const MOUNT_PROPS = { ...ITEM_PROPS, 'minecraft:red_carpet': { maxStack: 64 }, 'minecraft:bundle': { maxStack: 1 } }
+const ARENAS_MOUNT = { mount: { type: 'mount', origin: [0, 100, 240], timeoutSec: 600, groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] } }
+const mountTables = () => mountModule.mountTables(MOUNT_CATALOG, MOUNT_PROPS, ['minecraft:bundle'])
+
+test('mount options: group, animal, task, item, total and move; chest-only options need a chested group; task is shared with the anvil arena (§5.2)', () => {
+  const { mountOptions } = mountModule
+  const all = ['horse', 'donkey', 'camel', 'llama', 'nautilus']
+  assert.deepEqual(mountOptions({}, {}), { groups: all, group: null, animal: null, task: null, item: null, total: { lo: 64, hi: 128 }, move: { lo: 1, hi: 64 } })
+  assert.deepEqual(mountOptions({ animal: 'mule' }, {}).groups, ['donkey'])
+  assert.deepEqual(mountOptions({ item: 'stick' }, { groups: ['horse', 'llama'] }).groups, ['llama'], 'item narrows to chested groups')
+  assert.throws(() => mountOptions({ group: 'horse', animal: 'mule' }), /minecraft:mule 属于 donkey 组，和 group=horse 冲突/)
+  assert.throws(() => mountOptions({ group: 'camel', move: '5' }), /camel 组的动物没有箱子，不能和 move 一起用/)
+  assert.throws(() => mountOptions({ task: 'merge' }), /坐骑场地的 task 只能是 equip \/ unequip/)
+  assert.throws(() => mountOptions({ animal: 'pig' }), /animal 只能是/)
+  assert.throws(() => mountOptions({ total: '10', move: '20' }), /move 的下限 20 大于 total 的下限 10/)
+  assert.throws(() => mountOptions({ total: '200' }), /total 要写 k 或 a-b（2–128/)
+  const parsed = parseTrainArgs(['mount', 'group=llama', 'animal=minecraft:trader_llama', 'task=unequip', 'total=64', 'move=1-10'])
+  assert.deepEqual([parsed.ok, parsed.group, parsed.animal, parsed.task, parsed.total, parsed.move], [true, 'llama', 'minecraft:trader_llama', 'unequip', '64', '1-10'])
+  assert.equal(parseTrainArgs(['anvil', 'task=merge']).task, 'merge', 'anvil task values still parse')
+  assert.match(parseTrainArgs(['mount', 'task=ride']).error, /task 只能是 merge \/ rename \/ both（铁砧题）或 equip \/ unequip（坐骑题）/)
+  assert.match(parseTrainArgs(['mount', 'group=pig']).error, /group 只能是 horse \/ donkey/)
+  const config = normalizeConfig({ logger: null })
+  assert.deepEqual(config.training.arenas.mount, { type: 'mount', origin: [10000, 120, 10240], timeoutSec: 600, groups: all, total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] })
+  assert.throws(() => normalizeConfig({ logger: null, training: { arenas: { m2: { type: 'mount', origin: [0, 0, 0], groups: ['pig'], exclude: [] } } } }), /training\.arenas\.m2\.groups 要是/)
+})
+
+test('mount sampler: groups about even, equipment from the catalog, two stacks of 1–64 summing to the total, k within the total, llama strength 1–5, reproducible', () => {
+  const tables = mountTables()
+  assert.ok(!tables.pool.includes('minecraft:red_carpet') && !tables.pool.includes('minecraft:bundle') && !tables.pool.includes('minecraft:shears'), 'equipment, excluded and non-64 items are not in the pool')
+  const options = mountModule.mountOptions({}, {})
+  const groups = {}
+  const tasks = { equip: 0, unequip: 0 }
+  for (let seed = 0; seed < 500; seed++) {
+    const p = mountModule.sampleMount(tables, seed, options)
+    groups[p.group] = (groups[p.group] ?? 0) + 1
+    tasks[p.task]++
+    assert.equal(mountModule.GROUP_OF[p.animal], p.group)
+    const entry = MOUNT_CATALOG.animals.find((a) => a.id === p.animal)
+    assert.equal(p.equipment.saddle, entry.saddle[0] ?? null)
+    assert.ok(entry.body.length ? entry.body.includes(p.equipment.body) : p.equipment.body === null)
+    if (entry.chest) {
+      assert.ok(p.split.every((n) => n >= 1 && n <= 64) && p.split[0] + p.split[1] === p.total && p.total >= 64 && p.total <= 128, JSON.stringify(p))
+      assert.ok(p.move >= 1 && p.move <= Math.min(64, p.total))
+      assert.equal(p.chestSize, entry.chest === 15 ? 15 : 3 * p.strength)
+      if (entry.chest === 'strength') assert.ok(p.strength >= 1 && p.strength <= 5)
+      const target = p.task === 'equip' ? p.layout : p.chestLayout
+      assert.equal(target.filter((s) => s.id === p.item).reduce((n, s) => n + s.count, 0), p.total)
+      if (p.task === 'unequip') assert.ok(p.chestLayout.every((s) => s.slot < p.chestSize))
+    } else {
+      assert.deepEqual([p.item, p.total, p.move, p.strength, p.chestSize], [null, null, null, null, 0])
+    }
+    if (p.task === 'unequip') assert.deepEqual(p.layout, [], 'nothing handed out for unequip')
+    const slots = p.layout.map((s) => s.slot)
+    assert.equal(new Set(slots).size, slots.length)
+  }
+  for (const g of Object.keys(groups)) assert.ok(groups[g] > 70 && groups[g] < 130, `group ${g}: ${groups[g]}`)
+  assert.ok(tasks.equip > 200 && tasks.unequip > 200)
+  assert.deepEqual(mountModule.sampleMount(tables, 42, options), mountModule.sampleMount(tables, 42, options))
+  assert.throws(() => mountModule.sampleMount(tables, 1, mountModule.mountOptions({ animal: 'donkey', item: 'minecraft:shears' })), /物品池里没有 minecraft:shears/)
+})
+
+test('mount goal, text and judge: equip / unequip targets; overshoot, misplaced, cursor, dropped and a missing mount (H4, H5)', () => {
+  const { mountGoal, mountSetup, mountText, judgeMount } = mountModule
+  const donkey = { group: 'donkey', animal: 'minecraft:donkey', task: 'equip', equipment: { saddle: 'minecraft:saddle', body: null }, item: 'minecraft:stick', total: 100, split: [64, 36], move: 37, strength: null, chestSize: 15, layout: [], chestLayout: [] }
+  assert.deepEqual(mountGoal(donkey), { saddle: 'minecraft:saddle', chest: { 'minecraft:stick': 37 }, inventory: { 'minecraft:stick': 63 } })
+  const llamaOff = { group: 'llama', animal: 'minecraft:llama', task: 'unequip', equipment: { saddle: null, body: 'minecraft:red_carpet' }, item: 'minecraft:stick', total: 64, split: [10, 54], move: 64, strength: 2, chestSize: 6, layout: [], chestLayout: [{ slot: 0, id: 'minecraft:stick', count: 10 }, { slot: 3, id: 'minecraft:stick', count: 54 }] }
+  assert.deepEqual(mountGoal(llamaOff), { body: null, chest: {}, inventory: { 'minecraft:red_carpet': 1, 'minecraft:stick': 64 } })
+  assert.deepEqual(mountSetup(llamaOff), { animal: 'minecraft:llama', saddle: null, body: 'minecraft:red_carpet', chest: llamaOff.chestLayout, strength: 2 })
+  const horse = { group: 'horse', animal: 'minecraft:horse', task: 'equip', equipment: { saddle: 'minecraft:saddle', body: 'minecraft:iron_horse_armor' }, item: null, total: null, split: null, move: null, strength: null, chestSize: 0, layout: [], chestLayout: [] }
+  assert.deepEqual(mountText(horse), { animal: 'minecraft:horse', chestNote: '', given: '1 个 minecraft:saddle、1 个 minecraft:iron_horse_armor', goals: '把 minecraft:saddle 和 minecraft:iron_horse_armor 都装到它身上' })
+  assert.equal(mountText(donkey).goals, '把 minecraft:saddle 装到它身上，并把 37 个 minecraft:stick 放进它身上的箱子里，其余的留在你的物品栏里')
+  assert.equal(mountText(llamaOff).goals, '把 minecraft:red_carpet 取下来，并从它的箱子里取出 64 个 minecraft:stick，都放进你的物品栏', '全部取出时不写"其余的"')
+  assert.equal(mountText({ ...llamaOff, move: 10 }).goals, '把 minecraft:red_carpet 取下来，并从它的箱子里取出 10 个 minecraft:stick，都放进你的物品栏，其余的留在它的箱子里')
+  assert.equal(mountText({ ...horse, animal: 'minecraft:camel', task: 'unequip', equipment: { saddle: 'minecraft:saddle', body: null } }).goals, '把 minecraft:saddle 取下来，放进你的物品栏')
+  const text = renderTemplate(prompts.training.mount_unequip, mountText(llamaOff))
+  assert.equal(text, '你正前方有一只已驯服的 minecraft:llama，它身上装着 minecraft:red_carpet，挂着的箱子里有 minecraft:stick。\n请把 minecraft:red_carpet 取下来，并从它的箱子里取出 64 个 minecraft:stick，都放进你的物品栏。')
+  assert.doesNotMatch(prompts.training.mount_equip + prompts.training.mount_unequip, /潜行|右键|格子|Shift|按 E/, 'describe the goal, not the moves')
+
+  const judge = (picked, final, extra = {}) => judgeMount({ stopped: false, timedOut: false, taskState: 'done', picked, final: { stationIntact: true, carried: {}, dropped: {}, ...final }, ...extra })
+  const ok = { mount: { saddle: 'minecraft:saddle', body: null, chest: { 'minecraft:stick': 37 } }, held: { 'minecraft:stick': 63 } }
+  assert.deepEqual(judge(donkey, ok), { outcome: 'success', reached: true, misplaced: false })
+  assert.equal(judge(donkey, { ...ok, mount: { ...ok.mount, chest: { 'minecraft:stick': 38 } }, held: { 'minecraft:stick': 62 } }).outcome, 'overshoot')
+  assert.equal(judge(donkey, { ...ok, mount: { ...ok.mount, chest: { 'minecraft:stick': 36 } }, held: { 'minecraft:stick': 64 } }).outcome, 'false_success', 'moved too few')
+  assert.equal(judge(donkey, { mount: { saddle: null, body: null, chest: { 'minecraft:stick': 37, 'minecraft:saddle': 1 } }, held: { 'minecraft:stick': 63 } }).outcome, 'misplaced')
+  assert.equal(judge(donkey, { ...ok, held: { 'minecraft:stick': 62 }, carried: { 'minecraft:stick': 1 } }).outcome, 'false_success', 'cursor is not the inventory')
+  assert.equal(judge(donkey, { ...ok, held: { 'minecraft:stick': 62 }, dropped: { 'minecraft:stick': 1 } }).outcome, 'lost')
+  assert.equal(judge(donkey, { ...ok, mount: null, stationIntact: false }).outcome, 'lost')
+  assert.equal(judge(donkey, { ...ok, held: { 'minecraft:stick': 50 } }).outcome, 'lost', 'items went missing')
+  assert.equal(judge(donkey, ok, { timedOut: true }).outcome, 'timeout')
+  assert.equal(judge(donkey, ok, { stopped: true }).outcome, 'aborted')
+  assert.equal(judge(llamaOff, { mount: { saddle: null, body: null, chest: {} }, held: { 'minecraft:red_carpet': 1, 'minecraft:stick': 64 } }).outcome, 'success')
+  assert.equal(judge(llamaOff, { mount: { saddle: null, body: 'minecraft:red_carpet', chest: {} }, held: { 'minecraft:stick': 64 } }).outcome, 'false_success', 'carpet still on')
+})
+
+/**
+ * 坐骑题的假世界：arena/mount-catalog 回 MOUNT_CATALOG；prepare 按 mount 参数"生成"动物；任务结束时按 finalOf(params, world) 改状态
+ * （缺省：做到目标状态）。
+ */
+function mountHarness({ finalOf = null, aimOk = true } = {}) {
+  const world = { params: null, state: {} }
+  const defaultFinal = (params) => {
+    const g = params.expect.mount
+    return { mount: { ...world.state.mount, saddle: g.saddle ?? null, body: g.body ?? null, chest: g.chest }, held: g.inventory }
+  }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 2, rodeAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params, world))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_MOUNT, itemProps: MOUNT_PROPS,
+    onCall: (method) => (method === 'arena/mount-catalog' ? { ok: true, data: MOUNT_CATALOG } : null),
+    prepareData: (params) => {
+      world.params = params
+      const m = params.mount
+      const chest = {}
+      for (const g of m.chest) chest[g.id] = (chest[g.id] ?? 0) + g.count
+      const entry = MOUNT_CATALOG.animals.find((a) => a.id === m.animal)
+      const chestSize = entry.chest === 15 ? 15 : entry.chest === 'strength' ? 3 * m.strength : 0
+      const mount = { id: m.animal, uuid: 'u1', saddle: m.saddle, body: m.body, chest, chestSize, ...(m.strength ? { strength: m.strength } : {}) }
+      const items = params.items.map((g) => ({ slot: g.slot, id: g.id, count: g.count, enchantments: {}, name: null }))
+      world.state = { mount, held: {}, carried: {}, dropped: {}, containerOpen: false, riding: false, rodeAtMs: null, equippedWithoutMenu: false, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk, station: 'mount', mount: { ...mount, items } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('mount run: the catalog is read once, prepare spawns the mount, the task names the goal only; reaching the goal succeeds', async () => {
+  const h = mountHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'mount', runs: 8, seed: 5 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /组 马、驴、骆驼、羊驼、鹦鹉螺 等概率，装上、卸下等概率，total=64-128，move=1-64/)
+  await h.done()
+  const records = h.records('mount')
+  assert.equal(records.length, 8)
+  assert.equal(h.calls.filter(([m]) => m === 'arena/mount-catalog').length, 1)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    const prepare = prepares[i]
+    assert.deepEqual([prepare.station, prepare.items, prepare.mount.animal], ['mount', record.layout, record.animal])
+    assert.deepEqual(prepare.expect, { mount: mountModule.mountGoal(record) })
+    assert.ok(record.rodeMs !== null && record.reachedMs !== null && record.equippedWithoutMenu === false)
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你正前方有一只已驯服的 ${record.animal}`), text)
+    assert.doesNotMatch(text, /潜行|右键|格子|按 E/)
+  }
+  assert.ok(new Set(records.map((r) => r.group)).size >= 3)
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/8 轮：会话 run-1，坐骑 \S+ (装上|卸下) /)
+})
+
+test('mount run: overshoot, a wrong spawn and option conflicts', async () => {
+  const over = mountHarness({
+    finalOf: (params, world) => {
+      const [id, k] = Object.entries(params.expect.mount.chest)[0]
+      const n = params.items.filter((g) => g.id === id).reduce((sum, g) => sum + g.count, 0)
+      return { mount: { ...world.state.mount, saddle: 'minecraft:saddle', chest: { [id]: k + 1 } }, held: { [id]: n - k - 1 } }
+    }
+  })
+  assert.equal(over.trainer.start({ sessionId: 'console', arena: 'mount', animal: 'donkey', task: 'equip', move: '10' }).ok, true)
+  await over.done()
+  assert.equal(over.records('mount')[0].outcome, 'overshoot')
+
+  const h = mountHarness({ aimOk: false })
+  assert.equal(h.trainer.start({ sessionId: 'console', arena: 'mount' }).ok, true)
+  await h.done()
+  assert.match(h.records('mount')[0].error, /crosshair is not on the minecraft:/)
+
+  const c = mountHarness()
+  assert.match(c.trainer.start({ sessionId: 'console', arena: 'mount', group: 'horse', item: 'stick' }).error, /horse 组的动物没有箱子/)
+  assert.match(c.trainer.start({ sessionId: 'console', arena: 'mount', xpLevel: 50 }).error, /不认这些选项：xpLevel/)
+  assert.match(c.trainer.start({ sessionId: 'console', arena: 'mount', task: 'merge' }).error, /坐骑场地的 task 只能是 equip \/ unequip/)
+})
+
+test('report: mount records group by group / animal / task and count overshoot, misplaced, rode and equipped-without-menu runs', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (group, animal, task, outcome, extra = {}) => ({
+    batch: 'b1', target: 'x', group, animal: `minecraft:${animal}`, task, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true,
+    rodeMs: null, equippedWithoutMenu: false, ...extra
+  })
+  const records = [
+    rec('horse', 'horse', 'equip', 'success', { equippedWithoutMenu: true }),
+    rec('donkey', 'mule', 'equip', 'overshoot', { rodeMs: 300 }),
+    rec('donkey', 'donkey', 'unequip', 'misplaced'),
+    rec('llama', 'llama', 'unequip', 'success')
+  ]
+  const byGroup = summarize(records, { by: 'group' })
+  assert.equal(byGroup.mounter, true)
+  assert.deepEqual(byGroup.rows.map((r) => [r.key, r.runs]).sort(), [['羊驼', 1], ['马', 1], ['驴', 2]].sort())
+  assert.deepEqual([byGroup.total.overshoot, byGroup.total.misplaced, byGroup.total.rode, byGroup.total.withoutMenu], [1, 1, 1, 1])
+  assert.match(formatSummary(byGroup).split('\n')[0], /^组\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t放多\t放错\t骑上过\t不开界面装备\t打开物品栏中位/)
+  assert.deepEqual(summarize(records, { by: 'task' }).rows.map((r) => [r.key, r.runs]).sort(), [['卸下', 2], ['装上', 2]])
+  assert.deepEqual(summarize(records, { by: 'animal' }).rows.map((r) => r.key).sort(), ['donkey', 'horse', 'llama', 'mule'])
+  assert.equal(summarize([{ target: 'x', outcome: 'success', craftedMs: 1, taskMs: 1, items: [] }]).mounter, false, 'craft records are not mount records')
 })

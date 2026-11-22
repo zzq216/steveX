@@ -9,7 +9,7 @@ import { GET_MAX, SEARCH_LIMIT, SEARCH_MAX } from '../facts/store.js'
  * 只读源码基准：路径一律相对基准，越界的拒绝（P5-D9）。
  * 用过源码 / 写过事实都告诉适配层（turns.note），回合结束时据此决定要不要提醒补事实库（§7）。
  * 结果里出现配方生成器的源码（net/minecraft/data/recipes/）时附一句说明（训练场设计方案 T14）：工作台合成配方
- * 已在 json.recipes 里、切石配方在 json.stonecutting 里、熔炉 / 高炉 / 烟熏炉 / 营火配方在 json.cooking 里，在树里读；这里的锻造等这几份数据没有。只是补充证据，不拦截。
+ * 已在 json.recipes 里、切石配方在 json.stonecutting 里、熔炉 / 高炉 / 烟熏炉 / 营火配方在 json.cooking 里、锻造台配方在 json.smithing 里，在树里读；其余配方这几份数据没有。只是补充证据，不拦截。
  *
  * @param {object} services
  * @param {{ store: import('../facts/store.js').FactStore, source: import('../facts/source.js').SourceTree }} services.facts
@@ -18,7 +18,7 @@ import { GET_MAX, SEARCH_LIMIT, SEARCH_MAX } from '../facts/store.js'
  */
 /** 配方生成器所在的目录（基准内相对路径） */
 export const RECIPE_SOURCE_DIR = 'net/minecraft/data/recipes/'
-export const RECIPE_SOURCE_NOTE = '注意：net/minecraft/data/recipes/ 是配方生成器。工作台 / 背包合成配方（有序 shaped、无序 shapeless）都已经在 json.recipes 里，切石机配方在 json.stonecutting 里，熔炉 / 高炉 / 烟熏炉 / 营火配方在 json.cooking 里，在树里用 code/core.json.query 读；这里的锻造等配方这几份数据没有。'
+export const RECIPE_SOURCE_NOTE = '注意：net/minecraft/data/recipes/ 是配方生成器。工作台 / 背包合成配方（有序 shaped、无序 shapeless）都已经在 json.recipes 里，切石机配方在 json.stonecutting 里，熔炉 / 高炉 / 烟熏炉 / 营火配方在 json.cooking 里，锻造台配方（升级、纹饰）在 json.smithing 里，在树里用 code/core.json.query 读；这里的其余配方这几份数据没有。'
 
 /** 搜索结果的某一行、或读的文件在配方生成器目录下 → 说明文字；否则 null */
 export function recipeSourceNote({ text = '', file = '' } = {}) {

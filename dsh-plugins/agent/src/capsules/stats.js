@@ -8,6 +8,8 @@ import path from 'node:path'
  *
  * 由执行器的事件流驱动（observe）：带 ref 的节点退出事件累计到本任务，task/done | task/failed 时一次并进总账；
  * 复盘里草稿转正（capsule/saved 带 from: "task/…"）把该草稿在本任务里的数字拷到新条目的 draft 下（D5）。
+ * 复盘里从任务树的节点存子树（capsule/saved 带 from: "n…"，2026-11-21）把那个节点在本任务里的退出拷到新条目的 origin 下：
+ *   不然从节点存的子树永远是"尚无记录 / 未执行"，规划不敢 `use`、又手写一份，复盘再存一版，库里的条目攒不起实测
  * 离线重建（scripts/capsule-stats.js --rebuild）把 runtime/tasks/*\/events.jsonl 按同样的顺序喂给 observe，结果一致。
  *
  * - 按完整引用（带哈希）记，展示时按名字汇总（D3）；task/ 草稿不进总账，只留在内存里等转正
@@ -44,6 +46,8 @@ export class CapsuleStats {
     this.data = this.load()
     this.running = new Map() // taskId → Map<ref, tally>：还没结束的任务
     this.drafts = new Map()  // taskId → Map<draftName, tally>：结束了、草稿还可能被转正
+    this.nodes = new Map()   // taskId → Map<nodeId, tally>：任务树每个节点的退出，结束了还可能被存成子树（origin）
+    this.runningNodes = new Map() // taskId → Map<nodeId, tally>：还没结束的任务
   }
 
   load() {
@@ -66,6 +70,13 @@ export class CapsuleStats {
   observe(record) {
     const taskId = record?.taskId
     if (!taskId) return false
+    if (record.event === 'node' && record.phase === 'exit' && typeof record.id === 'string' && !this.data.tasks.includes(taskId)) {
+      let nodes = this.runningNodes.get(taskId)
+      if (!nodes) this.runningNodes.set(taskId, nodes = new Map())
+      let node = nodes.get(record.id)
+      if (!node) nodes.set(record.id, node = newRow())
+      addExit(node, { ...record, args: undefined })
+    }
     if (record.event === 'node' && record.phase === 'exit' && typeof record.ref === 'string') {
       if (this.data.tasks.includes(taskId)) return false
       let tallies = this.running.get(taskId)
@@ -79,13 +90,21 @@ export class CapsuleStats {
     if (record.event === 'capsule/saved' && typeof record.from === 'string' && record.from.startsWith('task/')) {
       return this.promote(taskId, record.from, record.ref)
     }
+    if (record.event === 'capsule/saved' && typeof record.from === 'string' && record.folder !== 'code') {
+      return this.promoteNode(taskId, record.from, record.ref)
+    }
     return false
   }
 
   finishTask(taskId, done, at) {
     const tallies = this.running.get(taskId) ?? new Map()
     this.running.delete(taskId)
+    const nodes = this.runningNodes.get(taskId) ?? new Map()
+    this.runningNodes.delete(taskId)
     if (this.data.tasks.includes(taskId)) return false
+    for (const tally of nodes.values()) bumpTask(tally, done)
+    this.nodes.set(taskId, nodes)
+    while (this.nodes.size > KEEP_DRAFT_TASKS) this.nodes.delete(this.nodes.keys().next().value)
     const drafts = new Map()
     for (const [ref, tally] of tallies) {
       if (ref.startsWith('task/')) {
@@ -123,10 +142,28 @@ export class CapsuleStats {
     return true
   }
 
-  /** 这个版本在任务里执行过没有（作为胶囊，或转正前作为草稿）。胶囊版本说明方案 V5 的 untested 取反 */
+  /**
+   * 从任务树的节点存子树（2026-11-21）：把这个任务里节点 <nodeId> 的退出拷到新条目的 origin 下。同一次保存只记一次。
+   * 存的正文可能比原节点多改了几处（参数化、调了等待），所以展示时写明"保存前作为任务里的原节点"，不混进条目自己的数字。
+   */
+  promoteNode(taskId, nodeId, to) {
+    const tally = this.nodes.get(taskId)?.get(nodeId)
+    const key = `${taskId} ${nodeId} ${to}`
+    if (!tally || typeof to !== 'string' || this.data.promotions.includes(key)) return false
+    const row = this.data.refs[to] ?? newRow()
+    row.origin = mergeTally(row.origin ?? newRow(), tally)
+    for (const k of TASK_COUNTS) row.origin[k] += tally[k] ?? 0
+    row.origin.nodes = [...(row.origin.nodes ?? []), `${taskId} ${nodeId}`].slice(-MAX_ERROR_SAMPLES)
+    this.data.refs[to] = row
+    this.data.promotions.push(key)
+    this.save()
+    return true
+  }
+
+  /** 这个版本在任务里执行过没有（作为胶囊，或保存前作为草稿 / 任务树里的原节点）。胶囊版本说明方案 V5 的 untested 取反 */
   ran(ref) {
     const row = this.data.refs[ref]
-    return Boolean(row && (row.calls > 0 || row.draft?.calls > 0))
+    return Boolean(row && (row.calls > 0 || row.draft?.calls > 0 || row.origin?.calls > 0))
   }
 
   /** 一个完整引用的数字；没有 = null */
@@ -148,6 +185,10 @@ export class CapsuleStats {
         total.draft = mergeTally(total.draft ?? newRow(), row.draft)
         for (const k of TASK_COUNTS) total.draft[k] += row.draft[k]
       }
+      if (row.origin) {
+        total.origin = mergeTally(total.origin ?? newRow(), row.origin)
+        for (const k of TASK_COUNTS) total.origin[k] += row.origin[k]
+      }
     }
     return { total, versions }
   }
@@ -156,6 +197,12 @@ export class CapsuleStats {
 
   curateState() {
     return { ...this.data.curate }
+  }
+
+  /** 按范围整理时范围是空的、没发请求（整理范围方案 R6）：自动整理的计数照旧清零，不动 lastAt。 */
+  curateSkipped() {
+    this.data.curate = { ...this.data.curate, sinceLast: 0 }
+    this.save()
   }
 
   /** 整理请求发出：计数清零。 */
@@ -180,6 +227,10 @@ export function usageSummary(stat, kind, key = '') {
     const d = stat.draft
     const outcome = kind === 'condition' ? `判真 ${d.ok} / 判假 ${d.fail} / 报错 ${d.error}` : `成功 ${d.ok} / 失败 ${d.error}`
     parts.push(`转正前（草稿）：用过 ${d.calls} 次 / ${d.tasks} 个任务，${outcome}${callErrorNote(d)}`)
+  }
+  if (stat.origin) {
+    const o = stat.origin
+    parts.push(`保存前作为任务树里的原节点（存时可能改过）：执行 ${o.calls} 次 / ${o.tasks} 个任务（${o.tasksDone} 成 ${o.tasksFailed} 败），成功 ${o.ok} / 失败 ${o.error + o.fail}`)
   }
   const spread = instanceSummary(mergeInstances({}, stat.instances, stat.draft?.instances), kind)
   if (spread) parts.push(spread)

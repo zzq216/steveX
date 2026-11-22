@@ -115,10 +115,11 @@ export function planRename({ dir, renames, text: textMap = {}, now = () => new D
   for (const [from, to] of pairs) {
     const info = manifest[from]
     const hash = from.startsWith('trees/') ? treeResult.get(from).hash : info.hash
-    newManifest[to] = { hash, description: info.description ?? '', ...(info.locked ? { locked: true } : {}) }
+    // savedAt（整理范围方案 R2）：新名字记迁移的时刻，下一次整理会看到改过名的条目
+    newManifest[to] = { hash, description: info.description ?? '', ...(info.locked ? { locked: true } : {}), savedAt: at }
     newManifest[from] = { ...info, retired: { at, reason: `改名为 ${to}（胶囊改名迁移）`, supersededBy: to, by } }
   }
-  for (const [key, r] of treeResult) if (r.target === key && r.changed) newManifest[key] = { ...manifest[key], hash: r.hash }
+  for (const [key, r] of treeResult) if (r.target === key && r.changed) newManifest[key] = { ...manifest[key], hash: r.hash, savedAt: at }
 
   // 4. 说明里写到的旧名字换成新名字（在用条目）
   const descriptions = []

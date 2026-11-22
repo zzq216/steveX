@@ -79,6 +79,11 @@ public class ContainerApi {
                 String type;
                 if (menu instanceof InventoryMenu) {
                     type = "inventory";
+                } else if (menu instanceof AbstractMountInventoryMenu mountMenu) {
+                    // 坐骑训练场设计方案 H7：坐骑界面构造时没有界面类型（super(null, i)），getType() 会抛异常。
+                    // 报 type "mount"，另给是哪只动物、鞍槽 / 身体槽对它能不能用、箱子有几格（AbstractMountInventoryMenu：0 鞍、1 身体、2 起箱子）
+                    type = "mount";
+                    data.put("mount", mountInfo(mountMenu));
                 } else {
                     type = net.minecraft.core.registries.BuiltInRegistries.MENU.getKey(menu.getType()).getPath();
                 }
@@ -374,6 +379,22 @@ public class ContainerApi {
      *
      * @return 有效书架数；准星非方块 / 世界未加载 / 准星所指不是附魔台 → {@code null}
      */
+    /**
+     * 坐骑界面的说明（坐骑训练场设计方案 H7）：{ entity, uuid, saddle: { slot: 0, active }, body: { slot: 1, active }, chest: { from: 2, count } }。
+     * active 就是界面里这一格的 isActive()：对这只动物能不能用（羊驼没有鞍槽、驴没有身体槽……）；count = 动物箱子的格数，0 = 没有箱子。
+     */
+    private static Map<String, Object> mountInfo(AbstractMountInventoryMenu menu) {
+        var accessor = (name.modid.mixin.MountMenuAccessor) menu;
+        var mount = accessor.stevex$mount();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("entity", mount == null ? null : BuiltInRegistries.ENTITY_TYPE.getKey(mount.getType()).toString());
+        out.put("uuid", mount == null ? null : mount.getUUID().toString());
+        out.put("saddle", Map.of("slot", 0, "active", menu.getSlot(0).isActive()));
+        out.put("body", Map.of("slot", 1, "active", menu.getSlot(1).isActive()));
+        out.put("chest", Map.of("from", 2, "count", accessor.stevex$mountContainer().getContainerSize()));
+        return out;
+    }
+
     private static Integer countBookshelves(final Minecraft mc) {
         if (!(mc.hitResult instanceof BlockHitResult bhr)) return null;
         final var level = mc.level;

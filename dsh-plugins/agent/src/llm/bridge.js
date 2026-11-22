@@ -6,7 +6,7 @@ import { capsuleNameProblem, repinTree, saveCapsule, saveDraft } from '../capsul
 import { CapsuleVersions } from '../capsules/versions.js'
 import { collectEvidence, checkLiterals, addShownValues, addSnapshotValues, seenLiteralHits, valueKey } from '../capsules/literals.js'
 import { walkSpec } from '../bt/build.js'
-import { libraryRows, renderLibrary, checkReason, appendCurateLog } from '../capsules/curate.js'
+import { libraryRows, renderLibrary, checkReason, appendCurateLog, lastDoneCurate, lastCurateSeq, curateScope, renderScope, scopeCounts, treeRefs } from '../capsules/curate.js'
 import { renderTemplate } from './prompts.js'
 import { formatProfile } from '../history/profile.js'
 
@@ -21,7 +21,8 @@ import { formatProfile } from '../history/profile.js'
  *   reflect（P4）  任务结束 → 复盘：capsule_save（可多次）→ bt_reflect_done。不是执行器的请求、不挡新任务：
  *           请求自己持有结束的任务对象和草稿的拷贝，新任务换掉 executor.task 也不影响（P4 §2.3 / §2.4）
  *   curate（整理方案 §5）  胶囊库整理：/bt curate，或每结束 curate.everyTasks 个任务自动发（默认 0 = 只能手动）。
- *           只在空闲时发；给全库清单 → capsule_retire / capsule_describe（可多次）→ bt_curate_done。不属于任何任务
+ *           只在空闲时发；缺省给整理范围（上次完成的整理之后用过、新存的条目和相关条目，胶囊库整理范围设计方案），
+ *           /bt curate all 给全库清单 → capsule_retire / capsule_describe（可多次）→ bt_curate_done。不属于任何任务
  * 不属于任何会话的任务（/bt run 的手写树）的修复请求不经过这里，由本地应答器回答（ownsTask）。
  *
  * - 一个请求对应一个会话：plan 属于下指令的会话，任务属于 plan 所在的会话（§7.2）
@@ -113,7 +114,7 @@ export class Bridge {
     this.library = library
     this.sandbox = sandbox
     this.registry = registry
-    this.reflectConfig = { enabled: true, onFailed: true, literalCheck: true, session: 'new', ...reflect }
+    this.reflectConfig = { enabled: true, onFailed: true, onDone: 'changed', literalCheck: true, session: 'new', ...reflect }
     /** 给自动复盘开新会话（2026-11-07）：(任务会话 id) => Promise<新会话 id>；不给 = 复盘留在任务会话里 */
     this.openReviewSession = openReviewSession
     this.lastDrafts = null        // 最近结束的任务的草稿拷贝（/bt reflect 手动复盘用）
@@ -307,7 +308,7 @@ export class Bridge {
     this.curateSession = sessionId
     const task = this.executor.task?.taskId === taskId ? this.executor.task : null
     // 发了复盘就先不整理：复盘结束（closeReflect）时再查
-    if (task && this.shouldReflect(summary) && this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
+    if (task && this.shouldReflect(summary, task) && this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
     if (task) this.writeHistory(task, { sessionId })
     const text = renderTemplate(this.prompts.requests.task_end, {
       taskId, state: summary.state, goal: summary.goal ?? '（无）', result: summary.result ?? '（无）'
@@ -318,11 +319,60 @@ export class Bridge {
 
   // ── 复盘（P4）─────────────────────────────────────────────────────────────
 
-  shouldReflect(summary) {
-    const { enabled, onFailed } = this.reflectConfig
+  shouldReflect(summary, task = null) {
+    const { enabled, onFailed, onDone } = this.reflectConfig
     if (!enabled) return false
-    if (summary.state === 'done') return true
+    if (summary.state === 'done') {
+      if (onDone === 'always' || !task) return true
+      const changed = this.doneChanges(task)
+      if (changed.length) return true
+      const why = '和参考过的同类任务比没有新情况（没有展开 / 修补、没有节点报错、没有执行新草稿或第一次跑的胶囊版本，mod 调用次数相同）'
+      this.executor.log(task.taskId, { event: 'reflect/skipped', reason: why })
+      this.log(`[bt] reflect skipped for ${task.taskId}: ${why}`)
+      return false
+    }
     return onFailed && !NO_REFLECT_BY.includes(summary.by)
+  }
+
+  /**
+   * done 的任务有没有值得复盘的新情况（reflect.onDone = 'changed'，2026-11-21）。@returns {string[]} 有哪些；空 = 例行重复
+   * 训练里同一类任务反复做：执行早就稳定了，每次复盘还是把同一批问题再核对一遍、把同一棵树再存一版（坐骑场地 6 轮 5 版）。
+   */
+  /**
+   * 这个任务里第一次执行的胶囊版本（2026-11-22）：这次之前既没被引用执行过，也没有保存前作为草稿 / 原节点的数字。
+   * 它替换旧版时记下的"哪一版在什么情况下更好"要等它第一次跑才核对得了。任务结束时统计可能已经并进了这次的数字，扣掉再看。
+   * 没有统计 → []（不按这条判断）
+   */
+  firstRuns(task) {
+    if (!this.stats) return []
+    const calls = new Map()
+    for (const e of task.events ?? []) {
+      if (e.event === 'node' && e.phase === 'exit' && typeof e.ref === 'string' && !e.ref.startsWith('task/')) calls.set(e.ref, (calls.get(e.ref) ?? 0) + 1)
+    }
+    const counted = this.stats.data?.tasks?.includes(task.taskId) ?? false
+    return [...calls].filter(([ref, n]) => {
+      const row = this.stats.get(ref)
+      const before = (row?.calls ?? 0) - (counted ? n : 0)
+      return before <= 0 && !(row?.draft?.calls > 0) && !(row?.origin?.calls > 0)
+    }).map(([ref]) => ref).sort()
+  }
+
+  doneChanges(task) {
+    const out = []
+    const views = [...(this.historyViews.get(task.taskId) ?? [])]
+    const refs = views.map((id) => this.history?.read(id)).filter((rec) => rec?.outcome === 'done' && Number.isFinite(rec.metrics?.modCalls))
+    if (refs.length === 0) out.push('没有参考过做成的同类任务')
+    if ((task.versions?.length ?? 0) > 1) out.push('树展开或修补过')
+    const events = task.events ?? []
+    if (events.some((e) => e.event === 'request')) out.push('执行中发过请求')
+    if (events.some((e) => e.event === 'node' && e.phase === 'exit' && e.status === 'FAILURE' && e.error)) out.push('有节点报错')
+    if (events.some((e) => e.event === 'node' && e.phase === 'exit' && typeof e.ref === 'string' && e.ref.startsWith('task/'))) out.push('执行了新草稿')
+    const first = this.firstRuns(task)
+    if (first.length) out.push(`第一次执行这些胶囊版本：${first.join('、')}`)
+    const calls = this.history?.profile(task.taskId)?.modCalls
+    if (refs.length && Number.isFinite(calls) && calls !== Math.min(...refs.map((rec) => rec.metrics.modCalls))) out.push('mod 调用次数和参考任务不同')
+    if (refs.length && !Number.isFinite(calls)) out.push('没有成本画像')
+    return out
   }
 
   /**
@@ -353,7 +403,7 @@ export class Bridge {
       directory: renderReflectDirectory(directory),
       tree: renderTree(task.spec, { statuses: statusMap(task) }),
       profile: this.history ? `${formatProfile(this.history.profile(task.taskId))}\n${renderLlmLine(this.llmUsage(task.taskId, sessionId), this.history.profile(task.taskId))}` : '（没有启用任务历史）',
-      review: this.history ? renderOpenIssues(this.history.openIssues(req.predecessors)) : '（没有启用任务历史）',
+      review: this.history ? renderOpenIssues(this.history.openIssues(req.predecessors, { taskId: task.taskId })) : '（没有启用任务历史）',
       versionClaims: renderVersionClaims(req.versionClaims),
       compare: this.history ? renderCompare({ ...this.history.profile(task.taskId), ...this.llmUsage(task.taskId, sessionId) }, req.predecessors.map((id) => this.history.read(id)).filter(Boolean)) : '（没有启用任务历史）',
       skill: this.prompts.skills.review
@@ -615,8 +665,12 @@ export class Bridge {
     if (!versions) return []
     const used = new Set()
     const add = (ref) => { if (typeof ref === 'string' && ref.includes('@') && !ref.startsWith('task/')) used.add(ref) }
-    for (const spec of [task.spec, ...(task.versions ?? []).map((v) => v?.spec)]) if (spec) walkSpec(spec, (node) => add(node.ref))
-    for (const c of this.history?.profile(task.taskId)?.capsules ?? []) add(c.ref)
+    // 只看这次实际执行到的版本（2026-11-21）：树里写了、但这次没跑到的兜底分支，核对不了它的判断。没有事件时退回看树
+    if (task.events) {
+      for (const e of task.events) if (e.event === 'node' && e.phase === 'exit') add(e.ref)
+    } else {
+      for (const spec of [task.spec, ...(task.versions ?? []).map((v) => v?.spec)]) if (spec) walkSpec(spec, (node) => add(node.ref))
+    }
     const out = new Map()
     for (const ref of used) {
       const at = ref.lastIndexOf('@')
@@ -711,28 +765,57 @@ export class Bridge {
     if (this.busyReason()) return
     const result = this.startCurate({ sessionId: this.curateSession, trigger: 'auto' })
     if (!result.ok) this.log(`[bt] auto curate not sent: ${result.error}`)
+    else if (result.skipped) this.log(`[bt] auto curate skipped: ${result.text}`)
   }
 
   /**
    * 发一个整理请求（/bt curate 手动；自动见 maybeCurate）。忙时直接返回说明，不排队（§5.2）。
-   * @returns {{ ok: true, requestId } | { ok: false, error }}
+   * mode（胶囊库整理范围设计方案 R5）：'scoped' = 上次完成的整理之后用过、新存的条目和相关条目（R1–R3）；'all' = 全库在用的条目。
+   * 从没完成过整理时 scoped 改按 all 发（R1）；范围是空的不发，返回 skipped 和说明（R6），自动整理的计数照旧清零。
+   * @returns {{ ok: true, requestId, mode } | { ok: true, skipped: true, text } | { ok: false, error }}
    */
-  startCurate({ sessionId, trigger = 'manual' }) {
+  startCurate({ sessionId, trigger = 'manual', mode = 'scoped' }) {
     const busy = this.busyReason()
     if (busy) return { ok: false, error: `${busy}；等它结束再整理（不排队）` }
-    const requestId = `k${++this.curateSeq}`
     const state = this.stats?.curateState() ?? { sinceLast: 0, lastAt: null, lastRequestId: null }
-    const req = { requestId, type: 'curate', sessionId, trigger, sinceLast: state.sinceLast, changes: [], reminded: false, answered: false, closed: false, createdAt: this.now() }
+    const rows = libraryRows(this.library, this.stats, this.history)
+    const done = mode === 'scoped' ? lastDoneCurate(this.library.dir) : null
+    let since = null
+    let library
+    let scope = null
+    let fallback = null
+    if (mode === 'scoped' && !done) {
+      mode = 'all'
+      fallback = '还没有完成过整理，这次整理全库。'
+    }
+    if (mode === 'scoped') {
+      since = done.at
+      scope = curateScope(rows, { since, refsOf: (key) => { const row = rows.find((r) => r.key === key); return row ? treeRefs(this.library, row) : null } })
+      if (!scope.core.length) {
+        this.stats?.curateSkipped?.()
+        return { ok: true, skipped: true, text: `上次整理（${since}）之后没有任务用过、也没有新存的胶囊，不需要整理。要整理全库用 /bt curate all` }
+      }
+      library = renderScope(scope)
+    } else {
+      library = renderLibrary(rows, { listLimit: this.curateConfig.listLimit })
+    }
+    // 请求号接着 curate.jsonl 里已有的编（DSH 重启后不再从 k1 重来，回看记录时不会撞号）
+    if (this.curateSeq === 0) this.curateSeq = lastCurateSeq(this.library.dir)
+    const requestId = `k${++this.curateSeq}`
+    const req = { requestId, type: 'curate', sessionId, trigger, mode, since, scope: scope ? scopeCounts(scope) : null, sinceLast: state.sinceLast, changes: [], reminded: false, answered: false, closed: false, createdAt: this.now() }
     this.requests.set(requestId, req)
+    const lastLine = done
+      ? `上次整理完成于 ${done.at}（${done.requestId ?? '—'}，${done.mode === 'scoped' ? '按范围' : '全库'}）`
+      : state.lastAt ? `上次发起整理：${state.lastAt}（${state.lastRequestId}）` : '还没有整理过'
     const text = renderTemplate(this.prompts.requests.curate, {
       requestId,
       trigger: trigger === 'auto'
         ? `（自动发起：自上次整理以来已经结束了 ${state.sinceLast} 个任务，达到 curate.everyTasks = ${this.curateConfig.everyTasks}。人可以随时取消这一回合。）`
-        : '（人用 /bt curate 发起）',
-      last: state.lastAt
-        ? `上次整理：${state.lastAt}（${state.lastRequestId}），之后结束了 ${state.sinceLast} 个任务`
-        : `还没有整理过；统计里已经记了 ${this.stats?.data.tasks.length ?? 0} 个任务`,
-      library: renderLibrary(libraryRows(this.library, this.stats, this.history), { listLimit: this.curateConfig.listLimit }),
+        : fallback === null && mode === 'all' ? '（人用 /bt curate all 发起：整理全库）' : '（人用 /bt curate 发起）',
+      last: [fallback, `${lastLine}，之后结束了 ${state.sinceLast} 个任务`].filter(Boolean).join('\n'),
+      title: mode === 'scoped' ? '本次整理范围' : '胶囊库',
+      scope: mode === 'scoped' ? '先看一遍本次整理范围' : '看一遍库',
+      library,
       // 整理回合放行的工具（与守卫用的同一份名单，不会和实际放行的不一致）
       tools: CURATE_TOOLS.map((name) => `\`${name}\``).join('、'),
       skill: this.prompts.skills.curate
@@ -744,14 +827,14 @@ export class Bridge {
       return { ok: false, error: `找不到会话 ${sessionId}` }
     }
     this.stats?.curateStarted(requestId, new Date(this.now()).toISOString())
-    this.log(`[bt] curate ${requestId} (${trigger})`)
-    return { ok: true, requestId }
+    this.log(`[bt] curate ${requestId} (${trigger}, ${mode}${scope ? ` ${JSON.stringify(req.scope)}` : ''})`)
+    return { ok: true, requestId, mode }
   }
 
   /** 在飞的整理请求（/bt status）。 */
   curating() {
     return [...this.requests.values()].filter((r) => r.type === 'curate' && this.isOpen(r))
-      .map((r) => ({ requestId: r.requestId, trigger: r.trigger, changes: r.changes.length }))
+      .map((r) => ({ requestId: r.requestId, trigger: r.trigger, mode: r.mode, changes: r.changes.length }))
   }
 
   /** capsule_retire（§5.4）：按名字下架 / 撤销。reason 必填。 */
@@ -837,7 +920,7 @@ export class Bridge {
     req.closeReason ??= `${outcome}：${reason}`
     const pick = (op) => req.changes.filter((c) => c.op === op)
     appendCurateLog(this.library.dir, {
-      requestId: req.requestId, at: new Date(this.now()).toISOString(), trigger: req.trigger, sinceLast: req.sinceLast, outcome,
+      requestId: req.requestId, at: new Date(this.now()).toISOString(), trigger: req.trigger, mode: req.mode ?? 'all', since: req.since ?? null, scope: req.scope ?? null, sinceLast: req.sinceLast, outcome,
       retired: pick('retire'), undone: pick('undo'), described: pick('describe'), reason
     })
     this.log(`[bt] curate ${req.requestId} ${outcome}: ${reason}`)
@@ -1468,6 +1551,7 @@ function renderOpenIssues(records) {
   for (const rec of records) {
     lines.push(`${rec.taskId}（${rec.goal}）`)
     for (const issue of rec.issues) lines.push(`  [${issue.index}] ${issue.where}（${issue.kind}）：${issue.problem}；证据：${issue.evidence}${issue.idea ? `；当时的设想：${issue.idea}` : ''}`)
+    if (rec.omitted) lines.push(`  （另有 ${rec.omitted} 条待验证的没列：挂在这次没执行到的胶囊上，或已被以往复盘多次核为 open。这次不用核对，task_get 里照样看得到）`)
   }
   return lines.join('\n')
 }
