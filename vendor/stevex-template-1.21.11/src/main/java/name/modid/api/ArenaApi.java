@@ -53,8 +53,10 @@ public class ArenaApi {
             ArenaManager.MountSetup mountSetup = mountSetup(params.get("mount"));
             // 村民交易训练场（村民交易方案 V2）：本轮村民的职业、类型、等级、交易项种子；其他工作站不给
             name.modid.arena.VillagerArena.Setup villagerSetup = villagerSetup(params.get("villager"));
+            // 书与笔训练场（书与笔方案 J4）：当前选中的快捷栏格 0–8；不给 = 不动
+            Integer selectedSlot = optionalInt(params, "selectedSlot");
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot));
         });
         // 村民交易训练场（村民交易方案 V3）：按职业、类型、等级、交易项种子生成交易项，只读、不碰世界
         handlers.put("arena/trade-preview", params -> {
@@ -211,7 +213,9 @@ public class ArenaApi {
             Object potion = m.get("potion");
             // 酿造台方案 P8：{ potion: 药水注册名 } 发带药水内容的药水
             if (potion != null && !(potion instanceof String)) throw new IllegalArgumentException(name + "[].potion must be a potion id string");
-            out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue(), levels(m.get("enchantments"), name + ".enchantments"), mapScale, (String) potion));
+            // 书与笔方案 J11：{ pages: [string] } 发带内容的书与笔
+            List<String> pages = m.get("pages") == null ? null : strings(m.get("pages"), name + "[].pages");
+            out.add(new ArenaManager.Give(slot.intValue(), id, count.intValue(), levels(m.get("enchantments"), name + ".enchantments"), mapScale, (String) potion, pages));
         }
         return out;
     }
@@ -226,6 +230,8 @@ public class ArenaApi {
      * 酿造台 { brew: { fuel, fuelLeft, ingredient, ingredientLeft, potion, potionLeft, placed, products: [签名...] } }（酿造台方案 P8）；
      * 合成器 { crafter: { target, portions, held: { id: n }, layout: [id | null ×9] } }（合成器方案 R7、R8）；
      * 交易 { trade: { uses: [n...], held: { id: n } } }（村民交易方案 V9；uses 的个数 = 村民的交易项数）；
+     * 砂轮 { grindstone: { goals: [{ id, enchantments: { id: level }, damage }] } }（砂轮方案 K8；goals 的顺序和 items 一致）；
+     * 书 { book: { goals: [[页文字...], ...] } }（书与笔方案 J11；按多重集合比）；
      * 坐骑 { mount: { saddle?: id | null, body?: id | null, chest: { id: n }, inventory: { id: n } } }（坐骑方案 H6；写了 saddle / body 才检查，null = 要空着）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
@@ -239,6 +245,30 @@ public class ArenaApi {
             return new ArenaManager.Expect(new ArenaManager.MountGoal(
                     g.containsKey("saddle"), (String) g.get("saddle"), g.containsKey("body"), (String) g.get("body"),
                     Map.copyOf(counts(g.get("chest"), "expect.mount.chest")), Map.copyOf(counts(g.get("inventory"), "expect.mount.inventory"))));
+        }
+        if (m.containsKey("book")) {
+            String usage = "expect.book must be { goals: [[string...], ...] }";
+            if (!(m.get("book") instanceof Map<?, ?> b) || !(b.get("goals") instanceof List<?> rawGoals)) throw new IllegalArgumentException(usage);
+            List<List<String>> goals = new ArrayList<>();
+            for (Object g : rawGoals) {
+                if (!(g instanceof List<?>)) throw new IllegalArgumentException(usage);
+                goals.add(List.copyOf(strings(g, "expect.book.goals[]")));
+            }
+            return new ArenaManager.Expect(new name.modid.arena.BookArena.Spec(List.copyOf(goals)));
+        }
+        if (m.containsKey("grindstone")) {
+            String usage = "expect.grindstone must be { goals: [{ id:string, enchantments: { id: level }, damage:int }] }";
+            if (!(m.get("grindstone") instanceof Map<?, ?> g) || !(g.get("goals") instanceof List<?> rawGoals)) throw new IllegalArgumentException(usage);
+            List<name.modid.arena.GrindstoneArena.Goal> goals = new ArrayList<>();
+            for (Object raw : rawGoals) {
+                if (!(raw instanceof Map<?, ?> goal) || !(goal.get("id") instanceof String id) || !(goal.get("damage") instanceof Number damage)
+                        || damage.doubleValue() != Math.rint(damage.doubleValue()) || damage.intValue() < 0) {
+                    throw new IllegalArgumentException(usage);
+                }
+                Map<String, Integer> enchantments = goal.get("enchantments") == null ? Map.of() : levels(goal.get("enchantments"), "expect.grindstone.goals[].enchantments");
+                goals.add(new name.modid.arena.GrindstoneArena.Goal(id, Map.copyOf(enchantments), damage.intValue()));
+            }
+            return new ArenaManager.Expect(new name.modid.arena.GrindstoneArena.Spec(List.copyOf(goals)));
         }
         if (m.containsKey("trade")) {
             String usage = "expect.trade must be { uses: [int...], held: { id: n } }";

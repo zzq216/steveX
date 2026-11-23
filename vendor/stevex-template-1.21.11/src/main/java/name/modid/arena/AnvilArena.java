@@ -22,6 +22,7 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.inventory.AnvilMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.ItemEnchantments;
@@ -45,7 +46,8 @@ public final class AnvilArena {
     /**
      * 物品池（A2，F13）：{@code enchantable/durability} 标签里的全部物品，按 id 排序；每件带能附到它上面的附魔
      * （{@link Enchantment#canEnchant}，看 supportedItems，和铁砧的判断一致，F2），各带最高级、是不是诅咒、和这件物品上的哪些附魔冲突。
-     * @return { items: [{ id, enchantments: [{ id, maxLevel, curse, exclusive: [id…] }] }] }
+     * 另给附魔书能带的附魔（砂轮方案 K2）：注册表里的全部附魔，冲突关系在全部附魔之间算。
+     * @return { items: [{ id, enchantments: [{ id, maxLevel, curse, exclusive: [id…] }] }], book: { id, enchantments: [...] } }
      */
     public static Map<String, Object> catalog(RegistryAccess registries) {
         List<Holder.Reference<Enchantment>> all = registries.lookupOrThrow(Registries.ENCHANTMENT).listElements()
@@ -56,28 +58,36 @@ public final class AnvilArena {
         List<Map<String, Object>> out = new ArrayList<>();
         for (Item item : items) {
             ItemStack stack = new ItemStack(item);
-            List<Holder.Reference<Enchantment>> usable = all.stream().filter(e -> e.value().canEnchant(stack)).toList();
-            List<Map<String, Object>> enchantments = new ArrayList<>();
-            for (Holder.Reference<Enchantment> e : usable) {
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("id", e.getRegisteredName());
-                entry.put("maxLevel", e.value().getMaxLevel());
-                entry.put("curse", e.is(EnchantmentTags.CURSE));
-                List<String> exclusive = new ArrayList<>();
-                for (Holder.Reference<Enchantment> other : usable) {
-                    if (!other.equals(e) && !Enchantment.areCompatible(e, other)) exclusive.add(other.getRegisteredName());
-                }
-                entry.put("exclusive", exclusive);
-                enchantments.add(entry);
-            }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", BuiltInRegistries.ITEM.getKey(item).toString());
-            row.put("enchantments", enchantments);
+            row.put("enchantments", entries(all.stream().filter(e -> e.value().canEnchant(stack)).toList()));
             out.add(row);
         }
+        Map<String, Object> book = new LinkedHashMap<>();
+        book.put("id", BuiltInRegistries.ITEM.getKey(Items.ENCHANTED_BOOK).toString());
+        book.put("enchantments", entries(all));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("items", out);
+        result.put("book", book);
         return result;
+    }
+
+    /** 一组附魔的目录项：{ id, maxLevel, curse, exclusive: 这组里和它冲突的附魔 }。 */
+    private static List<Map<String, Object>> entries(List<Holder.Reference<Enchantment>> usable) {
+        List<Map<String, Object>> enchantments = new ArrayList<>();
+        for (Holder.Reference<Enchantment> e : usable) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("id", e.getRegisteredName());
+            entry.put("maxLevel", e.value().getMaxLevel());
+            entry.put("curse", e.is(EnchantmentTags.CURSE));
+            List<String> exclusive = new ArrayList<>();
+            for (Holder.Reference<Enchantment> other : usable) {
+                if (!other.equals(e) && !Enchantment.areCompatible(e, other)) exclusive.add(other.getRegisteredName());
+            }
+            entry.put("exclusive", exclusive);
+            enchantments.add(entry);
+        }
+        return enchantments;
     }
 
     /** 注册名 → 附魔；不存在 → 报错。 */

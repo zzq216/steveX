@@ -69,7 +69,7 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 test('parseTrainArgs', () => {
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
@@ -1326,7 +1326,7 @@ test('config: the stonecutter arena has its own defaults and checks; json.stonec
   assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
-  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter" or "trade"/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone" or "book"/)
 })
 
 const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
@@ -2446,7 +2446,7 @@ test('anvil options: task, second, enchants, curses and xpLevel; rename has no s
 
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null }
   assert.deepEqual(parseTrainArgs(['anvil', 'task=merge', 'second=same', 'item=bow', 'enchants=1-2', 'curses=1', 'xpLevel=50']),
     { ok: true, arena: 'anvil', item: 'bow', runs: 1, seed: null, portions: null, crafts: null, ...none, task: 'merge', second: 'same', enchants: '1-2', curses: '1', xpLevel: 50 })
   assert.match(parseTrainArgs(['anvil', 'task=repair']).error, /task 只能是 merge \/ rename \/ both/)
@@ -2750,7 +2750,7 @@ test('smithing options: tasks, kind, base, pattern and material; upgrades have n
   assert.throws(() => smithingOptions({ kind: 'take' }), /锻造台场地的 kind 只能是 upgrade \/ trim/)
   const parsed = parseTrainArgs(['smithing', 'tasks=1-3', 'kind=trim', 'base=minecraft:iron_chestplate', 'pattern=minecraft:wild', 'material=minecraft:gold'])
   assert.deepEqual([parsed.ok, parsed.tasks, parsed.kind, parsed.base, parsed.pattern, parsed.material], [true, '1-3', 'trim', 'minecraft:iron_chestplate', 'minecraft:wild', 'minecraft:gold'])
-  assert.match(parseTrainArgs(['smithing', 'kind=foo']).error, /kind 只能是 take \/ put \/ mix（箱子题）或 upgrade \/ trim（锻造台题）/)
+  assert.match(parseTrainArgs(['smithing', 'kind=foo']).error, /kind 只能是 take \/ put \/ mix（箱子题）、upgrade \/ trim（锻造台题）或 item \/ book \/ mix（砂轮题）/)
   assert.match(parseTrainArgs(['smithing', 'tasks=0']).error, /tasks 要写 k 或 a-b/)
   const config = normalizeConfig({ logger: null })
   assert.deepEqual(config.training.arenas.smithing, { type: 'smithing', origin: [10000, 120, 10210], timeoutSec: 600, tasks: '1-4', exclude: [] })
@@ -4444,4 +4444,433 @@ test('trade config: defaults, validation and the report (k grouping, mistrade an
   assert.deepEqual(summarize(records, { by: 'chain' }).rows.map((r) => r.key).sort(), ['无串联', '有串联'])
   assert.deepEqual(summarize(records, { by: 'level' }).rows.map((r) => r.key), ['2 级'])
   assert.deepEqual(summarize(records, { by: 'profession' }).rows.map((r) => r.key), ['farmer'])
+})
+
+// ── 砂轮（docs/砂轮训练场设计方案.md）──
+const grindModule = await import('../src/training/grindstone.js')
+/** 假的 arena/anvil-catalog，带附魔书（K2）：书能带全部附魔 */
+const GRIND_CATALOG = {
+  items: ANVIL_CATALOG.items,
+  book: {
+    id: 'minecraft:enchanted_book',
+    enchantments: [anvilEnch('binding_curse', 1, { curse: true }), anvilEnch('feather_falling', 4), anvilEnch('mending', 1), anvilEnch('protection', 4),
+      anvilEnch('sharpness', 5, { exclusive: ['smite'] }), anvilEnch('smite', 5, { exclusive: ['sharpness'] }), anvilEnch('unbreaking', 3), anvilEnch('vanishing_curse', 1, { curse: true })]
+  }
+}
+const ARENAS_GRIND = { grindstone: { type: 'grindstone', origin: [0, 100, 420], timeoutSec: 600, tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [] } }
+
+test('grindstone options: tasks 1–4, kind item / book / mix, enchants 1–5, curses 0–2 as a count; item and kind must agree (§5.2)', () => {
+  const { grindstoneOptions, parseCursesSpec } = grindModule
+  assert.deepEqual(grindstoneOptions({}, ARENAS_GRIND.grindstone), { tasks: { lo: 1, hi: 3 }, kind: 'mix', item: null, enchants: { lo: 1, hi: 3 }, curses: { lo: 0, hi: 1 } })
+  assert.deepEqual(grindstoneOptions({ tasks: '4', kind: 'book', item: 'enchanted_book', enchants: '2-5', curses: '2' }),
+    { tasks: { lo: 4, hi: 4 }, kind: 'book', item: mc('enchanted_book'), enchants: { lo: 2, hi: 5 }, curses: { lo: 2, hi: 2 } })
+  assert.throws(() => grindstoneOptions({ kind: 'book', item: 'bow' }), /kind=book 只出附魔书，不能和 item=minecraft:bow 一起用/)
+  assert.throws(() => grindstoneOptions({ kind: 'item', item: 'enchanted_book' }), /kind=item 不出附魔书/)
+  assert.throws(() => grindstoneOptions({ kind: 'take' }), /砂轮题的 kind 只能是 item \/ book \/ mix/)
+  assert.throws(() => grindstoneOptions({ tasks: '5' }), /tasks 要写 k 或 a-b（1–4/)
+  assert.throws(() => parseCursesSpec('3'), /砂轮题的 curses 要写 k 或 a-b（0–2/)
+  assert.deepEqual(parseCursesSpec('0'), { lo: 0, hi: 0 })
+
+  const args = parseTrainArgs(['grindstone', 'tasks=2-4', 'kind=book', 'enchants=2', 'curses=0-2'])
+  assert.equal(args.ok, true, args.error)
+  assert.deepEqual([args.tasks, args.kind, args.enchants, args.curses], ['2-4', 'book', '2', '0-2'])
+  assert.match(parseTrainArgs(['grindstone', 'curses=5']).error, /curses 只能是 0 \/ 1（铁砧题）或 k、a-b（砂轮题，0–2）/)
+  assert.match(parseTrainArgs(['grindstone', 'kind=foo']).error, /或 item \/ book \/ mix（砂轮题）/)
+  assert.equal(parseTrainArgs(['anvil', 'curses=1']).curses, '1', 'the anvil switch still parses')
+
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.grindstone, { type: 'grindstone', origin: [10000, 120, 10420], timeoutSec: 600, tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [] })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { g2: { type: 'grindstone', origin: [0, 0, 0] } } } }).training.arenas.g2, { tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [], type: 'grindstone', origin: [0, 0, 0] })
+  assert.throws(() => normalizeConfig({ training: { arenas: { g2: { type: 'grindstone', origin: [0, 0, 0], curses: '0-3' } } } }), /training\.arenas\.g2\.砂轮题的 curses/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { g2: { type: 'grindstone', origin: [0, 0, 0], exclude: {} } } } }), /g2\.exclude must be a list of item ids/)
+})
+
+test('grindstone sampler: distinct durable items, books about 1/4, ≥1 compatible non-curse enchantment, curses only where they fit, goals keep curses and turn bare books into books, reproducible (K2–K5)', () => {
+  const { grindstoneTables, grindstoneOptions, sampleGrindstone, goalOf, BOOK_CHANCE } = grindModule
+  const tables = grindstoneTables(GRIND_CATALOG, [])
+  const options = grindstoneOptions({}, ARENAS_GRIND.grindstone)
+  const entryOf = (it) => (it.kind === 'book' ? GRIND_CATALOG.book : GRIND_CATALOG.items.find((e) => e.id === it.id))
+  let items = 0
+  let books = 0
+  const ks = new Set()
+  let cursed = 0
+  for (let seed = 0; seed < 300; seed++) {
+    const picked = sampleGrindstone(tables, seed, options)
+    ks.add(picked.k)
+    assert.ok(picked.k >= 1 && picked.k <= 3)
+    assert.equal(picked.items.length, picked.k)
+    const durable = picked.items.filter((it) => it.kind === 'item').map((it) => it.id)
+    assert.equal(new Set(durable).size, durable.length, 'durable items never repeat in a round')
+    const slots = picked.items.map((it) => it.slot)
+    assert.equal(new Set(slots).size, slots.length)
+    assert.ok(slots.every((s) => s >= 0 && s < 36))
+    for (const it of picked.items) {
+      items++
+      if (it.kind === 'book') books++
+      const entry = entryOf(it)
+      const ids = Object.keys(it.enchantments)
+      const meta = ids.map((id) => entry.enchantments.find((e) => e.id === id))
+      assert.ok(meta.every(Boolean), `${it.id} only gets enchantments it can hold: ${ids}`)
+      assert.ok(meta.some((e) => !e.curse), 'at least one non-curse enchantment (F5)')
+      assert.ok(meta.filter((e) => !e.curse).length <= 3)
+      assert.ok(meta.filter((e) => e.curse).length <= 1)
+      assert.deepEqual(it.curses, meta.filter((e) => e.curse).map((e) => e.id).sort())
+      if (it.curses.length) cursed++
+      for (const e of meta) {
+        assert.ok(it.enchantments[e.id] >= 1 && it.enchantments[e.id] <= e.maxLevel)
+        assert.ok(!meta.some((o) => e.exclusive.includes(o.id)), `compatible: ${ids}`)
+      }
+    }
+    assert.deepEqual(picked.goals, picked.items.map(goalOf))
+    assert.equal(picked.hasBook, picked.items.some((it) => it.kind === 'book'))
+    assert.equal(picked.hasCurse, picked.items.some((it) => it.curses.length > 0))
+  }
+  assert.deepEqual([...ks].sort(), [1, 2, 3])
+  assert.ok(Math.abs(books / items - BOOK_CHANCE) < 0.08, `books ${books}/${items}`)
+  assert.ok(cursed > 0)
+  assert.deepEqual(sampleGrindstone(tables, 42, options), sampleGrindstone(tables, 42, options))
+
+  // 目标（F4）
+  assert.deepEqual(goalOf({ id: mc('enchanted_book'), enchantments: { [mc('mending')]: 1 }, curses: [] }), { id: mc('book'), enchantments: {}, damage: 0 })
+  assert.deepEqual(goalOf({ id: mc('enchanted_book'), enchantments: { [mc('mending')]: 1, [mc('vanishing_curse')]: 1 }, curses: [mc('vanishing_curse')] }),
+    { id: mc('enchanted_book'), enchantments: { [mc('vanishing_curse')]: 1 }, damage: 0 })
+  assert.deepEqual(goalOf({ id: mc('iron_boots'), enchantments: { [mc('binding_curse')]: 1, [mc('protection')]: 4 }, curses: [mc('binding_curse')] }),
+    { id: mc('iron_boots'), enchantments: { [mc('binding_curse')]: 1 }, damage: 0 })
+
+  // kind=book：多本附魔书；curses=2 时书上两种诅咒都有，剑只有消失诅咒
+  const allBooks = sampleGrindstone(tables, 7, grindstoneOptions({ tasks: '3', kind: 'book', curses: '2' }))
+  assert.deepEqual(allBooks.items.map((it) => [it.id, it.curses.length]), [[mc('enchanted_book'), 2], [mc('enchanted_book'), 2], [mc('enchanted_book'), 2]])
+  const sword = sampleGrindstone(tables, 7, grindstoneOptions({ tasks: '1', item: 'diamond_sword', curses: '2' }))
+  assert.deepEqual([sword.items[0].id, sword.items[0].curses], [mc('diamond_sword'), [mc('vanishing_curse')]])
+  // 物品池不够、附魔书被排除
+  const small = grindstoneTables(GRIND_CATALOG, ['minecraft:iron_sword'])
+  assert.throws(() => sampleGrindstone(small, 1, grindstoneOptions({ tasks: '4', kind: 'item' })), /物品池不够：一轮要 4 件互不同种的物品/)
+  const noBook = grindstoneTables(GRIND_CATALOG, ['minecraft:enchanted_book'])
+  assert.equal(noBook.book, null)
+  assert.throws(() => sampleGrindstone(noBook, 1, grindstoneOptions({ kind: 'book' })), /物品池里没有附魔书/)
+  for (let seed = 0; seed < 50; seed++) assert.ok(sampleGrindstone(noBook, seed, options).items.every((it) => it.kind === 'item'))
+})
+
+test('grindstone judge: exact goals succeed in any slot; unground, left in the grindstone, on the cursor, dropped; lost when an item is gone or the grindstone is (K7)', () => {
+  const { judgeGrindstone, goalOf } = grindModule
+  const sword = { slot: 3, kind: 'item', id: mc('diamond_sword'), enchantments: { [mc('sharpness')]: 3, [mc('vanishing_curse')]: 1 }, curses: [mc('vanishing_curse')] }
+  const book = { slot: 9, kind: 'book', id: mc('enchanted_book'), enchantments: { [mc('mending')]: 1 }, curses: [] }
+  const book2 = { slot: 10, kind: 'book', id: mc('enchanted_book'), enchantments: { [mc('unbreaking')]: 2 }, curses: [] }
+  const picked = { k: 2, items: [sword, book], goals: [goalOf(sword), goalOf(book)] }
+  const stack = (it, slot, extra = {}) => ({ slot, id: it.id, count: 1, enchantments: it.enchantments, name: null, ...(it.id.endsWith('sword') ? { damage: 0 } : {}), ...extra })
+  const ground = [stack(picked.goals[0], 20), stack(picked.goals[1], 0)]
+  const judgeWith = (final, extra = {}) => judgeGrindstone({ stopped: false, timedOut: false, taskState: 'done', picked, final: { carriedItem: null, slots: null, droppedItems: [], containerOpen: true, stationIntact: true, ...final }, ...extra })
+
+  assert.deepEqual(judgeWith({ items: ground }), { outcome: 'success', reached: true, ground: 2, faults: [] })
+  assert.deepEqual(judgeWith({ items: [ground[0], stack(book, 9)] }), { outcome: 'false_success', reached: false, ground: 1, faults: ['left'] })
+  assert.deepEqual(judgeWith({ items: [ground[0]], slots: { input0: stack(book, undefined), input1: null } }).faults, ['left', 'input'])
+  assert.deepEqual(judgeWith({ items: [ground[0]], carriedItem: stack(picked.goals[1]) }), { outcome: 'false_success', reached: false, ground: 1, faults: ['cursor'] })
+  assert.deepEqual(judgeWith({ items: [ground[0]], droppedItems: [stack(picked.goals[1])] }).faults, ['dropped'])
+  assert.equal(judgeWith({ items: [ground[0], stack(picked.goals[1], 0, { name: 'x' })] }).outcome, 'lost', 'a renamed book is no longer one of the forms')
+  assert.equal(judgeWith({ items: [ground[0]] }).outcome, 'lost')
+  assert.equal(judgeWith({ items: ground, stationIntact: false }).outcome, 'lost')
+  assert.equal(judgeWith({ items: [stack(sword, 3), stack(book, 9)] }, { taskState: 'failed' }).outcome, 'failed')
+  assert.equal(judgeWith({ items: [stack(sword, 3), stack(book, 9)] }, { timedOut: true, taskState: 'running' }).outcome, 'timeout')
+  assert.equal(judgeWith({ items: ground }, { stopped: true }).outcome, 'aborted')
+  // 两本没有诅咒的附魔书磨完是同一种书，叠成 2 本也算
+  const twoBooks = { k: 2, items: [book, book2], goals: [goalOf(book), goalOf(book2)] }
+  assert.equal(judgeGrindstone({ stopped: false, timedOut: false, taskState: 'done', picked: twoBooks, final: { items: [{ slot: 0, id: mc('book'), count: 2, enchantments: {}, name: null }], carriedItem: null, slots: null, droppedItems: [], stationIntact: true } }).outcome, 'success')
+})
+
+function grindHarness({ aimOk = true, finalOf = null } = {}) {
+  const world = { params: null, state: {} }
+  const describe = (g) => ({ slot: g.slot, id: g.id, count: g.count, enchantments: anvilModule.sortEnchantments(g.enchantments ?? {}), name: null })
+  const defaultFinal = (params) => ({ items: params.expect.grindstone.goals.map((g, i) => ({ slot: i, id: g.id, count: 1, enchantments: g.enchantments, name: null, damage: g.damage })) })
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params, world))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_GRIND,
+    onCall: (method) => (method === 'arena/anvil-catalog' ? { ok: true, data: GRIND_CATALOG } : null),
+    prepareData: (params) => {
+      world.params = params
+      const items = params.items.map(describe)
+      world.state = { held: {}, items, carried: {}, carriedItem: null, slots: null, dropped: {}, droppedItems: [], containerOpen: false, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk, station: 'grindstone', grindstone: { items } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('grindstone run: the catalog is read once, prepare carries count-1 items and the goals, the text lists items only (K6 B); grinding everything succeeds', async () => {
+  const h = grindHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'grindstone', runs: 6, seed: 5 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /tasks=1-3，kind=mix，enchants=1-3，curses=0-1/)
+  await h.done()
+  const records = h.records('grindstone')
+  assert.equal(records.length, 6)
+  assert.equal(h.calls.filter(([m]) => m === 'arena/anvil-catalog').length, 1)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.ground, record.faults, record.reached], [record.k, [], true])
+    const prepare = prepares[i]
+    assert.equal(prepare.station, 'grindstone')
+    assert.deepEqual(prepare.items, record.items.map((it) => ({ slot: it.slot, id: it.id, count: 1, enchantments: it.enchantments })))
+    assert.deepEqual(prepare.expect, { grindstone: { goals: record.goals } })
+    const text = h.instructions[i]
+    const one = record.k === 1
+    assert.ok(text.startsWith(`你正前方有一个砂轮，视角已经对准它。你的物品栏里有${one ? '一件' : `${record.k} 件`}带附魔的物品：\n`), text)
+    assert.ok(text.trimEnd().endsWith(`请用砂轮给${one ? '它' : '它们'}祛魔，产物放回物品栏。`), text)
+    for (const it of record.items) assert.ok(text.includes(`- 带 ${grindModule.enchantsText(it.enchantments)} 的 ${it.id}`), text)
+    assert.doesNotMatch(text, /→|诅咒|minecraft:book[^_]|格子|右键|Shift/, 'K6 B: no goals, no moves')
+    assert.ok(!text.includes('\r'))
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/6 轮：会话 run-1，砂轮 \d 件 /)
+})
+
+test('grindstone run: a crosshair off the grindstone stops the batch; an unground item is false_success; option conflicts are refused', async () => {
+  const off = grindHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'grindstone', runs: 3 }).ok, true)
+  await off.done()
+  const offRecords = off.records('grindstone')
+  assert.equal(offRecords.length, 1)
+  assert.match(offRecords[0].error, /crosshair is not on the grindstone/)
+
+  const lazy = grindHarness({ finalOf: (params) => ({ items: params.items.map((g) => ({ slot: g.slot, id: g.id, count: 1, enchantments: g.enchantments, name: null, damage: 0 })) }) })
+  assert.equal(lazy.trainer.start({ sessionId: 'console', arena: 'grindstone', seed: 2, kind: 'item' }).ok, true)
+  await lazy.done()
+  const rec = lazy.records('grindstone')[0]
+  assert.deepEqual([rec.outcome, rec.faults, rec.ground], ['false_success', ['left'], 0])
+
+  const h = grindHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'grindstone', kind: 'book', item: 'bow' }).error, /kind=book 只出附魔书/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'grindstone', task: 'merge' }).error, /不认这些选项：task/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'grindstone', curses: '1-3' }).error, /砂轮题的 curses/)
+})
+
+test('report: grindstone records group by k / kind / curses, with a column per fault', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (k, outcome, faults = [], hasBook = false, hasCurse = false) => ({ batch: 'b1', target: 'x', k, items: [], goals: [], hasBook, hasCurse, ground: null, faults, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [rec(1, 'success'), rec(2, 'false_success', ['left', 'input'], true), rec(2, 'false_success', ['cursor'], false, true), rec(3, 'lost', ['dropped'], true, true)]
+  const byK = summarize(records, { by: 'k' })
+  assert.equal(byK.grinder, true)
+  assert.deepEqual(byK.rows.map((r) => [r.key, r.runs]), [['2 件', 2], ['1 件', 1], ['3 件', 1]])
+  assert.deepEqual(byK.total.grindFaults, { left: 1, input: 1, cursor: 1, dropped: 1 })
+  assert.match(formatSummary(byK).split('\n')[0], /^件数\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t有没磨的\t留在砂轮\t光标上有东西\t扔在地上\t打开砂轮中位/)
+  assert.deepEqual(summarize(records, { by: 'kind' }).rows.map((r) => r.key).sort(), ['有附魔书', '没有附魔书'].sort())
+  assert.deepEqual(summarize(records, { by: 'curses' }).rows.map((r) => r.key).sort(), ['有诅咒', '没有诅咒'].sort())
+  assert.match(formatSummary(summarize(records, { by: 'curses' })).split('\n')[0], /^诅咒\t/)
+})
+
+// ── 书与笔（docs/书与笔训练场设计方案.md）──
+const bookModule = await import('../src/training/book.js')
+const ARENAS_BOOK = { book: { type: 'book', origin: [0, 100, 450], timeoutSec: 600, books: '1-3', pages: '1-6', edits: '1-3', exclude: [] } }
+
+test('book options: books 1–3, pages 1–8, edits 1–4 (§5.2); config defaults and checks', () => {
+  const { bookOptions } = bookModule
+  assert.deepEqual(bookOptions({}, ARENAS_BOOK.book), { books: { lo: 1, hi: 3 }, pages: { lo: 1, hi: 6 }, edits: { lo: 1, hi: 3 } })
+  assert.deepEqual(bookOptions({ books: '2', pages: '4-8', edits: '4' }), { books: { lo: 2, hi: 2 }, pages: { lo: 4, hi: 8 }, edits: { lo: 4, hi: 4 } })
+  assert.throws(() => bookOptions({ books: '4' }), /books 要写 k 或 a-b（1–3/)
+  assert.throws(() => bookOptions({ pages: '0' }), /pages 要写 k 或 a-b（1–8/)
+  assert.throws(() => bookOptions({ edits: '2-5' }), /edits 要写 k 或 a-b（1–4/)
+
+  const args = parseTrainArgs(['book', 'books=2-3', 'pages=4', 'edits=1-4'])
+  assert.equal(args.ok, true, args.error)
+  assert.deepEqual([args.books, args.pages, args.edits], ['2-3', '4', '1-4'])
+  assert.match(parseTrainArgs(['book', 'pages=9']).error, /pages 要写 k 或 a-b（1–8/)
+
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.book, { type: 'book', origin: [10000, 120, 10450], timeoutSec: 600, books: '1-3', pages: '1-6', edits: '1-3', exclude: [] })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { b2: { type: 'book', origin: [0, 0, 0] } } } }).training.arenas.b2, { books: '1-3', pages: '1-6', edits: '1-3', exclude: [], type: 'book', origin: [0, 0, 0] })
+  assert.throws(() => normalizeConfig({ training: { arenas: { b2: { type: 'book', origin: [0, 0, 0], edits: '9' } } } }), /training\.arenas\.b2\.edits 要写/)
+})
+
+test('book sampler: last page has text, edits within page n + 2, clears only on written pages, goal drops trailing blanks, unique 6–16 character texts, distinct slots, reproducible (J4–J8)', () => {
+  const { bookOptions, sampleBookRound, applyEdits, TEXT_MIN, TEXT_MAX } = bookModule
+  const options = bookOptions({}, ARENAS_BOOK.book)
+  const hanzi = new Set(anvilModule.HANZI)
+  const alnum = /^[A-Za-z0-9]$/
+  let clears = 0
+  let appends = 0
+  let inHand = 0
+  const ks = new Set()
+  for (let seed = 0; seed < 300; seed++) {
+    const picked = sampleBookRound(seed, options)
+    ks.add(picked.k)
+    assert.equal(picked.books.length, picked.k)
+    assert.ok(picked.selectedSlot >= 0 && picked.selectedSlot <= 8)
+    assert.equal(picked.inHand, picked.books.some((b) => b.slot === picked.selectedSlot))
+    if (picked.inHand) inHand++
+    const slots = picked.books.map((b) => b.slot)
+    assert.equal(new Set(slots).size, slots.length)
+    assert.ok(slots.every((s) => s >= 0 && s < 36))
+    const texts = []
+    for (const b of picked.books) {
+      const n = b.pages.length
+      assert.ok(n >= 1 && n <= 6)
+      assert.notEqual(b.pages[n - 1], '', 'the last page always has text (F5)')
+      assert.ok(b.edits.length >= 1 && b.edits.length <= Math.min(3, n + 2))
+      const pages = b.edits.map((e) => e.page)
+      assert.deepEqual(pages, [...new Set(pages)].sort((x, y) => x - y))
+      assert.ok(pages.every((p) => p >= 1 && p <= n + 2))
+      for (const e of b.edits) {
+        if (e.op === 'clear') {
+          clears++
+          assert.ok(e.page <= n && b.pages[e.page - 1] !== '', 'only written pages are cleared')
+        } else {
+          texts.push(e.text)
+        }
+        if (e.page > n) appends++
+      }
+      assert.deepEqual(b.goal, applyEdits(b.pages, b.edits))
+      assert.notDeepEqual(b.goal, b.pages)
+      if (b.goal.length) assert.notEqual(b.goal[b.goal.length - 1], '')
+      texts.push(...b.pages.filter((p) => p !== ''))
+      if (picked.k === 1) assert.equal(b.label, null)
+      else assert.deepEqual(b.label, { page: b.pages.findIndex((p) => p !== '') + 1, text: b.pages.find((p) => p !== '') })
+    }
+    assert.equal(new Set(texts).size, texts.length, 'every text in a round is unique')
+    for (const t of texts) {
+      const chars = [...t]
+      assert.ok(chars.length >= TEXT_MIN && chars.length <= TEXT_MAX, t)
+      assert.ok(chars.every((c) => hanzi.has(c) || alnum.test(c)), t)
+      assert.ok(chars.some((c) => hanzi.has(c)) && chars.some((c) => alnum.test(c)), t)
+    }
+    assert.equal(picked.hasClear, picked.books.some((b) => b.edits.some((e) => e.op === 'clear')))
+    assert.equal(picked.hasAppend, picked.books.some((b) => b.edits.some((e) => e.page > b.pages.length)))
+  }
+  assert.deepEqual([...ks].sort(), [1, 2, 3])
+  assert.ok(clears > 0 && appends > 0 && inHand > 0)
+  assert.deepEqual(sampleBookRound(11, options), sampleBookRound(11, options))
+  // 目标页列表（F5）：清空最后一页书变短，写到第 n + 2 页时第 n + 1 页是空页
+  assert.deepEqual(applyEdits(['a', '', 'c'], [{ page: 3, op: 'clear' }]), ['a'])
+  assert.deepEqual(applyEdits(['a'], [{ page: 3, op: 'write', text: 'z' }]), ['a', '', 'z'])
+  assert.deepEqual(applyEdits(['a'], [{ page: 1, op: 'clear' }]), [])
+})
+
+test('book judge: goals as a multiset in any slot; unsaved, wrong, signed, cursor, dropped; lost when a book is gone (J10)', () => {
+  const { judgeBook, WRITABLE, WRITTEN } = bookModule
+  const picked = { k: 2, books: [{ pages: ['a1', 'a2'], goal: ['A1', 'a2'] }, { pages: ['b1'], goal: [] }] }
+  const bk = (pages, slot = 0, extra = {}) => ({ slot, id: WRITABLE, count: 1, pages, ...extra })
+  const judgeWith = (final, extra = {}) => judgeBook({ stopped: false, timedOut: false, taskState: 'done', picked, final: { carriedItem: null, droppedBooks: [], ...final }, ...extra })
+  assert.deepEqual(judgeWith({ books: [bk([], 7), bk(['A1', 'a2'], 30)] }), { outcome: 'success', reached: true, done: 2, faults: [] })
+  assert.deepEqual(judgeWith({ books: [bk(['A1', 'a2']), bk(['b1'], 3)] }), { outcome: 'false_success', reached: false, done: 1, faults: ['unsaved'] })
+  assert.deepEqual(judgeWith({ books: [bk(['A1', 'a2', '']), bk([], 3)] }).faults, ['wrong'])
+  assert.deepEqual(judgeWith({ books: [bk(['A1', 'a2'])], carriedItem: bk([]) }).faults, ['cursor'])
+  assert.deepEqual(judgeWith({ books: [bk(['A1', 'a2'])], droppedBooks: [bk([])] }).faults, ['dropped'])
+  assert.deepEqual(judgeWith({ books: [bk(['A1', 'a2']), { slot: 2, id: WRITTEN, count: 1, pages: [], title: 'x' }] }).faults, ['signed'])
+  assert.equal(judgeWith({ books: [bk(['A1', 'a2']), bk([], 1), { slot: 4, id: mc('stick'), count: 1 }] }).outcome, 'false_success', 'nothing but the books')
+  assert.equal(judgeWith({ books: [bk(['A1', 'a2'])] }).outcome, 'lost')
+  assert.equal(judgeWith({ books: [bk(['a1', 'a2']), bk(['b1'])] }, { taskState: 'failed' }).outcome, 'failed')
+  assert.equal(judgeWith({ books: [bk(['a1', 'a2']), bk(['b1'])] }, { timedOut: true, taskState: 'running' }).outcome, 'timeout')
+  assert.equal(judgeWith({ books: [bk([]), bk(['A1', 'a2'])] }, { stopped: true }).outcome, 'aborted')
+})
+
+function bookHarness({ finalOf = null, selectedOffset = 0 } = {}) {
+  const world = { params: null, state: {} }
+  const defaultFinal = (params) => ({ books: params.expect.book.goals.map((pages, i) => ({ slot: i, id: bookModule.WRITABLE, count: 1, pages })) })
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    Object.assign(world.state, { reachedAtMs: clock() }, (finalOf ?? defaultFinal)(world.params, world))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_BOOK,
+    prepareData: (params) => {
+      world.params = params
+      const items = params.items.map((g) => ({ slot: g.slot, id: g.id, count: g.count, pages: g.pages }))
+      world.state = { held: {}, books: items, carriedItem: null, dropped: {}, droppedBooks: [], selectedSlot: params.selectedSlot, reachedAtMs: null }
+      return { book: { items, selectedSlot: (params.selectedSlot + selectedOffset) % 9 } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('book run: prepare carries books with pages, the selected slot and the goals; the text lists page edits only (J9); writing them succeeds', async () => {
+  const h = bookHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'book', runs: 8, seed: 4 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /books=1-3，pages=1-6，edits=1-3/)
+  await h.done()
+  const records = h.records('book')
+  assert.equal(records.length, 8)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  let multi = 0
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.done, record.faults, record.reached], [record.k, [], true])
+    const prepare = prepares[i]
+    assert.equal(prepare.station, undefined)
+    assert.equal(prepare.selectedSlot, record.selectedSlot)
+    assert.deepEqual(prepare.items, record.books.map((b) => ({ slot: b.slot, id: mc('writable_book'), count: 1, pages: b.pages })))
+    assert.deepEqual(prepare.expect, { book: { goals: record.books.map((b) => b.goal) } })
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你的物品栏里有${record.k === 1 ? '一本' : `${record.k} 本`}书与笔。请修改：\n`), text)
+    assert.ok(text.trimEnd().endsWith('没有提到的页保持原样。改好的书留在物品栏里。'), text)
+    for (const b of record.books) {
+      for (const e of b.edits) assert.ok(text.includes(e.op === 'clear' ? `- 第 ${e.page} 页清空` : `- 第 ${e.page} 页的内容改成「${e.text}」`), text)
+      if (record.k > 1) {
+        multi++
+        assert.ok(text.includes(`现在第 ${b.label.page} 页写着「${b.label.text}」的那本：\n`), text)
+      }
+    }
+    assert.doesNotMatch(text, /追加|保存|署名|book\/|右键|快捷栏/, 'J9: the goal only')
+    assert.ok(!text.includes('\r'))
+  }
+  assert.ok(multi > 0, 'some rounds have several books')
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/8 轮：会话 run-1，书与笔 \d 本：\[/)
+})
+
+test('book run: a wrong selected slot stops the batch; an unsaved book is false_success; option checks', async () => {
+  const off = bookHarness({ selectedOffset: 1 })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'book', runs: 3 }).ok, true)
+  await off.done()
+  const offRecords = off.records('book')
+  assert.equal(offRecords.length, 1)
+  assert.match(offRecords[0].error, /选中的快捷栏格是 \d，应为 \d/)
+
+  const lazy = bookHarness({ finalOf: (params) => ({ books: params.items.map((g) => ({ slot: g.slot, id: g.id, count: 1, pages: g.pages })) }) })
+  assert.equal(lazy.trainer.start({ sessionId: 'console', arena: 'book', seed: 3 }).ok, true)
+  await lazy.done()
+  const rec = lazy.records('book')[0]
+  assert.deepEqual([rec.outcome, rec.faults, rec.done], ['false_success', ['unsaved'], 0])
+
+  const h = bookHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'book', item: 'stick' }).error, /书与笔题没有 item= 选项/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'book', crafts: '2' }).error, /不认这些选项：m/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'book', books: '5' }).error, /books 要写 k 或 a-b（1–3/)
+})
+
+test('report: book records group by k / hand / ops with a column per fault; cartography keeps its own ops grouping', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (k, outcome, faults = [], inHand = false, hasAppend = false, hasClear = false) => ({ batch: 'b1', target: 'x', k, books: [], inHand, hasAppend, hasClear, selectedSlot: 0, done: null, faults, outcome, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false })
+  const records = [rec(1, 'success', [], true), rec(2, 'false_success', ['unsaved'], false, true), rec(2, 'false_success', ['wrong', 'cursor'], false, false, true), rec(3, 'lost', ['dropped'], false, true, true)]
+  const byK = summarize(records, { by: 'k' })
+  assert.equal(byK.booker, true)
+  assert.deepEqual(byK.rows.map((r) => [r.key, r.runs]), [['2 本', 2], ['1 本', 1], ['3 本', 1]])
+  assert.deepEqual(byK.total.bookFaults, { unsaved: 1, wrong: 1, signed: 0, cursor: 1, dropped: 1 })
+  assert.match(formatSummary(byK).split('\n')[0], /^本数\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t没改或没保存\t改错\t署名了\t光标上有东西\t扔在地上\t达成中位/)
+  assert.deepEqual(summarize(records, { by: 'hand' }).rows.map((r) => r.key).sort(), ['开局在手上', '要先拿到手上'].sort())
+  const byOps = summarize(records, { by: 'ops' })
+  assert.deepEqual(byOps.rows.map((r) => r.key).sort(), ['只改写', '有追加', '有清空', '有追加、有清空'].sort())
+  assert.match(formatSummary(byOps).split('\n')[0], /^修改种类\t/)
 })

@@ -13,6 +13,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSetHeldSlotPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -33,6 +34,7 @@ import net.minecraft.world.inventory.LoomMenu;
 import net.minecraft.world.inventory.CartographyTableMenu;
 import net.minecraft.world.inventory.BrewingStandMenu;
 import net.minecraft.world.inventory.CrafterMenu;
+import net.minecraft.world.inventory.GrindstoneMenu;
 import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.level.block.entity.CrafterBlockEntity;
 import net.minecraft.world.level.block.entity.BrewingStandBlockEntity;
@@ -140,6 +142,13 @@ import net.minecraft.world.phys.Vec3;
  * prepare 的 items 里带 potion 的项发指定药水（P8），用服务器的酿造配方核对题目（{@link BrewArena#check}）；物品按签名计数（瓶子 id#药水，P7）；
  * status 另报物品栏、光标、地上、酿造台五格和燃料值、酿造次数（{@code BrewingBrewMixin} 报给 {@link #onBrew}，P9）。
  *
+ * <p>书与笔场地（docs/书与笔训练场设计方案.md）：没有工作站（同 2×2 合成场地）。prepare 的 items 里带 pages 的项发带内容的书与笔，
+ * selectedSlot 设当前选中的快捷栏格（J4、J11）；给了 expect.book 时 status 另报玩家身上、光标上、地上的书和每本的页。
+ *
+ * <p>砂轮场地（docs/砂轮训练场设计方案.md）：工作站是落地的砂轮（{@code grindstone}，K1），没有方块实体，不用每轮清空。
+ * prepare 用临时砂轮菜单逐件核对目标（{@link GrindstoneArena#check}，K8）；status 另报物品栏（每件带签名的几项）、光标、砂轮两个输入格、
+ * 地上（按 id 计数和每件的签名）、界面开没开。
+ *
  * <p>合成器场地（docs/合成器训练场设计方案.md）：工作站是合成器（{@code crafter}），每轮清空后换一台新的（格子、禁用状态清掉，R8）。
  * prepare 用服务器配方核对规范摆法的产物（{@link CrafterArena#check}）；status 另报物品栏、光标、地上（按 id）和合成器九格、禁用格、预览产物、通电状态。
  *
@@ -184,6 +193,7 @@ public final class ArenaManager {
             Map.entry("cartography", Blocks.CARTOGRAPHY_TABLE),
             Map.entry("brewing_stand", Blocks.BREWING_STAND),
             Map.entry("crafter", Blocks.CRAFTER),
+            Map.entry("grindstone", Blocks.GRINDSTONE),
             Map.entry("villager", Blocks.AIR),
             // 坐骑场地（坐骑方案 H1）：工作站是动物，方块位置上只留空气
             Map.entry("mount", Blocks.AIR));
@@ -207,7 +217,9 @@ public final class ArenaManager {
             Map.entry("cartography", new Site(new BlockPos(10000, 120, 10300), "cartography")),
             Map.entry("brewing", new Site(new BlockPos(10000, 120, 10330), "brewing_stand")),
             Map.entry("crafter", new Site(new BlockPos(10000, 120, 10360), "crafter")),
-            Map.entry("villager", new Site(new BlockPos(10000, 120, 10390), "villager"))));
+            Map.entry("villager", new Site(new BlockPos(10000, 120, 10390), "villager")),
+            Map.entry("grindstone", new Site(new BlockPos(10000, 120, 10420), "grindstone")),
+            Map.entry("book", new Site(new BlockPos(10000, 120, 10450), null))));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -230,60 +242,70 @@ public final class ArenaManager {
      *   <li>酿造台方案 P8（brew 不为 null）：容器界面已关闭，光标为空，见 {@link BrewArena#reached}。</li>
      *   <li>合成器方案 R7（crafter 不为 null）：容器界面已关闭，光标为空，见 {@link CrafterArena#reached}。</li>
      *   <li>村民交易方案 V9（trade 不为 null）：容器界面已关闭，光标为空，见 {@link VillagerArena#reached}。</li>
+     *   <li>砂轮方案 K7（grindstone 不为 null）：光标为空，不要求关界面，见 {@link GrindstoneArena#reached}。</li>
+     *   <li>书与笔方案 J10（book 不为 null）：光标为空，见 {@link BookArena#reached}。</li>
      * </ul>
      * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew, CrafterArena.Spec crafter, VillagerArena.Spec trade) {
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew, CrafterArena.Spec crafter, VillagerArena.Spec trade, GrindstoneArena.Spec grindstone, BookArena.Spec book) {
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
-            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null, null, null);
+            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
-            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null, null, null);
+            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Cook cook) {
-            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Enchant enchant) {
-            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Beacon beacon) {
-            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Anvil anvil) {
-            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(List<Smith> smithing) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null, null, null, null, null);
         }
 
         public Expect(MountGoal mount) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null, null, null, null, null);
         }
 
         public Expect(LoomArena.Spec loom) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null, null, null, null, null);
         }
 
         public Expect(CartographyArena.Spec cartography) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null, null, null, null, null);
         }
 
         public Expect(BrewArena.Spec brew) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew, null, null, null, null);
         }
 
         public Expect(CrafterArena.Spec crafter) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, crafter, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, crafter, null, null, null);
         }
 
         public Expect(VillagerArena.Spec trade) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, trade);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, trade, null, null);
+        }
+
+        public Expect(GrindstoneArena.Spec grindstone) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, grindstone, null);
+        }
+
+        public Expect(BookArena.Spec book) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, null, book);
         }
     }
 
@@ -448,6 +470,11 @@ public final class ArenaManager {
         Run run = active;
         if (run == null || !isBrewer(run.stationName) || !(level instanceof ServerLevel) || level.dimension() != net.minecraft.world.level.Level.OVERWORLD) return;
         if (pos.equals(stationPos(run.origin))) run.brews++;
+    }
+
+    /** 砂轮工作站（砂轮方案）：落地朝东，不用每轮清空（K1）；物品按签名比对（K7）。 */
+    public static boolean isGrindstone(String station) {
+        return "grindstone".equals(station);
     }
 
     /** 合成器工作站（合成器方案）：每轮换新（R8）；材料按 id 计数（R5）。 */
@@ -853,6 +880,8 @@ public final class ArenaManager {
             case "anvil" -> out.put(at, Blocks.ANVIL.defaultBlockState().setValue(AnvilBlock.FACING, Direction.EAST));
             // 织布机方案 L2：正面朝北，对着站在 -z 一侧的玩家（只影响外观）
             case "loom" -> out.put(at, Blocks.LOOM.defaultBlockState().setValue(LoomBlock.FACING, Direction.NORTH));
+            // 砂轮方案 K1：落地、朝东（默认状态是挂墙的，F9）
+            case "grindstone" -> out.put(at, GrindstoneArena.stationState());
             // 制图台方案 K1：没有朝向属性
             case "cartography" -> out.put(at, Blocks.CARTOGRAPHY_TABLE.defaultBlockState());
             // 酿造台方案 P1：没有朝向属性；三个药水瓶的方块状态由酿造台自己更新，完好检查只看方块
@@ -1012,8 +1041,13 @@ public final class ArenaManager {
      * enchantments（铁砧方案 A7）：{ 注册名: 级数 }，附魔书写进存储的附魔；null = 不带附魔。
      * potion（酿造台方案 P8）：不为 null 时 id 必须是药水 / 喷溅药水 / 滞留药水，按这个药水注册名做出带药水内容的药水（一个一叠，超过 1 由 split 拆开）。
      * mapScale（制图台方案 K6）：不为 null 时 id 必须是已绘制地图、count 在 1–64，mod 现做一张这个缩放等级的开局地图，复制成 count 张同编号的一叠；一轮最多一项。
+     * pages（书与笔方案 J11）：不为 null 时 id 必须是书与笔、count 为 1，写进这些页（{@link BookArena#stack}）。
      */
-    public record Give(int slot, String id, int count, Map<String, Integer> enchantments, Integer mapScale, String potion) {
+    public record Give(int slot, String id, int count, Map<String, Integer> enchantments, Integer mapScale, String potion, List<String> pages) {
+        public Give(int slot, String id, int count, Map<String, Integer> enchantments, Integer mapScale, String potion) {
+            this(slot, id, count, enchantments, mapScale, potion, null);
+        }
+
         public Give(int slot, String id, int count) {
             this(slot, id, count, null, null, null);
         }
@@ -1046,10 +1080,10 @@ public final class ArenaManager {
         int next = 0;
         for (Give g : items) {
             int max = item(g.id()).getDefaultMaxStackSize();
-            out.add(new Give(g.slot(), g.id(), Math.min(g.count(), max), g.enchantments(), g.mapScale(), g.potion()));
+            out.add(new Give(g.slot(), g.id(), Math.min(g.count(), max), g.enchantments(), g.mapScale(), g.potion(), g.pages()));
             for (int left = g.count() - max; left > 0; left -= max) {
                 if (next >= free.size()) throw new IllegalArgumentException("not enough free slots to split " + g.id() + " x" + g.count());
-                out.add(new Give(free.get(next++), g.id(), Math.min(left, max), g.enchantments(), g.mapScale(), g.potion()));
+                out.add(new Give(free.get(next++), g.id(), Math.min(left, max), g.enchantments(), g.mapScale(), g.potion(), g.pages()));
             }
         }
         return out;
@@ -1085,8 +1119,10 @@ public final class ArenaManager {
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
                                               List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
                                               Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel, MountSetup mountSetup,
-                                              VillagerArena.Setup villagerSetup) {
+                                              VillagerArena.Setup villagerSetup, Integer selectedSlot) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
+        // 书与笔方案 J4：当前选中的快捷栏格
+        if (selectedSlot != null && (selectedSlot < 0 || selectedSlot > 8)) throw new IllegalArgumentException("selectedSlot must be within 0-8: " + selectedSlot);
         Block stationBlock = station(station);
         checkChestItems(chestItems, storageCapacity(station));
         int baseLevel = requestedBeaconLevel != null ? requestedBeaconLevel : BeaconArena.MAX_LEVEL;
@@ -1103,7 +1139,11 @@ public final class ArenaManager {
         }
         String brewProduct = null;
         String crafterProduct = null;
-        if (expect != null && expect.trade() != null) {
+        if (expect != null && expect.book() != null) {
+            if (expect.book().goals().isEmpty()) throw new IllegalArgumentException("expect.book.goals is empty");
+        } else if (expect != null && expect.grindstone() != null) {
+            if (!isGrindstone(station)) throw new IllegalArgumentException("expect { grindstone } needs the grindstone station");
+        } else if (expect != null && expect.trade() != null) {
             if (!isVillager(station)) throw new IllegalArgumentException("expect { trade } needs the villager station");
             int trades = villagerMade.villager().getOffers().size();
             if (expect.trade().uses().size() != trades) throw new IllegalArgumentException("expect.trade.uses has " + expect.trade().uses().size() + " entries, the villager has " + trades + " trades");
@@ -1153,6 +1193,11 @@ public final class ArenaManager {
         List<ItemStack> stacks = new ArrayList<>();
         CartographyArena.Source mapSource = null;
         for (Give g : items) {
+            if (g.pages() != null) {
+                // 书与笔方案 J11：带内容的书与笔
+                stacks.add(BookArena.stack(g.id(), g.count(), g.pages()));
+                continue;
+            }
             if (g.potion() != null) {
                 // 酿造台方案 P8：带药水内容的药水
                 if (!List.of("minecraft:potion", "minecraft:splash_potion", "minecraft:lingering_potion").contains(g.id())) throw new IllegalArgumentException("items[].potion needs a potion, splash_potion or lingering_potion, got " + g.id());
@@ -1171,6 +1216,8 @@ public final class ArenaManager {
             stacks.add(made.getKey().copyWithCount(g.count())); // K6：同编号的一叠
             mapSource = made.getValue();
         }
+        // 砂轮方案 K8：每件单独放进临时砂轮菜单，产物要和目标一致（发放、改动世界之前核对）
+        if (expect != null && expect.grindstone() != null) GrindstoneArena.check(player, stacks, expect.grindstone());
         List<Item> watchItems = new ArrayList<>();
         for (String id : watchIds) watchItems.add(item(id));
         ServerLevel level = server.overworld();
@@ -1254,6 +1301,11 @@ public final class ArenaManager {
         // 7. 发材料，记统计基线
         for (int i = 0; i < items.size(); i++) player.getInventory().setItem(items.get(i).slot(), stacks.get(i));
         player.inventoryMenu.broadcastChanges();
+        // 7a. 书与笔方案 J4：当前选中的快捷栏格，同步给客户端
+        if (selectedSlot != null) {
+            player.getInventory().setSelectedSlot(selectedSlot);
+            player.connection.send(new ClientboundSetHeldSlotPacket(selectedSlot));
+        }
         // 7b. 附魔台（附魔台方案 N4）：经验等级（进度清零）、附魔种子
         Map<String, Object> enchantInfo = null;
         if (isEnchanter(station)) {
@@ -1332,6 +1384,15 @@ public final class ArenaManager {
         if (mapSource != null) out.put("map", mapSource.describe());
         if (brewProduct != null) out.put("brew", Map.of("product", brewProduct));
         if (crafterProduct != null) out.put("crafter", Map.of("product", crafterProduct));
+        // 砂轮方案 K8：插件用它核对物品发对了
+        if (isGrindstone(station)) out.put("grindstone", Map.of("items", GrindstoneArena.items(player.getInventory())));
+        // 书与笔方案 J11：插件用它核对书发对了、选中格设上了
+        if (expect != null && expect.book() != null) {
+            Map<String, Object> bookInfo = new LinkedHashMap<>();
+            bookInfo.put("items", BookArena.items(player.getInventory()));
+            bookInfo.put("selectedSlot", player.getInventory().getSelectedSlot());
+            out.put("book", bookInfo);
+        }
         if (isBeacon(station)) {
             // 信标方案 G2：新放的信标等级是 0，要等它查完光柱、到 80 tick 的整数倍才数底座；插件轮询 status 的 beacon.levels 等它对上
             Map<String, Object> beaconInfo = new LinkedHashMap<>();
@@ -1468,6 +1529,27 @@ public final class ArenaManager {
             out.put("stand", stand != null ? BrewArena.stand(stand) : null);
             out.put("containerOpen", containerOpen(player));
             out.put("brews", active.brews);
+        }
+        if (active.expect != null && active.expect.book() != null) {
+            // 书与笔方案 J10、J11：玩家身上（不含光标）的书和每本的页，光标，地上（按 id 计数和每本的页），选中的快捷栏格
+            out.put("held", counts(player.getInventory()));
+            out.put("books", BookArena.items(player.getInventory()));
+            out.put("carriedItem", BookArena.describe(player.containerMenu.getCarried()));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("droppedBooks", BookArena.dropped(level, box(active.origin)));
+            out.put("selectedSlot", player.getInventory().getSelectedSlot());
+        }
+        if (isGrindstone(active.stationName)) {
+            // 砂轮方案 K7、K8：物品栏（不含光标）的计数和每件的签名，光标，砂轮两个输入格（界面开着时；关界面时退回物品栏），
+            // 场内地上（按 id 计数和每件的签名），界面开没开
+            out.put("held", counts(player.getInventory()));
+            out.put("items", GrindstoneArena.items(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("carriedItem", GrindstoneArena.describe(player.containerMenu.getCarried()));
+            out.put("slots", GrindstoneArena.slots(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("droppedItems", GrindstoneArena.dropped(level, box(active.origin)));
+            out.put("containerOpen", containerOpen(player));
         }
         if (isCrafter(active.stationName)) {
             // 合成器方案 R5、R8：物品栏（不含光标）、光标、场内地上按 id 计数；合成器九格、禁用格、预览产物、通电状态
@@ -1678,6 +1760,7 @@ public final class ArenaManager {
             case "cartography" -> menu instanceof CartographyTableMenu;
             case "brewing_stand" -> menu instanceof BrewingStandMenu;
             case "crafter" -> menu instanceof CrafterMenu;
+            case "grindstone" -> menu instanceof GrindstoneMenu;
             default -> menu instanceof CraftingMenu;
         };
     }
@@ -1688,6 +1771,10 @@ public final class ArenaManager {
         if (run.expect.smithing() != null) return reachedSmithing(player, run.expect.smithing());
         if (!player.containerMenu.getCarried().isEmpty()) return false;
         if (run.expect.mount() != null) return reachedMount(level, player, run);
+        // 砂轮方案 K7：光标为空（上面已查）、玩家身上按签名恰好是全部目标；不要求关界面
+        if (run.expect.grindstone() != null) return GrindstoneArena.reached(player.getInventory(), run.expect.grindstone());
+        // 书与笔方案 J10：光标为空（上面已查）、玩家身上只有书与笔，页列表和目标作为多重集合相等
+        if (run.expect.book() != null) return BookArena.reached(player.getInventory(), run.expect.book());
         if (run.expect.trade() != null) {
             // 村民交易方案 V9：界面关闭、光标为空（上面已查）、每笔交易的次数、物品栏
             if (containerOpen(player)) return false;
