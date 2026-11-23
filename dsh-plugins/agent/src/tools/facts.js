@@ -13,7 +13,7 @@ import { GET_MAX, SEARCH_LIMIT, SEARCH_MAX } from '../facts/store.js'
  *
  * @param {object} services
  * @param {{ store: import('../facts/store.js').FactStore, source: import('../facts/source.js').SourceTree }} services.facts
- * @param {{ note: (sessionId, kind: 'source'|'write') => void, source: (sessionId) => object }} [services.factTurns]
+ * @param {{ note: (sessionId, kind: 'source'|'write', detail?: object) => void, source: (sessionId) => object }} [services.factTurns]  detail = 查了哪里（事实库写入挪到复盘设计方案 E1）
  * @param {number} services.maxOutputChars
  */
 /** 配方生成器所在的目录（基准内相对路径） */
@@ -129,12 +129,15 @@ export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }
       output: { schema: JSON_OUTPUT, render: (_args, value) => textBlocks(renderSearch(value, maxOutputChars)) },
       isConcurrencySafe: () => true,
       async execute(args, exec) {
-        factTurns.note(sessionOf(exec), 'source')
+        // 记账带上查了什么（事实库写入挪到复盘设计方案 E1：任务回合的查源码记到任务名下，复盘时 bt_inspect what=sources 看）
+        const detail = { tool: 'mc_source_search', pattern: args.pattern, ...(args.path ? { path: args.path } : {}), ...(args.glob ? { glob: args.glob } : {}) }
         try {
           const result = await source.search(args)
+          factTurns.note(sessionOf(exec), 'source', { ...detail, matches: result.matches, files: result.files })
           const note = recipeSourceNote(result)
           return { ok: true, ...result, ...(note ? { note } : {}) }
         } catch (error) {
+          factTurns.note(sessionOf(exec), 'source', { ...detail, error: true })
           return { ok: false, error: error instanceof SourceError ? error.message : String(error) }
         }
       }
@@ -150,12 +153,13 @@ export function factTools({ facts, factTurns = { note() {}, source: () => ({}) }
       output: { schema: JSON_OUTPUT, render: (_args, value) => textBlocks(renderRead(value)) },
       isConcurrencySafe: () => true,
       async execute(args, exec) {
-        factTurns.note(sessionOf(exec), 'source')
         try {
           const result = source.read(args)
+          factTurns.note(sessionOf(exec), 'source', { tool: 'mc_source_read', file: result.file, start: result.start, end: result.end })
           const note = recipeSourceNote(result)
           return { ok: true, ...result, ...(note ? { note } : {}) }
         } catch (error) {
+          factTurns.note(sessionOf(exec), 'source', { tool: 'mc_source_read', file: args.file, error: true })
           return { ok: false, error: error instanceof SourceError ? error.message : String(error) }
         }
       }

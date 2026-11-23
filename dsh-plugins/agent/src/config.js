@@ -12,6 +12,8 @@ import { parseMountGroups, parseMountMove, parseMountTotal } from './training/mo
 import { loomOptions } from './training/loom.js'
 import { cartographyOptions } from './training/cartography.js'
 import { brewOptions } from './training/brew.js'
+import { crafterOptions } from './training/crafter.js'
+import { tradeOptions } from './training/trade.js'
 import { parseCountSpec } from './training/sampler.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
@@ -34,6 +36,10 @@ const LOOM_ARENA_DEFAULTS = Object.freeze({ banners: '1-3', slots: '1-3', fill: 
 /** 用户自己加的制图台场地（type: 'cartography'）没写的字段（制图台训练场设计方案 §5）；exclude 不用，留空 */
 /** 用户自己加的酿造台场地（type: 'brew'）没写的字段（酿造台训练场设计方案 §5） */
 const BREW_ARENA_DEFAULTS = Object.freeze({ fuel: '32-64', raw: '32-64', bottles: '1-3', m: '1-32', n: '1-32', exclude: [] })
+/** 用户自己加的合成器场地（type: 'crafter'）没写的字段（合成器训练场设计方案 R4） */
+const CRAFTER_ARENA_DEFAULTS = Object.freeze({ portions: '1-16', extra: '0-16', exclude: [] })
+/** 用户自己加的村民交易场地（type: 'trade'）没写的字段（村民交易训练场设计方案 §5） */
+const TRADE_ARENA_DEFAULTS = Object.freeze({ level: '1-5', tasks: '1-4', portions: '1-64', extra: '0-16', exclude: { professions: [], items: [] } })
 const CARTOGRAPHY_ARENA_DEFAULTS = Object.freeze({ task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] })
 const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
@@ -208,6 +214,11 @@ export const DEFAULTS = Object.freeze({
      *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/制图台训练场设计方案.md
      * 'brew' = 酿造台，字段是 { origin, fuel: 发几个烈焰粉 "k" | "a-b"（1–64）, raw: 发几个材料（1–64，不超过堆叠上限）, bottles: 发几瓶药水（1–3）,
      *     m: 放进燃料格的个数, n: 放进材料格的个数（1–64）, exclude: 不出的材料、药水、瓶子 id, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/酿造台训练场设计方案.md
+     * 'crafter' = 合成器，字段是 { origin, portions: 放几份（每个放了材料的格子几个）"k" | "a-b"（1–64，不超过材料的堆叠上限）,
+     *     extra: 每种材料多发几个（0–64，不超过堆叠上限）, exclude: 不出的配方名, timeoutSec? / wallTimeoutSec? }（命令行 n= / extra= 优先），见 docs/合成器训练场设计方案.md
+     * 'trade' = 村民交易，字段是 { origin, level: 村民等级 "k" | "a-b"（1–5）, tasks: 选几笔交易（1–4）, portions: 每笔交易几次（1–64，再截到这笔交易最多能出的次数）,
+     *     extra: 每种付款物多发几个（0–64，上限另放宽到单价的 2 倍）, exclude: { professions: 不出的职业, items: 不当产物的物品 id }, timeoutSec? / wallTimeoutSec? }
+     *     （命令行 level= / tasks= / n= / extra= / profession= / item= 优先），见 docs/村民交易训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
@@ -223,7 +234,9 @@ export const DEFAULTS = Object.freeze({
       mount: { type: 'mount', origin: [10000, 120, 10240], timeoutSec: 600, groups: ['horse', 'donkey', 'camel', 'llama', 'nautilus'], total: '64-128', move: '1-64', exclude: ['minecraft:bundle'] },
       loom: { type: 'loom', origin: [10000, 120, 10270], timeoutSec: 900, banners: '1-3', slots: '1-3', fill: 'random', styles: '1-3', spare: '0-3', itemPatterns: 'off', exclude: [] },
       cartography: { type: 'cartography', origin: [10000, 120, 10300], timeoutSec: 600, task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] },
-      brewing: { type: 'brew', origin: [10000, 120, 10330], timeoutSec: 600, fuel: '32-64', raw: '32-64', bottles: '1-3', m: '1-32', n: '1-32', exclude: [] }
+      brewing: { type: 'brew', origin: [10000, 120, 10330], timeoutSec: 600, fuel: '32-64', raw: '32-64', bottles: '1-3', m: '1-32', n: '1-32', exclude: [] },
+      crafter: { type: 'crafter', origin: [10000, 120, 10360], timeoutSec: 900, portions: '1-16', extra: '0-16', exclude: [] },
+      villager: { type: 'trade', origin: [10000, 120, 10390], timeoutSec: 900, level: '1-5', tasks: '1-4', portions: '1-64', extra: '0-16', exclude: { professions: [], items: [] } }
     }
   },
   planner: {
@@ -279,11 +292,33 @@ export function normalizeConfig(raw = {}) {
     for (const key of ['timeoutSec', 'wallTimeoutSec']) if (arena[key] !== undefined && !(Number.isInteger(arena[key]) && arena[key] > 0)) {
       throw new Error(`stevex-agent config: training.arenas.${name}.${key} must be a positive integer`)
     }
+    if (arena.type === 'trade') {
+      // 村民交易场地（村民交易训练场设计方案 §5）：exclude 是 { professions, items }
+      const ex = arena.exclude ?? {}
+      const strings = (v) => v === undefined || (Array.isArray(v) && v.every((s) => typeof s === 'string'))
+      if (typeof ex !== 'object' || Array.isArray(ex) || !strings(ex.professions) || !strings(ex.items)) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be { professions: [profession ids], items: [item ids] }`)
+      }
+      try {
+        tradeOptions({}, arena)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
       throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : arena.type === 'loom' ? 'banner, dye, banner pattern or pattern item ids' : arena.type === 'cartography' ? 'strings (unused)' : arena.type === 'brew' ? 'ingredient, potion or bottle ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography" or "brew"`)
+    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew', 'crafter', 'trade'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter" or "trade"`)
+    if (type === 'crafter') {
+      try {
+        crafterOptions({}, arena)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (type === 'brew') {
       try {
         brewOptions({}, arena)
@@ -454,6 +489,10 @@ function normalizeTraining(raw = {}) {
             ? { ...CARTOGRAPHY_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
           : type === 'brew'
             ? { ...BREW_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'crafter'
+            ? { ...CRAFTER_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'trade'
+            ? { ...TRADE_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
         : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }

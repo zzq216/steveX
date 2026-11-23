@@ -41,6 +41,7 @@ export function treeTools({ bridge, maxOutputChars, inspectMaxBytes = 8000 }) {
         '- live：现在读一次 sources（player / inventory / container / f3，缺省全读），同时存成 live#n 快照供之后对比',
         '- versions：本任务读过的记忆数据源的版本',
         '- tree：树的版本链。不给 version = 版本表（每一版从哪来：大纲 / 展开 / 修复）；给 version = 那一版的树；再给 against（另一个版本号）= 两版之差',
+        '- sources：本任务的规划 / 展开 / 修复回合查过的 MC 源码（文件 + 行号 / 搜索模式 + 命中数，按时间排；原文用 mc_source_read 看）。只在复盘回合',
         '复盘已结束的任务时没有 live，eval 要给 at（任务过程中的快照）。',
         '记忆世界（方块、实体、配方）的值这里看不到：树要用到就在树里查。'
       ].join('\n'),
@@ -79,6 +80,26 @@ export function treeTools({ bridge, maxOutputChars, inspectMaxBytes = 8000 }) {
       output: { schema: JSON_OUTPUT, render: (_args, value) => textBlocks(renderSubmission(value)) },
       async execute(args, exec) {
         return bridge.submitTree({ sessionId: sessionOf(exec), requestId: args.requestId, tree: args.tree, code: args.code, blackboard: args.blackboard })
+      }
+    },
+    {
+      name: 'bt_write_code',
+      description: [
+        '给正在回答的规划 / 展开 / 修复请求写一条任务内代码草稿（不提交树）。requestId 是那个请求的 id。',
+        '校验和提交工具的 code 字段相同（签名、编译）：通过 → 返回 task/名字@hash；不通过 → 逐条错误，不算不合法尝试。',
+        '写下的草稿在本任务内一直有效，之后的树 / 展开 / 补丁都可以用 "task/名字" 引用（引用提交时最新的那一版），回合出错也不会丢。同名重写 = 新版本。',
+        '草稿也可以照旧放在提交工具的 code 字段里一起交。'
+      ].join('\n'),
+      parameters: {
+        requestId: { type: 'string', required: true, description: '规划 / 展开 / 修复请求的 id，如 "p1"、"r3"' },
+        name: { type: 'string', required: true, description: '草稿名（树里用 "task/名字" 引用）' },
+        signature: { type: 'object', required: true, additionalProperties: true, description: '签名，同 code 字段里的 signature' },
+        body: { type: 'string', required: true, description: '代码正文：定义 function main(params, state) 的 TS / JS 源码' },
+        description: { type: 'string', description: '可选：说明' }
+      },
+      output: { schema: JSON_OUTPUT, render: (_args, value) => textBlocks(renderCodeWrite(value)) },
+      async execute(args, exec) {
+        return bridge.writeCode({ sessionId: sessionOf(exec), requestId: args.requestId, name: args.name, signature: args.signature, body: args.body, description: args.description })
       }
     },
     {
@@ -129,6 +150,12 @@ export function treeTools({ bridge, maxOutputChars, inspectMaxBytes = 8000 }) {
       }
     }
   ]
+}
+
+function renderCodeWrite(value) {
+  if (value.ok) return `已写入草稿 ${value.ref}（请求 ${value.requestId}）。树里用 "task/${value.name}" 引用。`
+  if (value.error) return `没有写入：${value.error}`
+  return `没有写入（不算不合法尝试）：\n${(value.errors ?? []).map((e) => `- ${e}`).join('\n')}`
 }
 
 function renderSubmission(value) {

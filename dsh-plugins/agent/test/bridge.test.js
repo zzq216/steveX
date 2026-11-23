@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Bridge, SOURCE_KIND, REQUEST_TOOLS, isTransientError } from '../src/llm/bridge.js'
+import { Bridge, SOURCE_KIND, REQUEST_TOOLS, isTransientError, isMalformedError } from '../src/llm/bridge.js'
 import { loadPrompts, renderTemplate } from '../src/llm/prompts.js'
 import { saveCapsule } from '../src/capsules/index.js'
 import { makeRuntime, runUntil, tempDir } from './helpers.js'
@@ -270,14 +270,26 @@ test('回合出错（如模型返回坏 JSON）：计一次不合法，发重试
   assert.equal(isTransientError({ message: 'turn cancelled: training stopped (/bt train stop)' }), false)
   assert.equal(isTransientError('boom'), false)
 
+  const MALFORMED = { message: 'DeepSeek Messages stream: tool input is invalid JSON', code: 'MALFORMED_RESPONSE' }
+  assert.equal(isMalformedError(MALFORMED), true)
+  assert.equal(isMalformedError(new Error('DeepSeek Messages stream ended before message_stop')), false)
+
   const plan = bridge.startPlanning({ sessionId: 's1', instruction: '做点什么' })
   claim(bridge, delivered, 1)
-  const first = bridge.onTurnError({ sessionId: 's1', turn: 1, error: { message: 'DeepSeek Messages stream: tool input is invalid JSON', code: 'MALFORMED_RESPONSE' } })
+  // 坏工具参数 JSON（代码草稿单独提交设计方案 D4）：前 2 次不计次，用完照常计次
+  const first = bridge.onTurnError({ sessionId: 's1', turn: 1, error: MALFORMED })
   assert.equal(first.retry.source.requestId, plan.requestId)
   assert.equal(first.retry.source.reason, 'retry')
   assert.match(first.retry.text, /tool input is invalid JSON/)
-  assert.match(first.retry.text, /还剩 2 次/)
+  assert.match(first.retry.text, /不是合法 JSON，不算不合法尝试（这类重试还剩 1 次）/)
+  assert.match(first.retry.text, /出错那一步的工具调用都没有执行.*已经写下的代码草稿还在：（没有）/s)
+  assert.doesNotMatch(first.retry.text, /写短|expand/, '不教写法')
   assert.equal(bridge.onTurnStopping({ sessionId: 's1', turn: 1 }), null, '出错的回合已解绑，之后的 turn-stopping 不重复计数')
+  bridge.onPreStep({ sessionId: 's1', turn: 50, step: 1, messages: [{ source: first.retry.source }] })
+  assert.match(bridge.onTurnError({ sessionId: 's1', turn: 50, error: MALFORMED }).retry.text, /这类重试还剩 0 次/)
+  bridge.onPreStep({ sessionId: 's1', turn: 51, step: 1, messages: [{ source: first.retry.source }] })
+  assert.match(bridge.onTurnError({ sessionId: 's1', turn: 51, error: MALFORMED }).retry.text, /算作一次不合法尝试，还剩 2 次/)
+  assert.deepEqual([bridge.requests.get(plan.requestId).malformedTurns, bridge.requests.get(plan.requestId).invalidAttempts], [3, 1])
 
   // API / 网络故障：不算不合法尝试，另有 5 次重试；用完之后照常计次
   let t = 100
@@ -399,4 +411,44 @@ test('回归 task-20261027130758-2 step 4：Compute 的 writes 写 "." 被接受
   await runUntil(executor, () => executor.task?.blackboard?.has?.('craft.plan') || executor.task?.state !== 'running')
   const value = executor.task.blackboard.get('craft.plan')
   assert.deepEqual(value, { ok: true, planksNeeded: 4 })
+})
+
+test('bt_write_code：给自己的规划 / 展开 / 修复请求单独写草稿；写错不计次；树、展开都能引用；回合出错后草稿还在、重试消息列出来（代码草稿单独提交设计方案 D1–D5）', async () => {
+  const { bridge, executor, delivered } = setup()
+  for (const type of ['plan', 'expand', 'recover', 'escalate', 'failed', 'died']) assert.ok(REQUEST_TOOLS[type].includes('bt_write_code'), type)
+  for (const type of ['reflect', 'curate']) assert.ok(!REQUEST_TOOLS[type].includes('bt_write_code'), type)
+
+  const SIG = { inputs: { n: { type: 'int' } }, outputs: { double: { type: 'int' } } }
+  assert.match(bridge.writeCode({ sessionId: 's1', requestId: 'p9', name: 'double', signature: SIG, body: 'function main(p) { return { double: p.n * 2 } }' }).error, /没有请求 p9/)
+  const plan = bridge.startPlanning({ sessionId: 's1', instruction: '算 42' })
+  claim(bridge, delivered, 1)
+  assert.match(bridge.writeCode({ sessionId: 's2', requestId: plan.requestId, name: 'double', signature: SIG, body: 'function main(p) { return { double: p.n * 2 } }' }).error, /属于另一个会话/)
+
+  const broken = bridge.writeCode({ sessionId: 's1', requestId: plan.requestId, name: 'double', signature: SIG, body: 'function main( {' })
+  assert.equal(broken.ok, false)
+  assert.ok(broken.errors.length > 0)
+  assert.equal(bridge.requests.get(plan.requestId).invalidAttempts, 0, '写错不计次')
+
+  const wrote = bridge.writeCode({ sessionId: 's1', requestId: plan.requestId, name: 'double', signature: SIG, body: 'function main(p) { return { double: p.n * 2 } }', description: '乘 2' })
+  assert.equal(wrote.ok, true, JSON.stringify(wrote))
+  assert.match(wrote.ref, /^task\/double@[0-9a-f]+$/)
+
+  // 回合出错：草稿还在，重试消息列出来
+  const retry = bridge.onTurnError({ sessionId: 's1', turn: 1, error: { message: 'DeepSeek Messages stream: tool input is invalid JSON', code: 'MALFORMED_RESPONSE' } })
+  assert.ok(retry.retry.text.includes(`已经写下的代码草稿还在：\`${wrote.ref}\``), retry.retry.text)
+  bridge.onPreStep({ sessionId: 's1', turn: 2, step: 1, messages: [{ source: retry.retry.source }] })
+
+  // 树不带 code 字段，直接引用单独写好的草稿；展开里也能引用
+  const good = bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree: OUTLINE })
+  assert.equal(good.ok, true, JSON.stringify(good))
+  await runUntil(executor, () => executor.task.state === 'suspended')
+  const expandReq = delivered.at(-1).source.requestId
+  bridge.onPreStep({ sessionId: 's1', turn: 3, step: 1, messages: [{ source: delivered.at(-1).source }] })
+  assert.equal(bridge.writeCode({ sessionId: 's1', requestId: expandReq, name: 'double', signature: SIG, body: 'function main(p) { return { double: p.n + p.n } }' }).ok, true, '展开回合也能写，同名重写 = 新版本')
+  const expanded = bridge.submitExpansion({ sessionId: 's1', requestId: expandReq, subtree: EXPANSION })
+  assert.equal(expanded.ok, true, JSON.stringify(expanded))
+  await runUntil(executor, () => executor.task.state !== 'running')
+  assert.equal(executor.task.blackboard.get('calc.double'), 42)
+  assert.deepEqual([bridge.requests.get(plan.requestId).draftWrites, bridge.requests.get(expandReq).draftWrites], [1, 1])
+  assert.match(bridge.writeCode({ sessionId: 's1', requestId: expandReq, name: 'x', signature: SIG, body: 'function main() { return { double: 0 } }' }).error, /已经回答过/)
 })

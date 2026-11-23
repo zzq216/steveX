@@ -207,11 +207,11 @@ export function brewAccount(final, picked) {
 /**
  * 判定（P6）。到达（P8）在插件这边按同样的规则再算一遍：界面已关、光标为空、物品栏恰好剩 F − m / R − n / b − p 且没有别的东西、
  * 燃料格只有烈焰粉、材料格只有材料（或龙息剩下的玻璃瓶）、药水格恰好 p 瓶开局药水或产物。
+ * 手动停止的轮次照样判 aborted，但拿到了最终状态就照常算放入量、放错、守恒（2026-11-23：复盘要看停下时卡在哪）。
  * @returns {{ outcome, account: object|null, reached: boolean }}
  */
 export function judgeBrew({ stopped, timedOut, taskState, final, picked }) {
-  if (stopped) return { outcome: 'aborted', account: null, reached: false }
-  if (!final?.held) return { outcome: timedOut ? 'timeout' : 'failed', account: null, reached: false }
+  if (!final?.held) return { outcome: stopped ? 'aborted' : timedOut ? 'timeout' : 'failed', account: null, reached: false }
   const account = brewAccount(final, picked)
   const REM = picked.ingredient.remainder
   const want = {}
@@ -227,7 +227,8 @@ export function judgeBrew({ stopped, timedOut, taskState, final, picked }) {
     || account.consumed.fuel < 0 || account.consumed.fuel > 1
     || (brews !== null ? account.consumed.ingredient !== brews : account.consumed.ingredient < 0)
   let outcome
-  if (lost) outcome = 'lost'
+  if (stopped) outcome = 'aborted'
+  else if (lost) outcome = 'lost'
   else if (account.consumed.fuel > picked.fuel.placed || account.consumed.ingredient > picked.ingredient.placed) outcome = 'overshoot'
   else if (account.wrongSlots.length || Object.keys(account.extra).length) outcome = 'misplaced'
   else if (timedOut) outcome = 'timeout'

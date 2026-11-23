@@ -305,3 +305,46 @@ test('FactTurns 让路（2026-11-21）：回合结束时有请求在排队 → �
   turns.note('s1', 'write')
   assert.equal(turns.onTurnStopping({ sessionId: 's1', turn: 4 }), null, '推迟后的回合里写了事实：不再提醒')
 })
+
+test('FactTurns 挪到复盘（事实库写入挪到复盘设计方案 E1、E4）：任务回合查源码记到任务名下、不提醒；复盘回合按任务和自己查过的提醒一次；写了不提醒；问答回合照旧', () => {
+  const kinds = { 1: { kind: 'plan', taskId: 't1', requestId: 'p1' }, 2: { kind: 'reflect', taskId: 't1', requestId: 'c1' }, 3: { kind: 'reflect', taskId: 't1', requestId: 'c1' }, 4: { kind: 'chat' }, 5: { kind: 'reflect', taskId: 't2', requestId: 'c2' } }
+  const reads = []
+  const writes = []
+  const turns = new FactTurns({
+    prompts, tools: [], deliver: () => true, onBind: () => {},
+    describe: (sessionId, turn) => kinds[turn],
+    reviewTasks: true,
+    onTaskSource: (taskId, requestId, detail) => reads.push({ taskId, requestId, ...detail }),
+    taskSources: (taskId) => reads.filter((r) => r.taskId === taskId).length,
+    onWrite: (source) => writes.push(source)
+  })
+  turns.onPreStep({ sessionId: 's1', turn: 1, step: 1 })
+  turns.note('s1', 'source', { tool: 'mc_source_read', file: 'A.java', start: 1, end: 9 })
+  assert.deepEqual(reads, [{ taskId: 't1', requestId: 'p1', tool: 'mc_source_read', file: 'A.java', start: 1, end: 9 }])
+  assert.equal(turns.onTurnStopping({ sessionId: 's1', turn: 1 }), null, '规划回合不提醒')
+  turns.endTurn('s1', 1)
+
+  // 复盘回合：自己没查，但任务回合查过 → 提醒一次
+  turns.onPreStep({ sessionId: 's2', turn: 2, step: 1 })
+  const steer = turns.onTurnStopping({ sessionId: 's2', turn: 2 })
+  assert.match(steer.text, /^本任务的规划 \/ 展开 \/ 修复回合（复盘目录里的「源码」）查阅了 MC 源码/)
+  assert.equal(turns.onTurnStopping({ sessionId: 's2', turn: 2 }), null, '只提醒一次')
+  turns.endTurn('s2', 2)
+  // 复盘回合自己也查了、写了事实 → 不提醒；写事实报给 onWrite
+  turns.onPreStep({ sessionId: 's2', turn: 3, step: 1 })
+  turns.note('s2', 'source', { tool: 'mc_source_search', pattern: 'x' })
+  assert.equal(reads.length, 1, '复盘回合的查源码不记到任务名下')
+  turns.note('s2', 'write')
+  assert.deepEqual(writes, [{ kind: 'reflect', taskId: 't1', requestId: 'c1' }])
+  assert.equal(turns.onTurnStopping({ sessionId: 's2', turn: 3 }), null)
+  turns.endTurn('s2', 3)
+  // 复盘回合：任务没查过、自己查了没写 → 提醒，文案只说本回合
+  turns.onPreStep({ sessionId: 's3', turn: 5, step: 1 })
+  assert.equal(turns.onTurnStopping({ sessionId: 's3', turn: 5 }), null, '都没查过不提醒')
+  turns.note('s3', 'source', { tool: 'mc_source_read', file: 'B.java' })
+  assert.match(turns.onTurnStopping({ sessionId: 's3', turn: 5 }).text, /^本回合查阅了 MC 源码/)
+  // 问答回合照旧
+  turns.onPreStep({ sessionId: 's4', turn: 4, step: 1 })
+  turns.note('s4', 'source')
+  assert.match(turns.onTurnStopping({ sessionId: 's4', turn: 4 }).text, /^本回合查阅了 MC 源码/)
+})

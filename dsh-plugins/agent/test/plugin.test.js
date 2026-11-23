@@ -136,9 +136,9 @@ function loadPlugin(extra = {}) {
 
 const enter = (messages) => async () => ({ kind: 'enter', messages })
 
-test('装载：注册三十个工具（含三个 fast_*、四个复盘工具、两个任务历史查询工具、三个整理工具、五个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
+test('装载：注册三十一个工具（含三个 fast_*、四个复盘工具、两个任务历史查询工具、三个整理工具、五个事实 / 源码工具）与两段系统提示词（不插值，不含命令 / 胶囊清单）', () => {
   const { tools, sections, dispose } = loadPlugin()
-  assert.equal(tools.size, 30)
+  assert.equal(tools.size, 31)
   assert.ok(tools.get('bt_submit_tree').output.schema, '经过 defineTool')
   assert.deepEqual(sections.map((s) => s.name), ['stevex:identity', 'stevex:authoring'])
   assert.ok(sections.every((s) => s.interpolate === false))
@@ -153,7 +153,7 @@ test('P1 适配层：/bt task → followup → 回合绑定（守卫按请求放
 
   await emit('agent/created', { agent })
   assert.equal(agent.restrictions.length, 1, 'exclusiveTools：会话只看得到 steveX 的工具')
-  assert.equal(agent.restrictions[0].allow.length, 27, '普通会话看不到 fast_*')
+  assert.equal(agent.restrictions[0].allow.length, 28, '普通会话看不到 fast_*')
   assert.equal(agent.restrictions[0].allow.includes('todo_write'), false, '没注册的内置工具不进 allow（restrict 会拒绝未知名字）')
 
   const started = commands[0].handler({ rawInput: 'task 做一把木镐', agent })
@@ -251,7 +251,8 @@ test('P5 适配层：/bt fact → followup → 事实确认回合（守卫按名
   assert.match(bt('facts 伤害 40').text, /damage\.last-source-expires（rev 1）/)
   assert.match(bt('facts check').text, /1 条事实，引用全部有效/)
 
-  // 规划回合：查了源码、请求又没交 → 只提醒请求；交了之后回合再要结束 → 才提醒补事实
+  // 规划回合：查了源码、请求又没交 → 只提醒请求；交了之后回合再要结束 → 不提醒补事实（事实库写入挪到复盘设计方案 E1：
+  // 查过的源码记到任务名下，复盘时写），规划回合也不能写事实（E2）
   bt('task 做一把木镐')
   const plan = agent.followups.at(-1)
   await emit('agent/pre-step', { agent, turn: 2, step: 1 }, enter([plan]))
@@ -259,10 +260,13 @@ test('P5 适配层：/bt fact → followup → 事实确认回合（守卫按名
   await tools.get('mc_source_search').execute({ pattern: 'class CraftingMenu', limit: 1 }, { agent })
   await emit('agent/turn-stopping', { agent, turn: 2 })
   assert.match(agent.steers.at(-1).content[0].text, /还剩 2 次/, '先提醒请求')
+  assert.match(guardReason('fact_write', agent), /fact_write is not available while answering an executor request.*task review/)
   const submitted = await tools.get('bt_submit_tree').execute({ requestId: plan.source.requestId, tree: { seq: '木镐', do: [{ expand: '合成木镐' }] } }, { agent })
   assert.equal(submitted.ok, true)
+  const steers = agent.steers.length
   await emit('agent/turn-stopping', { agent, turn: 2 })
-  assert.match(agent.steers.at(-1).content[0].text, /本回合查阅了 MC 源码/, '请求交了，再提醒补事实')
+  assert.equal(agent.steers.length, steers, '请求交了，也不提醒补事实')
+  assert.deepEqual(ctx.stevexBt.bridge.sourcesOf(submitted.taskId).map((r) => [r.tool, r.pattern, r.requestId]), [['mc_source_search', 'class CraftingMenu', plan.source.requestId]])
   ctx.stevexBt.executor.stop()
   dispose()
 })

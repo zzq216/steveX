@@ -258,7 +258,12 @@ public class ContainerApi {
                         for (var offer : mm.getOffers()) {
                             Map<String, Object> trade = new LinkedHashMap<>();
                             trade.put("inputA",  InventoryApi.slotItem(-1, offer.getBaseCostA()));
-                            trade.put("inputB",  InventoryApi.slotItem(-1, offer.getCostB()));
+                            // 村民交易训练场方案 V11：实际要付的 A 物品个数（基础价 + 需求 + 口碑 / 村庄英雄折扣，
+                            // 截到 [1, 堆叠上限]；交易包同步了 specialPriceDiff / demand / priceMultiplier，客户端算的就是真实价格）
+                            trade.put("priceA",  offer.getCostA().getCount());
+                            // 没有第二种付款物时是 null（"已知为无"），不输出空物品 { id: minecraft:air, count: 0 }
+                            // ——2026-11-23 村民交易训练 task-20261123081955-1：说明写的是 null，实际给的是 air，找交易的代码把两笔都判成不匹配
+                            trade.put("inputB",  offer.getCostB().isEmpty() ? null : InventoryApi.slotItem(-1, offer.getCostB()));
                             trade.put("result",  InventoryApi.slotItem(-1, offer.getResult()));
                             trade.put("uses",    offer.getUses());
                             trade.put("maxUses", offer.getMaxUses());

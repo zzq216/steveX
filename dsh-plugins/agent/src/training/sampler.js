@@ -68,9 +68,12 @@ export function requirement(recipe) {
   return recipe.ingredients.map((options) => ({ group: options.join('|'), options }))
 }
 
-export function candidates(recipes, exclude = [], grid = 2) {
+/**
+ * 候选配方。all = true 时不排除放得进更小格子的配方（合成器场地，合成器训练场设计方案 R3：全部配方都出）。
+ */
+export function candidates(recipes, exclude = [], grid = 2, { all = false } = {}) {
   const skip = new Set(exclude)
-  return recipes.filter((r) => fitsGrid(r, grid) && (grid <= 2 || !fitsGrid(r, grid - 1)) && !skip.has(r.name))
+  return recipes.filter((r) => fitsGrid(r, grid) && (all || grid <= 2 || !fitsGrid(r, grid - 1)) && !skip.has(r.name))
 }
 
 /** 种子 → [0, 1) 的伪随机数（mulberry32）：同一种子同一序列，记录里的 seed 能复现一轮。 */
@@ -266,8 +269,17 @@ export function splitStacks(random, materials, recipe, n, props) {
     const cap = props[id].maxStack
     return { id, total, cap, k: Math.ceil(total / cap) }
   })
+  return spreadStacks(random, items, MAIN_SLOTS - need.product - need.remainders)
+}
+
+/**
+ * 拆堆的公共部分（splitStacks 和合成器场地共用，随机数序列与原 splitStacks 相同）：
+ * items = [{ id, total, cap, k: 最少堆数 }]，总堆数在 [K_min, min(maxSlots, 总个数)] 里均匀抽。
+ * @returns {Array<{id, count}>}  按 items 顺序排列
+ */
+export function spreadStacks(random, items, maxSlots) {
   const kMin = items.reduce((sum, it) => sum + it.k, 0)
-  const kMax = Math.min(MAIN_SLOTS - need.product - need.remainders, items.reduce((sum, it) => sum + it.total, 0))
+  const kMax = Math.min(maxSlots, items.reduce((sum, it) => sum + it.total, 0))
   let extra = between(random, kMin, Math.max(kMin, kMax)) - kMin
   while (extra > 0) {
     const open = items.filter((it) => it.k < it.total)

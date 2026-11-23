@@ -37,6 +37,7 @@ export const inject = ['commands', 'tools', 'agents', 'systemPrompt']
 const IN_TREE = {
   json_query: ' Put the same params into the tree: { "compute": "code/core.json.query", "params": { …same as json_query… }, "writes": { "<key>": "result" } }. To learn the record format first, call data_shapes with sources ["json.<source>"].',
   nbt_query: ' Put the same params into the tree: { "compute": "code/core.nbt.query", "params": { …same as nbt_query… }, "writes": { "<key>": "result" } }. To learn the record format first, call data_shapes with sources ["nbt.<source>"].',
+  fact_write: ' Facts are written in the task review (reflect request), where they can be checked against what this run actually did; the source locations read in this task are listed there (bt_inspect what: "sources").',
   bt_inspect: ' bt_inspect is only for repair requests (recover / escalate / failed / died). To act on the current state, read it inside the tree: { "cond": "code/…", "read": ["player"] } or { "compute": "code/…", "read": [...] }; to check that earlier steps worked, give them an "expect".',
   mod_query: ' Read state inside the tree: condition code { "cond": "code/…", "read": ["inventory"] } or { "compute": "code/…", "read": [...] } (state arrives as main(params, state)). To learn field names and enum values first, call data_shapes with sources ["state.<source>"].'
 }
@@ -85,6 +86,8 @@ const USAGE = [
   '/bt train loom [runs=…] [seed=…] [banners=k|a-b] [slots=k|a-b] [fill=random|full|mix] [styles=k|a-b] [spare=k|a-b] [itemPatterns=off|on] [banner=<素旗>]  织布机训练场：物品栏里有 1–3 种底色的素旗和做图案用的染料，用织布机把它们做成指定图案、指定颜色的旗帜，每种恰好指定的面数；banners 是底色种数（缺省 1-3），slots / fill 决定每种底色的规模（每种 1–3 格、每格 1–16 面或满叠），styles 是每种底色的样式数（缺省 1-3），spare 是素旗和染料比目标多发几个（缺省 0-3），itemPatterns=on 时约 1/3 的样式要用图案物（会发对应的图案物），banner 固定第一种底色',
   '/bt train cartography [runs=…] [seed=…] [task=zoom|lock|clone|mix|chain] [scale=k|a-b] [maps=k|a-b] [copies=k|a-b] [ops=k|a-b] [spare=k|a-b]  制图台训练场：物品栏里有开局地图（一叠同编号的）和这道题用的辅料，用制图台把它们做成指定的一组地图（缩放等级、是否锁定、张数都对）；task 选单项操作：zoom 放大（开局 maps 张、其中几张放大到更高级）、lock 锁定（开局 maps 张、其中几张锁定）、clone 复制（做到总共 copies 张），mix（缺省）三种等概率，chain 是随机走 ops 步（1–4）的连续操作；scale 是开局缩放等级（缺省 0-3），maps 缺省 1-3，copies 缺省 2-5，spare 是用到的辅料比最省用量多发几个（缺省 0-3）',
   '/bt train brewing [runs=…] [seed=…] [fuel=k|a-b] [raw=k|a-b] [bottles=k|a-b] [m=k|a-b] [n=k|a-b] [input=<材料>]  酿造台训练场：物品栏里有 1 格烈焰粉、1 格酿造材料和 1–3 瓶同一种药水，把 m 个烈焰粉放进燃料格、n 个材料放进材料格、几瓶药水放进药水格，然后关掉界面（不要求酿完）；fuel / raw 是发的烈焰粉、材料个数（缺省 32-64，材料不超过堆叠上限），bottles 是药水瓶数（缺省 1-3），m / n 缺省 1-32，input 固定材料',
+  '/bt train crafter [runs=…] [seed=…] [item=<产物>] [n=k|a-b] [extra=k|a-b]  合成器训练场：物品栏里有某条配方 n 份的材料（每种另外多发 extra 个），把材料放进合成器，让它预览出目标、材料正好够合成 n 次，没放材料的格子全部禁用，然后关掉界面（合成器不通电，不会真的合成）；配方是全部配方、按形状分组抽，n 缺省 1-16（不超过材料的堆叠上限），extra 缺省 0-16，item 固定产物',
+  '/bt train villager [runs=…] [seed=…] [profession=<职业>] [level=k|a-b] [tasks=k|a-b] [n=k|a-b] [extra=k|a-b] [item=<产物>]  村民交易训练场：正前方一只随机职业、随机等级的村民（不会动、打不坏），物品栏里有交易用的付款物，在指定的几笔交易上各交易指定次数、不做别的交易，然后关掉交易界面；交易项按原版算法从 1 级逐级生成（不出藏宝图），level 是村民等级（缺省 1-5），tasks 是几笔交易（缺省 1-4），n 是每笔的次数（缺省 1-64，再截到付款物 4 格、产物 9 格、交易次数上限），extra 是每种付款物多发几个（缺省 0-16，上限另放宽到单价的 2 倍），profession 固定职业，item 要求其中一笔的产物是它；多换、换错一发现就结束本轮',
   '/bt train mount [runs=…] [seed=…] [group=horse|donkey|camel|llama|nautilus] [animal=<动物>] [task=equip|unequip] [item=<物品>] [total=k|a-b] [move=k|a-b]  坐骑训练场：正前方一只已驯服、不会动的动物（马、僵尸马、驴、骡、骆驼、骆驼尸壳、羊驼、行商羊驼、鹦鹉螺、僵尸鹦鹉螺），给它装上或卸下鞍 / 马铠 / 地毯 / 鹦鹉螺铠，驴骡羊驼另要往它的箱子里放、取恰好 move 个物品；group 固定组（缺省 5 组等概率），animal 固定动物，task 固定装上 / 卸下，item / total / move 只用于驴、羊驼组',
   '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
@@ -280,6 +283,11 @@ function setupPlanner(ctx, config, runtime) {
   const factTurns = new FactTurns({
     prompts,
     tools: KNOWLEDGE_TOOLS,
+    // 事实库写入挪到复盘设计方案：任务回合查的源码记到任务名下，复盘时写事实（复盘关掉时照旧，E5c）
+    reviewTasks: bridge.factsAtReview,
+    onTaskSource: (taskId, requestId, detail) => bridge.noteSource(taskId, requestId, detail),
+    taskSources: (taskId) => bridge.sourcesOf(taskId).length,
+    onWrite: (source) => { if (source?.kind === 'reflect') bridge.noteFactWrite(source.requestId) },
     deliver: followup,
     onBind: (sessionId, turn, names) => bindTurnTools(sessionId, turn, names),
     remind: config.facts.remind,
@@ -400,6 +408,8 @@ function setupPlanner(ctx, config, runtime) {
     // 整理回合不产出树，"树要自己读数据"那句不适用
     if (reqType === 'curate') return `steveX: ${exec.name} is not available in a capsule library curation turn (allowed now: ${[...turn.allowed].join(', ')})`
     const hint = reqType === 'reflect' ? (IN_REVIEW[exec.name] ?? IN_TREE[exec.name] ?? '') : (IN_TREE[exec.name] ?? '')
+    // 事实库写入挪到复盘设计方案 E2：产出树的回合不写事实，"树要自己读数据"那句不适用
+    if (exec.name === 'fact_write' && turn) return `steveX: fact_write is not available while answering an executor request (allowed now: ${[...turn.allowed].join(', ')}).${hint}`
     return turn
       ? `steveX: ${exec.name} is not available while answering an executor request (allowed now: ${[...turn.allowed].join(', ')}); the tree must read the data itself (I13).${hint}`
       : `steveX: ${exec.name} is not available in a steveX session`

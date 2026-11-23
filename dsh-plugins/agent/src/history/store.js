@@ -188,7 +188,9 @@ export class TaskHistory {
         execMs: profile?.execMs ?? null, waitMs: profile?.waitMs ?? null, durationMs: profile?.durationMs ?? null,
         modCalls: profile?.modCalls ?? null, actions: profile?.actions ?? null, reads: profile?.reads ?? null,
         nodeRuns: profile?.nodeRuns ?? null, turns: usage.turns ?? null, tokens: usage.tokens ?? null,
-        planMs: usage.planMs ?? null, reflectMs: usage.reflectMs ?? null, reflectTokens: usage.reflectTokens ?? null
+        planMs: usage.planMs ?? null, reflectMs: usage.reflectMs ?? null, reflectTokens: usage.reflectTokens ?? null,
+        // 事实库写入挪到复盘设计方案 E6：任务回合查源码的次数、复盘写成的事实条数
+        sourceReads: usage.sourceReads ?? null, factWrites: usage.factWrites ?? null
       },
       profile,
       tree,

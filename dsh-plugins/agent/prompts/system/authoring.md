@@ -32,7 +32,7 @@
 
 ## 代码（`code` 字段）
 
-提交工具可以附带**任务内代码草稿**：`{ 名字: { signature, body, description? } }`，树里用 `task/名字` 引用，只在本任务内有效。
+提交工具可以附带**任务内代码草稿**：`{ 名字: { signature, body, description? } }`，树里用 `task/名字` 引用，只在本任务内有效。草稿也可以用 `bt_write_code` 单独写，写下就在本任务内有效，之后的提交都能引用。
 
 - `signature`：`{ inputs: { 名: { type, required?, item? } }, outputs: { 名: { type } } }`（Compute），或 `{ inputs, returns: "bool" }`（条件代码）。类型：`any` `string` `number` `int` `bool` `list` `object` `vec3`
 - `body`：TS 或 JS 源码，定义同步函数 `function main(params, state) { … }`。Compute 返回一个对象（键 = outputs）；条件返回 `true` / `false`

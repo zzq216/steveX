@@ -45,10 +45,14 @@ export const SOURCE_KIND = 'stevex-bt'
  * 读状态 / 查记忆 / 查数据（mod_query / nbt_query / json_query）只在普通问答回合可用——树要用到的数据由树自己读。
  */
 /**
- * 事实库与 MC 源码（P5-D11）：接口知识，不是此刻的世界状态，进所有回合（含 fact_write：查了源码就要补事实库，§4.4）。
+ * 事实库与 MC 源码（P5-D11）：接口知识，不是此刻的世界状态，进所有回合。
+ * fact_write 不给产出树的回合（规划 / 展开 / 修复）：事实在复盘时对照这次执行的结果写（事实库写入挪到复盘设计方案 E2）；
+ * 复盘关掉时（reflect.enabled = false）照旧给（E5c，见 Bridge.requestTools）。
  */
 export const FACT_TOOLS = Object.freeze(['fact_search', 'fact_get', 'mc_source_search', 'mc_source_read', 'fact_write'])
 export const KNOWLEDGE_TOOLS = Object.freeze(['command_docs', 'data_shapes', 'capsule_search', 'capsule_get', ...FACT_TOOLS])
+/** 产出树的回合的接口知识：没有 fact_write（E2） */
+const TREE_KNOWLEDGE_TOOLS = Object.freeze(KNOWLEDGE_TOOLS.filter((name) => name !== 'fact_write'))
 /**
  * 修复请求（P2）：多一个 bt_inspect——能看自己的状态与树自己的执行过程（快照、事件、黑板值、现场读取），
  * 记忆世界的值仍然不给（P2 §4.5）。
@@ -58,7 +62,7 @@ export const KNOWLEDGE_TOOLS = Object.freeze(['command_docs', 'data_shapes', 'ca
  * task_assess 只在复盘回合（H2）。
  */
 export const HISTORY_TOOLS = Object.freeze(['task_search', 'task_get'])
-const PATCH_TOOLS = Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_inspect', 'bt_submit_patch', 'bt_abort_task'])
+const PATCH_TOOLS = Object.freeze([...TREE_KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_inspect', 'bt_write_code', 'bt_submit_patch', 'bt_abort_task'])
 export const PATCH_TYPES = Object.freeze(['recover', 'escalate', 'failed', 'died'])
 /** 复盘（P4 §3.2）：任务已结束，没有树可改；bt_inspect 不给 live（由执行器拒绝）。 */
 /** capsule_describe 也给复盘（2026-11-07）：只能改这次任务用到的 / 本次复盘存下的条目的说明，好把实测写进说明 */
@@ -75,8 +79,8 @@ export const REVIEW_OR_CURATE_TOOLS = Object.freeze(['capsule_describe'])
 export const REQUEST_TOOLS = Object.freeze({
   reflect: REFLECT_TOOLS,
   curate: CURATE_TOOLS,
-  plan: Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_submit_tree', 'bt_abort_task']),
-  expand: Object.freeze([...KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_submit_expansion', 'bt_abort_task']),
+  plan: Object.freeze([...TREE_KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_write_code', 'bt_submit_tree', 'bt_abort_task']),
+  expand: Object.freeze([...TREE_KNOWLEDGE_TOOLS, ...HISTORY_TOOLS, 'bt_view', 'bt_write_code', 'bt_submit_expansion', 'bt_abort_task']),
   recover: PATCH_TOOLS,
   escalate: PATCH_TOOLS,
   failed: PATCH_TOOLS,
@@ -124,6 +128,8 @@ export class Bridge {
     this.history = history
     this.taskUsage = taskUsage
     this.historyViews = new Map() // taskId → Set(被 task_get 看过的记录)：本任务的前驱（H7）
+    // 事实库写入挪到复盘设计方案 E1：taskId → 规划 / 展开 / 修复回合查过的源码（位置，不含内容）；复盘结束后释放
+    this.sourceReads = new Map()
     this.curateConfig = { everyTasks: 0, listLimit: 150, ...curate }
     this.curateSeq = 0
     this.curateSession = null    // 最近一个结束的任务所属的会话：自动整理发到这里
@@ -202,7 +208,7 @@ export class Bridge {
 
     if (turn !== null) {
       this.bindTurn(sessionId, turn, requestId)
-      return { ok: true, requestId, taskId, text, tools: REQUEST_TOOLS.plan }
+      return { ok: true, requestId, taskId, text, tools: this.requestTools('plan') }
     }
     if (!this.deliver(sessionId, this.message(req, text, `规划任务：${goal}`))) {
       this.closePlan(req, 'session not found')
@@ -310,6 +316,7 @@ export class Bridge {
     // 发了复盘就先不整理：复盘结束（closeReflect）时再查
     if (task && this.shouldReflect(summary, task) && this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
     if (task) this.writeHistory(task, { sessionId })
+    this.sourceReads.delete(taskId)
     const text = renderTemplate(this.prompts.requests.task_end, {
       taskId, state: summary.state, goal: summary.goal ?? '（无）', result: summary.result ?? '（无）'
     })
@@ -326,7 +333,7 @@ export class Bridge {
       if (onDone === 'always' || !task) return true
       const changed = this.doneChanges(task)
       if (changed.length) return true
-      const why = '和参考过的同类任务比没有新情况（没有展开 / 修补、没有节点报错、没有执行新草稿或第一次跑的胶囊版本，mod 调用次数相同）'
+      const why = '和参考过的同类任务比没有新情况（没有展开 / 修补、没有节点报错、没有执行新草稿或第一次跑的胶囊版本、没有查过源码，mod 调用次数相同）'
       this.executor.log(task.taskId, { event: 'reflect/skipped', reason: why })
       this.log(`[bt] reflect skipped for ${task.taskId}: ${why}`)
       return false
@@ -369,6 +376,8 @@ export class Bridge {
     if (events.some((e) => e.event === 'node' && e.phase === 'exit' && typeof e.ref === 'string' && e.ref.startsWith('task/'))) out.push('执行了新草稿')
     const first = this.firstRuns(task)
     if (first.length) out.push(`第一次执行这些胶囊版本：${first.join('、')}`)
+    // 事实库写入挪到复盘设计方案 E5a：查过的源码只能在复盘时写成事实，例行重复也要复盘
+    if (this.factsAtReview && this.sourcesOf(task.taskId).length) out.push('本任务的回合查过 MC 源码')
     const calls = this.history?.profile(task.taskId)?.modCalls
     if (refs.length && Number.isFinite(calls) && calls !== Math.min(...refs.map((rec) => rec.metrics.modCalls))) out.push('mod 调用次数和参考任务不同')
     if (refs.length && !Number.isFinite(calls)) out.push('没有成本画像')
@@ -391,7 +400,7 @@ export class Bridge {
     }
     req.versionClaims = this.openVersionClaims(task)
     this.requests.set(requestId, req)
-    const directory = buildReflectDirectory(task, { drafts: draftList(req.drafts) })
+    const directory = buildReflectDirectory(task, { drafts: draftList(req.drafts), sources: this.sourcesOf(task.taskId).length })
     const text = renderTemplate(this.prompts.requests.reflect, {
       requestId, taskId: task.taskId,
       state: task.state,
@@ -633,7 +642,8 @@ export class Bridge {
     for (const item of req.claimReview ?? []) this.library.versions?.review(item.key, item.newHash, item.index, { status: item.status, evidence: item.evidence, by: req.taskId })
     this.executor.log(req.taskId, { event: `reflect/${outcome}`, requestId: req.requestId, saved: [...req.saved], described: req.described.map((c) => c.key), reason })
     this.log(`[bt] reflect ${req.requestId} ${outcome}: ${reason}`)
-    // 证据随请求释放（P4 §2.4）
+    // 证据随请求释放（P4 §2.4）；同一个任务没有别的复盘开着时，查源码的记账也释放（E1）
+    if (![...this.requests.values()].some((r) => r !== req && r.type === 'reflect' && r.taskId === req.taskId && this.isOpen(r))) this.sourceReads.delete(req.taskId)
     req.task = null
     req.drafts = null
     this.maybeCurate()
@@ -707,7 +717,7 @@ export class Bridge {
   writeHistory(task, { sessionId = null, assessment = null, predecessors = null, reflect = null } = {}) {
     if (!this.history) return null
     try {
-      const usage = { ...this.llmUsage(task.taskId, sessionId), ...(reflect ? { reflectMs: reflect.closedAt - reflect.createdAt } : {}) }
+      const usage = { ...this.llmUsage(task.taskId, sessionId), ...(reflect ? { reflectMs: reflect.closedAt - reflect.createdAt } : {}), ...this.factCounts(task.taskId) }
       return this.history.record({
         task: { taskId: task.taskId, goal: task.goal, state: task.state, result: task.result, finishedBy: task.finishedBy, spec: task.spec },
         tree: task.spec ? renderTree(task.spec, { statuses: statusMap(task) }) : '',
@@ -928,6 +938,44 @@ export class Bridge {
 
   // ── 回合 ─────────────────────────────────────────────────────────────────
 
+  /** 事实挪到复盘写（E1–E4）：复盘开着才挪；复盘关掉 → 照旧在任务回合提醒、给 fact_write（E5c） */
+  get factsAtReview() {
+    return this.reflectConfig?.enabled !== false
+  }
+
+  /** 这类请求的回合放行的工具：复盘关掉时产出树的回合照旧给 fact_write（E5c） */
+  requestTools(type) {
+    const tools = REQUEST_TOOLS[type]
+    return !this.factsAtReview && type !== 'reflect' && type !== 'curate' ? [...tools, 'fact_write'] : tools
+  }
+
+  /** E1：任务回合查了一次源码（FactTurns 报来）；请求上另记次数给训练记录（E6） */
+  noteSource(taskId, requestId, detail = {}) {
+    if (!taskId) return
+    const list = this.sourceReads.get(taskId) ?? []
+    list.push({ ...detail, requestId, at: new Date(this.now()).toISOString() })
+    this.sourceReads.set(taskId, list)
+    const req = requestId ? this.requests.get(requestId) : null
+    if (req) req.sourceReads = (req.sourceReads ?? 0) + 1
+  }
+
+  /** E1：这个任务的回合查过的源码 */
+  sourcesOf(taskId) {
+    return this.sourceReads?.get(taskId) ?? []
+  }
+
+  /** E6：复盘回合成功写了一条事实 */
+  noteFactWrite(requestId) {
+    const req = this.requests.get(requestId)
+    if (req?.type === 'reflect') req.factWrites = (req.factWrites ?? 0) + 1
+  }
+
+  /** E6：任务各请求上的查源码次数、复盘写的事实条数 */
+  factCounts(taskId) {
+    const reqs = [...this.requests.values()].filter((r) => r.taskId === taskId)
+    return { sourceReads: reqs.reduce((n, r) => n + (r.sourceReads ?? 0), 0), factWrites: reqs.reduce((n, r) => n + (r.factWrites ?? 0), 0) }
+  }
+
   bindTurn(sessionId, turn, requestId) {
     const key = turnKey(sessionId, turn)
     if (this.turns.get(key) === requestId) return
@@ -935,7 +983,7 @@ export class Bridge {
     // 回合绑定在回合结束时就删掉了；训练器事后要按任务统计回合与 token，所以在请求上留一份
     const req = this.requests.get(requestId)
     if (req) (req.boundTurns ??= []).push({ sessionId, turn })
-    this.onBind(sessionId, turn, REQUEST_TOOLS[this.requests.get(requestId).type])
+    this.onBind(sessionId, turn, this.requestTools(this.requests.get(requestId).type))
   }
 
   /**
@@ -952,7 +1000,7 @@ export class Bridge {
     }
     const requestId = this.turns.get(key)
     if (!requestId) return null
-    return { requestId, tools: REQUEST_TOOLS[this.requests.get(requestId).type] }
+    return { requestId, tools: this.requestTools(this.requests.get(requestId).type) }
   }
 
   /**
@@ -1022,11 +1070,19 @@ export class Bridge {
       return null
     }
     const transient = isTransientError(error) && (req.transientRetries ?? 0) < TRANSIENT_RETRY_MAX
+    // 坏的工具参数 JSON（代码草稿单独提交设计方案 D4）：树根本没交上来，前 MALFORMED_RETRY_MAX 次不计次
+    const isMalformed = isMalformedError(error)
+    if (isMalformed) req.malformedTurns = (req.malformedTurns ?? 0) + 1
+    const malformed = isMalformed && (req.malformedRetries ?? 0) < MALFORMED_RETRY_MAX
     let charge
     if (transient) {
       req.transientRetries = (req.transientRetries ?? 0) + 1
       charge = `这是模型 API / 网络的故障，不算不合法尝试（这类重试还剩 ${TRANSIENT_RETRY_MAX - req.transientRetries} 次）。`
       this.log(`[bt] ${requestId}: transient turn error, retry ${req.transientRetries}/${TRANSIENT_RETRY_MAX}: ${message}`)
+    } else if (malformed) {
+      req.malformedRetries = (req.malformedRetries ?? 0) + 1
+      charge = `模型返回的工具参数不是合法 JSON，不算不合法尝试（这类重试还剩 ${MALFORMED_RETRY_MAX - req.malformedRetries} 次）。`
+      this.log(`[bt] ${requestId}: malformed tool input, retry ${req.malformedRetries}/${MALFORMED_RETRY_MAX}: ${message}`)
     } else {
       const attemptsLeft = this.chargeAttempt(req, `the turn errored: ${message}`)
       if (attemptsLeft <= 0) return { failed: true }
@@ -1035,7 +1091,8 @@ export class Bridge {
         : `这次出错算作一次不合法尝试，还剩 ${attemptsLeft} 次。`
     }
     const template = req.type === 'reflect' ? this.prompts.requests.reflect_retry : this.prompts.requests.retry
-    const text = renderTemplate(template, { requestId, submitTool: SUBMIT_TOOL[req.type], charge, error: message })
+    const drafts = this.draftRefs()
+    const text = renderTemplate(template, { requestId, submitTool: SUBMIT_TOOL[req.type], charge, error: message, drafts: drafts.length ? drafts.map((ref) => `\`${ref}\``).join('、') : '（没有）' })
     return { retry: { text, summary: `重试：请求 ${requestId}（上一回合出错）`, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId, reason: 'retry' } } }
   }
 
@@ -1102,6 +1159,21 @@ export class Bridge {
     return { ok: true, taskId: task.taskId, requestId, version: task.version, tree: renderTree(task.spec), ...this.retiredWarnings(task.spec) }
   }
 
+  /**
+   * bt_write_code（代码草稿单独提交设计方案 D1、D2）：给自己正在回答的规划 / 展开 / 修复请求写一条任务内代码草稿。
+   * 校验同提交工具的 code 字段（saveDraft：签名 + 沙箱编译）；写错只返回错误原文，不计不合法尝试。
+   * 写下的草稿留在本任务草稿区，之后本任务的任何提交都能用 task/名字 引用（回合出错也不丢）。
+   */
+  writeCode({ sessionId, requestId, name, signature, body, description }) {
+    const check = this.checkRequest(sessionId, requestId, ['plan', 'expand', ...PATCH_TYPES])
+    if (check.error) return { ok: false, error: check.error }
+    const entry = { signature, body, ...(description ? { description } : {}) }
+    const result = saveDraft({ library: this.library, sandbox: this.sandbox }, name, entry)
+    if (!result.ok) return { ok: false, errors: result.errors }
+    check.req.draftWrites = (check.req.draftWrites ?? 0) + 1
+    return { ok: true, requestId, name, ref: result.ref, hash: result.hash }
+  }
+
   /** bt_submit_expansion：替换一个 PendingExpansion。 */
   submitExpansion({ sessionId, requestId, subtree, code }) {
     const check = this.checkRequest(sessionId, requestId, 'expand')
@@ -1131,6 +1203,12 @@ export class Bridge {
   /** bt_inspect（P2 §4.4）：当前任务；复盘回合里看复盘请求持有的那个已结束的任务（P4 §2.4）。 */
   async inspect(args, { sessionId = null } = {}) {
     const req = this.reflectRequestFor(sessionId)
+    // E3：本任务的规划 / 展开 / 修复回合查过的源码，只在复盘回合
+    if (args?.what === 'sources') {
+      if (!req) return { ok: false, error: 'sources 只在复盘回合可看（规划 / 展开 / 修复回合查过的源码，就在你自己的对话里）' }
+      const reads = this.sourcesOf(req.taskId)
+      return { ok: true, what: 'sources', value: { total: reads.length, reads } }
+    }
     if (req) return this.executor.inspect(args, { task: req.task, reflect: true })
     const result = await this.executor.inspect(args)
     // 修复回合里看到的值记在在飞请求上，提交补丁时比对写死值（2026-11-13）
@@ -1316,8 +1394,15 @@ export class Bridge {
 
 /** 每个请求不计次的 API / 网络故障重试上限 */
 const TRANSIENT_RETRY_MAX = 5
+/** 每个请求不计次的"坏工具参数 JSON"重试上限（代码草稿单独提交设计方案 D4）；用完再出照常计次 */
+const MALFORMED_RETRY_MAX = 2
 const MODEL_FAULT = /invalid json|malformed|tool input|schema|invalid arguments/i
 const TRANSIENT = /stream ended before message_stop|stream (?:was )?(?:closed|interrupted|aborted)|premature close|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|fetch failed|network|timed? ?out|timeout|rate.?limit|overloaded|too many requests|service unavailable|bad gateway|gateway timeout|\b(?:429|500|502|503|504|529)\b/i
+
+/** 回合出错是不是模型返回了坏的工具参数（JSON 不完整 / 不合法、不符合 schema）。 */
+export function isMalformedError(error) {
+  return MODEL_FAULT.test(`${error?.code ?? ''} ${errorText(error)}`)
+}
 
 /** 回合出错是不是模型 API / 网络的故障（而不是模型交了坏东西）。人或训练器取消回合不算。 */
 export function isTransientError(error) {

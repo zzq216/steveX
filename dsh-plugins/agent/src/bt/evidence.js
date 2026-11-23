@@ -143,7 +143,7 @@ export function renderDirectory(dir) {
   return lines.join('\n')
 }
 
-export const INSPECT_KINDS = Object.freeze(['events', 'snapshot', 'node', 'eval', 'blackboard', 'live', 'versions', 'tree'])
+export const INSPECT_KINDS = Object.freeze(['events', 'snapshot', 'node', 'eval', 'blackboard', 'live', 'versions', 'tree', 'sources'])
 
 /**
  * bt_inspect（§4.4）：只看当前任务。
@@ -237,6 +237,9 @@ export async function inspect(task, args, deps) {
       return { ok: true, what, value: { queries: await deps.versions() } }
     case 'tree':
       return inspectTree(task, args)
+    case 'sources':
+      // 事实库写入挪到复盘设计方案 E3：由 Bridge.inspect 在复盘回合里接住；走到这里 = 不在复盘回合
+      return { ok: false, error: 'sources is only available while reviewing a finished task' }
   }
   return { ok: false, error: `unhandled ${what}` }
 }
@@ -271,7 +274,7 @@ function countNodes(spec) {
  * @param {object} options
  * @param {Array<{ ref, name }>} options.drafts  本任务的代码草稿（最新版）
  */
-export function buildReflectDirectory(task, { drafts = [] } = {}) {
+export function buildReflectDirectory(task, { drafts = [], sources = 0 } = {}) {
   const nodes = [...task.byId.values()]
   const counts = {}
   for (const node of nodes) {
@@ -299,7 +302,8 @@ export function buildReflectDirectory(task, { drafts = [] } = {}) {
     events: { total: task.events.length, kinds: eventKinds },
     blackboard: Object.keys(task.blackboard.snapshot()),
     frames: [...(task.frames ?? new Map())].map(([id, f]) => ({ id, ref: f.ref, keys: Object.keys(f.values) })),
-    drafts: draftRows
+    drafts: draftRows,
+    sources
   }
 }
 
@@ -373,6 +377,7 @@ export function renderReflectDirectory(dir) {
   lines.push(`事件（bt_inspect what=events）：${dir.events.total} 条（${Object.entries(dir.events.kinds).map(([k, n]) => `${k} ${n}`).join(' · ')}）`)
   lines.push(`黑板键（bt_inspect what=blackboard）：${dir.blackboard.length ? dir.blackboard.join(' · ') : '（空）'}`)
   if (dir.frames?.length) lines.push(`子树黑板（退出时的值，bt_inspect what=blackboard 加 id=<节点>）：${dir.frames.map((f) => `${f.id}（${f.ref ?? '?'}）：${f.keys.join(' · ') || '（空）'}`).join('；')}`)
+  if (dir.sources > 0) lines.push(`源码（bt_inspect what=sources）：本任务的规划 / 展开 / 修复回合查过 ${dir.sources} 处`)
   lines.push(`代码草稿：${dir.drafts.length ? dir.drafts.map((d) => `${d.ref}（${d.usedBy.length ? `被 ${d.usedBy.join('、')} 引用，执行 ${d.runs} 次、成功 ${d.successes} 次` : '没有节点引用'}）`).join('；') : '（无）'}`)
   return lines.join('\n')
 }

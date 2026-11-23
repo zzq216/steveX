@@ -69,7 +69,7 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 test('parseTrainArgs', () => {
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
@@ -126,7 +126,7 @@ test('judge', () => {
 
 test('arena/* is listed for the trainer but hidden from the agent', () => {
   const arena = METHODS.filter((m) => m.method.startsWith('arena/')).map((m) => m.method)
-  assert.deepEqual(arena, ['arena/build', 'arena/prepare', 'arena/enchant-preview', 'arena/mount-catalog', 'arena/loom-catalog', 'arena/smithing-catalog', 'arena/smithing-preview', 'arena/anvil-catalog', 'arena/anvil-preview', 'arena/status', 'arena/finish'])
+  assert.deepEqual(arena, ['arena/build', 'arena/prepare', 'arena/enchant-preview', 'arena/trade-preview', 'arena/trade-catalog', 'arena/mount-catalog', 'arena/loom-catalog', 'arena/smithing-catalog', 'arena/smithing-preview', 'arena/anvil-catalog', 'arena/anvil-preview', 'arena/status', 'arena/finish'])
   const registry = new CommandRegistry()
   registerRawCommands(registry)
   for (const method of arena) {
@@ -1326,7 +1326,7 @@ test('config: the stonecutter arena has its own defaults and checks; json.stonec
   assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
-  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography" or "brew"/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter" or "trade"/)
 })
 
 const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
@@ -2230,7 +2230,7 @@ test('config and arguments: the beacon arena has its own defaults and checks', (
   const args = parseTrainArgs(['beacon', 'effect=regeneration', 'primary=minecraft:haste', 'amplifier=1', 'level=4', 'payment=diamond', 'count=1-8'])
   assert.deepEqual([args.ok, args.effect, args.primary, args.amplifier, args.level, args.payment, args.count], [true, 'regeneration', 'minecraft:haste', '1', '4', 'diamond', '1-8'])
   assert.match(parseTrainArgs(['beacon', 'amplifier=3']).error, /amplifier 只能是 1 \/ 2 \/ mix/)
-  assert.match(parseTrainArgs(['beacon', 'level=0']).error, /level 要写 k 或 a-b（1–4/)
+  assert.match(parseTrainArgs(['beacon', 'level=0']).error, /level 要写 k 或 a-b（1–5/)
   assert.match(parseTrainArgs(['beacon', 'count=100']).error, /count 要写 k 或 a-b（1–64/)
   assert.match(parseTrainArgs(['beacon', 'effect=A B']).error, /effect 不像效果 id/)
 })
@@ -2446,7 +2446,7 @@ test('anvil options: task, second, enchants, curses and xpLevel; rename has no s
 
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null }
   assert.deepEqual(parseTrainArgs(['anvil', 'task=merge', 'second=same', 'item=bow', 'enchants=1-2', 'curses=1', 'xpLevel=50']),
     { ok: true, arena: 'anvil', item: 'bow', runs: 1, seed: null, portions: null, crafts: null, ...none, task: 'merge', second: 'same', enchants: '1-2', curses: '1', xpLevel: 50 })
   assert.match(parseTrainArgs(['anvil', 'task=repair']).error, /task 只能是 merge \/ rename \/ both/)
@@ -3877,6 +3877,11 @@ test('brew judge: inventory-based success before and after brewing; open GUI, ov
   assert.equal(over2.outcome, 'overshoot', 'two used, one asked')
   assert.equal(judgeBrew({ taskState: 'done', picked: p, final: { held, carried: {}, dropped: {}, stand: placed, containerOpen: false, brews: 0 }, timedOut: true }).outcome, 'timeout')
   assert.equal(judgeBrew({ stopped: true, picked: p, final: null }).outcome, 'aborted')
+  // 手动停止：照样判 aborted，但有最终状态就照常算放入量和放错（2026-11-23）
+  const withExtra = { ...held, [mc('glowstone')]: 1 }
+  assert.equal(judge({ held: withExtra }).outcome, 'misplaced')
+  const stoppedBrew = judgeBrew({ stopped: true, taskState: 'failed', picked: p, final: { held: withExtra, carried: {}, dropped: {}, stand: placed, containerOpen: true, brews: 0, stationIntact: true } })
+  assert.deepEqual([stoppedBrew.outcome, stoppedBrew.reached, stoppedBrew.account.put, stoppedBrew.account.extra], ['aborted', false, { fuel: 5, ingredient: 3, potions: 2 }, { [mc('glowstone')]: 1 }])
 })
 
 /**
@@ -3978,4 +3983,465 @@ test('report: brew records group by ingredient / bottle / kind and count oversho
   assert.deepEqual(summarize(records, { by: 'kind' }).rows.map((r) => [r.key, r.runs]), [['药水配方', 2], ['换瓶子配方', 1]])
   assert.match(formatSummary(summarize(records, { by: 'kind' })).split('\n')[0], /^配方种类\t/)
   assert.equal(summarize([{ target: 'x', outcome: 'success', cookTicks: 200, station: 'furnace', fuel: { band: 300 } }]).brewer, false, 'furnace records are not brew records')
+})
+
+// ── 合成器训练场（docs/合成器训练场设计方案.md） ────────────────────────────────
+
+const crafterModule = await import('../src/training/crafter.js')
+const { crafterOptions, parseExtraSpec, sampleCrafter, canonicalLayout, crafterExpect, judgeCrafter, cellsOf } = crafterModule
+const CRAFTER_RECIPES = [
+  ...RECIPES,
+  { name: 'cake', result: 'minecraft:cake', count: 1, type: 'shaped', pattern: ['AAA', 'BEB', 'CCC'], key: { A: ['minecraft:milk_bucket'], B: ['minecraft:sugar'], E: ['minecraft:egg'], C: ['minecraft:wheat'] } },
+  { name: 'pumpkin_pie', result: 'minecraft:pumpkin_pie', count: 1, type: 'shapeless', ingredients: [['minecraft:pumpkin'], ['minecraft:sugar'], ['minecraft:egg']] }
+]
+const CRAFTER_PROPS = {
+  ...ITEM_PROPS,
+  ...Object.fromEntries(['milk_bucket', 'sugar', 'egg', 'wheat', 'pumpkin'].map((id) => [mc(id), { maxStack: id === 'milk_bucket' ? 1 : id === 'egg' ? 16 : 64 }]))
+}
+const CRAFTER_ARENA = { crafter: { type: 'crafter', origin: [0, 100, 360], timeoutSec: 900, portions: '1-16', extra: '0-16', exclude: [] } }
+
+test('crafter options and sampler: all recipes incl. 2×2 and 1-cell, n capped by the smallest stack, extra per material capped by its own stack, totals conserved, reproducible (R3, R4)', () => {
+  assert.deepEqual(crafterOptions({}, {}), { portions: { lo: 1, hi: 16 }, extra: { lo: 0, hi: 16 }, item: null })
+  assert.deepEqual(crafterOptions({ portions: '3', extra: '0' }, { portions: '1-16' }).portions, { lo: 3, hi: 3 })
+  assert.deepEqual(parseExtraSpec('0-64'), { lo: 0, hi: 64 })
+  assert.throws(() => parseExtraSpec('65'), /extra 要写 k 或 a-b（0–64/)
+  assert.throws(() => crafterOptions({ portions: '0' }), /n 要写 k 或 a-b（1–64/)
+  const pool = candidates(CRAFTER_RECIPES, [], 3, { all: true })
+  assert.equal(pool.length, CRAFTER_RECIPES.length, 'small recipes stay in the pool')
+  assert.deepEqual(candidates(CRAFTER_RECIPES, [], 3).map((r) => r.name), ['oak_boat', 'cake'], 'craft3x3 pool unchanged')
+  assert.deepEqual([cellsOf(RECIPES[1]), cellsOf(RECIPES[4]), cellsOf(CRAFTER_RECIPES[5])], [1, 5, 9])
+
+  const options = crafterOptions({}, {})
+  const a = sampleCrafter(pool, CRAFTER_PROPS, 11, options)
+  assert.deepEqual(sampleCrafter(pool, CRAFTER_PROPS, 11, options), a, 'same seed, same run')
+  const shapes = new Set()
+  for (let seed = 0; seed < 300; seed++) {
+    const p = sampleCrafter(pool, CRAFTER_PROPS, seed, options)
+    shapes.add(p.shape)
+    const cap = Math.min(...p.materials.map((m) => CRAFTER_PROPS[m.id].maxStack))
+    assert.ok(p.portions >= 1 && p.portions <= Math.min(16, cap), `n ≤ stack cap (${p.recipe})`)
+    assert.equal(p.layout.filter(Boolean).length, p.cells)
+    for (const m of p.materials) {
+      assert.ok(m.extra >= 0 && m.extra <= Math.min(16, CRAFTER_PROPS[m.id].maxStack))
+      assert.equal(m.total, m.count * p.portions + m.extra)
+      assert.equal(p.slots.filter((s) => s.id === m.id).reduce((n, s) => n + s.count, 0), m.total)
+      assert.equal(p.held[m.id] ?? 0, m.extra)
+    }
+    assert.ok(p.slots.every((s) => s.count <= CRAFTER_PROPS[s.id].maxStack && s.slot >= 0 && s.slot <= 35))
+    assert.equal(new Set(p.slots.map((s) => s.slot)).size, p.slots.length)
+  }
+  assert.equal(shapes.size, new Set(pool.map(shapeOf)).size, 'every shape comes up')
+
+  const cake = sampleCrafter(pool, CRAFTER_PROPS, 3, { ...options, item: 'minecraft:cake' })
+  assert.equal(cake.portions, 1, 'milk buckets do not stack')
+  assert.deepEqual(cake.layout, [mc('milk_bucket'), mc('milk_bucket'), mc('milk_bucket'), mc('sugar'), mc('egg'), mc('sugar'), mc('wheat'), mc('wheat'), mc('wheat')])
+  assert.ok(cake.extra[mc('milk_bucket')] <= 1)
+  assert.throws(() => sampleCrafter(pool, CRAFTER_PROPS, 3, { ...options, portions: { lo: 2, hi: 4 }, item: 'minecraft:cake' }), /n=2 放不下.*最多堆 1 个/)
+  assert.throws(() => sampleCrafter(pool, CRAFTER_PROPS, 3, { ...options, item: 'minecraft:diamond' }), /没有合成 minecraft:diamond/)
+  // 规范摆法：有序配方放左上角（空格照留），无序配方从 0 号格往后
+  const shears = sampleCrafter(pool, CRAFTER_PROPS, 1, { ...options, item: 'minecraft:shears' })
+  assert.deepEqual(shears.layout, [null, mc('iron_ingot'), null, mc('iron_ingot'), null, null, null, null, null])
+  const pie = sampleCrafter(pool, CRAFTER_PROPS, 1, { ...options, item: 'minecraft:pumpkin_pie' })
+  assert.deepEqual(pie.layout, [mc('pumpkin'), mc('sugar'), mc('egg'), null, null, null, null, null, null])
+  assert.ok(pie.portions <= 16, 'eggs stack to 16')
+  assert.deepEqual(crafterExpect(pie), { crafter: { target: mc('pumpkin_pie'), portions: pie.portions, held: pie.held, layout: pie.layout } })
+  assert.equal(canonicalLayout(RECIPES[0], new Map([['#A', 'x']])).length, 9)
+})
+
+/** 合成器题的最终状态：layout 摆进合成器（每格 n 个，可整体平移 shift 格），空格禁用，物品栏剩余量 */
+function crafterFinal(p, { shift = 0, disabled = null, counts = null, held = p.held, open = false, carried = {}, dropped = {}, result = p.target, intact = true } = {}) {
+  const grid = new Array(9).fill(null)
+  p.layout.forEach((id, i) => { if (id) grid[i + shift] = { id, count: counts?.[i] ?? p.portions } })
+  return {
+    held, carried, dropped, containerOpen: open, stationIntact: intact,
+    crafter: { grid, disabled: disabled ?? grid.map((c, i) => (c ? null : i)).filter((i) => i !== null), result, powered: false }
+  }
+}
+
+test('crafter judge: any position the server matches succeeds; faults for wrong product, uneven counts, unlocked cells, leftovers, open GUI, foreign items; lost on drops, broken crafter, missing materials (R5–R7)', () => {
+  const pool = candidates(CRAFTER_RECIPES, [], 3, { all: true })
+  const p = sampleCrafter(pool, CRAFTER_PROPS, 1, { ...crafterOptions({ portions: '4', extra: '2' }), item: 'minecraft:shears' })
+  const judgeOf = (final, extra = {}) => judgeCrafter({ stopped: false, timedOut: false, taskState: 'done', final, picked: p, ...extra })
+  assert.deepEqual(p.held, { [mc('iron_ingot')]: 2 })
+  assert.equal(judgeOf(crafterFinal(p)).outcome, 'success')
+  assert.equal(judgeOf(crafterFinal(p, { shift: 4 })).outcome, 'success', 'shifted layout: judged by the server result')
+
+  const faultsOf = (final) => judgeOf(final).account.faults
+  assert.deepEqual([judgeOf(crafterFinal(p, { result: null })).outcome, faultsOf(crafterFinal(p, { result: null }))], ['false_success', ['recipe']])
+  // 一格多放 1 个：物品栏少 1 个
+  assert.deepEqual(faultsOf(crafterFinal(p, { counts: { 1: 5 }, held: { [mc('iron_ingot')]: 1 } })), ['count', 'leftover'])
+  assert.deepEqual(faultsOf(crafterFinal(p, { disabled: [0, 2, 4, 5, 6, 7] })), ['unlocked'])
+  assert.deepEqual(faultsOf(crafterFinal(p, { open: true })), ['open'])
+  assert.deepEqual(faultsOf(crafterFinal(p, { held: {}, carried: { [mc('iron_ingot')]: 2 } })), ['leftover', 'open'])
+  assert.equal(judgeOf(crafterFinal(p), { taskState: 'failed' }).outcome, 'failed')
+  assert.equal(judgeOf(crafterFinal(p), { timedOut: true }).outcome, 'timeout')
+  assert.equal(judgeOf(crafterFinal(p), { stopped: true }).outcome, 'aborted')
+  // 手动停止：照样判 aborted，但有最终状态就照常算失败原因（2026-11-23）
+  const stopped = judgeOf(crafterFinal(p, { result: null, open: true }), { stopped: true, taskState: 'failed' })
+  assert.deepEqual([stopped.outcome, stopped.account.faults], ['aborted', ['recipe', 'open']])
+  assert.equal(judgeOf(crafterFinal(p, { intact: false }), { stopped: true }).outcome, 'aborted', 'stopping beats lost')
+
+  assert.equal(judgeOf(crafterFinal(p, { held: { [mc('iron_ingot')]: 1 }, dropped: { [mc('iron_ingot')]: 1 } })).outcome, 'lost', 'something on the floor')
+  assert.equal(judgeOf(crafterFinal(p, { held: { [mc('iron_ingot')]: 1 } })).outcome, 'lost', 'one thrown out of the arena')
+  assert.equal(judgeOf(crafterFinal(p, { intact: false })).outcome, 'lost')
+  assert.equal(judgeOf({ ...crafterFinal(p), crafter: null }).outcome, 'lost', 'no crafter any more')
+  // 物品栏 2×2 里做了别的东西：材料少了不算丢失，记 foreign
+  const shearsMade = judgeOf(crafterFinal(p, { held: { [mc('shears')]: 1 } }))
+  assert.equal(shearsMade.outcome, 'false_success')
+  assert.deepEqual([shearsMade.account.faults, shearsMade.account.foreign], [['leftover', 'foreign'], { [mc('shears')]: 1 }])
+  assert.equal(judgeCrafter({ stopped: false, timedOut: true, taskState: 'failed', final: null, picked: p }).outcome, 'timeout')
+})
+
+function crafterHarness({ aimOk = true, product = null, finalOf = null } = {}) {
+  const world = { params: null, state: null }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    const e = world.params.expect.crafter
+    const picked = { layout: e.layout, portions: e.portions, held: e.held, target: e.target }
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, (finalOf ?? crafterFinal)(picked))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, recipes: CRAFTER_RECIPES, itemProps: CRAFTER_PROPS, arenas: CRAFTER_ARENA,
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: {}, carried: {}, dropped: {}, crafter: { grid: new Array(9).fill(null), disabled: [], result: null, powered: false }, containerOpen: false, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      return { aimOk, station: 'crafter', given: params.items, crafter: { product: product ?? params.expect.crafter.target } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('crafter run: prepare carries the layout expect; the text names target and n only; placing right and closing succeeds', async () => {
+  const h = crafterHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'crafter', runs: 4, seed: 5 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /n=1-16，extra=0-16；配方池 7 条配方、\d+ 种形状/)
+  await h.done()
+  const records = h.records('crafter')
+  assert.equal(records.length, 4)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual(record.faults, [])
+    assert.equal(record.cells, prepares[i].expect.crafter.layout.filter(Boolean).length)
+    assert.deepEqual([prepares[i].station, prepares[i].items], ['crafter', record.slots])
+    assert.equal(prepares[i].expect.crafter.target, record.target)
+    assert.equal(typeof record.reachedMs, 'number')
+    const text = h.instructions[i]
+    assert.equal(text, `你正前方有一台合成器（minecraft:crafter），视角已经对准它。你的物品栏里有合成 ${record.target} 的材料。\n请把材料放进合成器的合成格，让它合成出 ${record.target}，并且材料正好够它合成 ${record.portions} 次，没放材料的格子全部禁用。放好以后关掉它的界面。用不完的材料留在物品栏里，不要动其他物品。`)
+    assert.doesNotMatch(text, /右键|点击|每个放了材料的格子|上锁/, 'no moves, no per-cell count')
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/4 轮：会话 run-1，合成器：\w+ ×\d+ 次（配方 \w+，占 \d 格，seed=/)
+})
+
+test('crafter run: a product the server disagrees with or a crosshair off the crafter stops the run; option checks', async () => {
+  const stale = crafterHarness({ product: mc('stick') })
+  assert.equal(stale.trainer.start({ sessionId: 'console', arena: 'crafter', item: 'oak_boat' }).ok, true)
+  await stale.done()
+  assert.match(stale.records('crafter')[0].error, /数据和服务器不一致.*npm run extract-recipes.*oak_boat 加进 exclude/)
+  const off = crafterHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'crafter' }).ok, true)
+  await off.done()
+  assert.match(off.records('crafter')[0].error, /crosshair is not on the crafter/)
+  const h = crafterHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'crafter', crafts: '2' }).error, /不认这些选项：m/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'crafter', item: 'diamond' }).error, /没有合成 minecraft:diamond/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'crafter', item: 'cake', portions: '2' }).error, /n=2 放不下/)
+  assert.equal(parseTrainArgs(['crafter', 'n=2-4', 'extra=0']).extra, '0')
+  assert.match(parseTrainArgs(['crafter', 'extra=70']).error, /extra 要写 k 或 a-b（0–64/)
+})
+
+test('crafter config: defaults, validation and the report (cells grouping, fault columns)', async () => {
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.crafter, { type: 'crafter', origin: [10000, 120, 10360], timeoutSec: 900, portions: '1-16', extra: '0-16', exclude: [] })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { mine: { type: 'crafter', origin: [0, 0, 0], exclude: [] } } } }).training.arenas.mine.extra, '0-16')
+  assert.throws(() => normalizeConfig({ training: { arenas: { crafter: { type: 'crafter', origin: [0, 0, 0], extra: '99', exclude: [] } } } }), /training\.arenas\.crafter\.extra 要写/)
+
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (cells, outcome, faults = []) => ({ batch: 'b1', target: 'x', shape: 'AA', cells, portions: 2, faults, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [rec(4, 'success'), rec(4, 'false_success', ['unlocked']), rec(1, 'false_success', ['count', 'leftover'])]
+  const byCells = summarize(records, { by: 'cells' })
+  assert.equal(byCells.crafterer, true)
+  assert.deepEqual(byCells.rows.map((r) => [r.key, r.runs]), [['4 格', 2], ['1 格', 1]])
+  assert.deepEqual(byCells.total.faults, { recipe: 0, count: 1, unlocked: 1, leftover: 1, open: 0, foreign: 0 })
+  assert.match(formatSummary(byCells).split('\n')[0], /^配方格数\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t产物不对\t份数不对\t空格没禁用\t物品栏剩余不对\t没关界面\t出现别的物品\t打开合成器中位/)
+  assert.deepEqual(summarize(records, { by: 'portions' }).rows.map((r) => r.key), ['n=2'])
+  assert.equal(summarize([{ target: 'x', outcome: 'success', shape: 'AA', portions: 1, crafts: 1 }]).crafterer, false, 'craft records are not crafter records')
+})
+
+// ── 村民交易训练场（docs/村民交易训练场设计方案.md） ─────────────────────
+const tradeModule = await import('../src/training/trade.js')
+const { tradeOptions, sampleVillager, describeOffers, maxTimes, pickTrades, targetUses, tradeExpect, judgeTrade, doomedReason, PROFESSIONS } = tradeModule
+const { rng: tradeRng } = await import('../src/training/sampler.js')
+
+const cost = (id, count, maxStack = 64) => ({ id: mc(id), count, maxStack })
+const result = (id, count, { maxStack = 64, components = false, enchantments = {} } = {}) => ({ id: mc(id), count, maxStack, components, enchantments, name: id })
+/** 一只假村民的交易项（形状同 arena/trade-preview 的 offers） */
+function fakeOffers(offerSeed = 0) {
+  return [
+    { costA: cost('wheat', 20), costB: null, result: result('emerald', 1), maxUses: 16 },
+    { costA: cost('emerald', 1), costB: null, result: result('bread', 6), maxUses: 16 },
+    { costA: cost('emerald', 1), costB: null, result: result('apple', 4), maxUses: 16 },
+    { costA: cost('emerald', 24), costB: cost('book', 1), result: result('enchanted_book', 1, { maxStack: 1, components: true, enchantments: { [mc('sharpness')]: 3 } }), maxUses: 12 },
+    { costA: cost('emerald', 24), costB: cost('book', 1), result: result('enchanted_book', 1, { maxStack: 1, components: true, enchantments: { [mc('efficiency')]: 2 } }), maxUses: 12 },
+    { costA: cost('emerald', 3), costB: null, result: result('iron_sword', 1, { maxStack: 1, components: true }), maxUses: 3 }
+  ].map((o, index) => ({ index, level: 1 + (index >> 1), uses: 0, xp: 1, ...o, encoded: `offer-${index}-${offerSeed}` }))
+}
+const ARENAS_TRADE = { villager: { type: 'trade', origin: [0, 100, 390], timeoutSec: 900, level: '1-5', tasks: '1-4', portions: '1-64', extra: '0-16', exclude: { professions: [], items: [] } } }
+
+/** 按交易次数算出的最终状态：物品栏 = 发放 − 消耗 + 产物（V6 的守恒） */
+function tradeFinal(offers, given, uses, { open = false, carried = {}, dropped = {}, payment = {}, move = {}, villager = true, intact = true } = {}) {
+  const held = { ...given }
+  offers.forEach((o, i) => {
+    for (const c of [o.costA, ...(o.costB ? [o.costB] : [])]) held[c.id] = (held[c.id] ?? 0) - (uses[i] ?? 0) * c.count
+    held[o.result.id] = (held[o.result.id] ?? 0) + (uses[i] ?? 0) * o.result.count
+  })
+  for (const [id, n] of Object.entries(move)) held[id] -= n
+  for (const id of Object.keys(held)) if (held[id] <= 0) delete held[id]
+  return { held, carried, dropped, payment, containerOpen: open, stationIntact: intact, villager: villager ? { uuid: 'u', profession: mc('farmer'), level: 3, uses, trading: open } : null }
+}
+
+test('trade options: level 1–5, tasks 1–4, n, extra, profession and exclude (§5)', () => {
+  const o = tradeOptions({}, {})
+  assert.deepEqual([o.level, o.tasks, o.portions, o.extra, o.profession, o.item], [{ lo: 1, hi: 5 }, { lo: 1, hi: 4 }, { lo: 1, hi: 64 }, { lo: 0, hi: 16 }, null, null])
+  assert.equal(o.professions.length, 13)
+  assert.ok(!PROFESSIONS.includes(mc('nitwit')) && !PROFESSIONS.includes(mc('none')))
+  assert.equal(tradeOptions({ profession: 'librarian' }).profession, mc('librarian'))
+  assert.throws(() => tradeOptions({ profession: 'nitwit' }), /profession 要写有交易的职业/)
+  assert.throws(() => tradeOptions({ level: '6' }), /level 要写 k 或 a-b（1–5/)
+  assert.throws(() => tradeOptions({ tasks: '5' }), /tasks 要写 k 或 a-b（1–4/)
+  assert.deepEqual(tradeOptions({}, { exclude: { professions: ['farmer'] } }).professions.includes(mc('farmer')), false)
+  assert.throws(() => tradeOptions({}, { exclude: { professions: PROFESSIONS } }), /职业池是空的/)
+  assert.ok(tradeOptions({}, { exclude: { items: ['bread'] } }).excludeItems.has(mc('bread')))
+  // 抽村民：同一种子同一只；level 限定在范围里
+  const a = sampleVillager(7, tradeOptions({ level: '2-3' }))
+  const b = sampleVillager(7, tradeOptions({ level: '2-3' }))
+  assert.deepEqual([a.profession, a.level, a.type], [b.profession, b.level, b.type])
+  assert.ok(a.level >= 2 && a.level <= 3)
+  assert.equal(parseTrainArgs(['villager', 'profession=minecraft:cleric', 'level=5', 'tasks=2', 'n=1-3', 'extra=0']).profession, 'minecraft:cleric')
+  assert.equal(parseTrainArgs(['villager', 'level=5']).level, '5')
+  assert.match(parseTrainArgs(['villager', 'profession=Bad Name']).error, /profession 不像职业 id/)
+})
+
+test('trade descriptions: by content; identical trades get their enchantments, still identical → not choosable (V4, V9)', () => {
+  const offers = fakeOffers()
+  const texts = describeOffers(offers)
+  assert.equal(texts[0], `用 ${mc('wheat')} × 20 换 ${mc('emerald')} × 1`)
+  assert.equal(texts[3], `用 ${mc('emerald')} × 24 和 ${mc('book')} × 1 换 ${mc('enchanted_book')} × 1（附魔：${mc('sharpness')} 3）`)
+  assert.equal(texts[5], `用 ${mc('emerald')} × 3 换 ${mc('iron_sword')} × 1`, 'unique without enchantments')
+  const twins = [...offers.slice(0, 2), { ...offers[1], index: 2 }]
+  assert.deepEqual(describeOffers(twins).slice(1), [null, null])
+  // V5 的次数上限：交易次数、付款物 4 格、产物 9 格
+  assert.deepEqual(offers.map(maxTimes), [12, 16, 16, 9, 9, 3])
+})
+
+test('trade picking: k trades, n1 within n0, payments merged with extra, ≤36 slots in all, held by conservation, reproducible (V4, V5)', () => {
+  const offers = fakeOffers()
+  const options = tradeOptions({}, {})
+  for (let seed = 0; seed < 300; seed++) {
+    const p = pickTrades(offers, tradeRng(seed), options)
+    assert.ok(p, `seed ${seed}`)
+    assert.ok(p.k >= 1 && p.k <= p.kWanted && p.kWanted <= 4)
+    assert.equal(new Set(p.trades.map((t) => t.index)).size, p.k)
+    for (const t of p.trades) assert.ok(t.n1 >= 1 && t.n1 <= t.n0 && t.n0 === maxTimes(offers[t.index]), JSON.stringify(t))
+    // 每种付款物：发放 = need + e，e 不超过 max(16, 2 × 最高单价)，不超过 4 格 × 用到它的笔数
+    for (const item of p.items) {
+      const users = p.trades.filter((t) => t.costA.id === item.id || t.costB?.id === item.id)
+      const need = users.reduce((n, t) => n + t.n1 * (t.costA.id === item.id ? t.costA.count : t.costB.count), 0)
+      const top = Math.max(...users.map((t) => (t.costA.id === item.id ? t.costA.count : t.costB.count)))
+      assert.equal(item.total, need + item.extra)
+      assert.ok(item.extra >= 0 && item.extra <= Math.max(16, 2 * top) && Math.ceil(item.total / 64) <= 4 * users.length)
+    }
+    assert.ok(p.slots.length + p.productSlots <= 36, 'payments and products fit')
+    assert.equal(new Set(p.slots.map((s) => s.slot)).size, p.slots.length)
+    const given = Object.fromEntries(p.items.map((i) => [i.id, i.total]))
+    assert.deepEqual(p.held, tradeFinal(offers, given, targetUses(offers, p.trades)).held)
+    assert.equal(p.hasUnstackable, p.trades.some((t) => t.result.maxStack === 1))
+  }
+  assert.deepEqual(pickTrades(offers, tradeRng(9), options), pickTrades(offers, tradeRng(9), options))
+  // 串联：产物是另一笔的付款物（卖小麦换绿宝石 + 用绿宝石买面包）也照常出
+  assert.ok(Array.from({ length: 200 }, (_, s) => pickTrades(offers, tradeRng(s), options)).some((p) => p.hasChain))
+  // item= 固定一笔的产物；没有这样的交易 → null；n 的下限超过 n0 的交易不选
+  for (let s = 0; s < 50; s++) assert.equal(pickTrades(offers, tradeRng(s), tradeOptions({ item: 'bread' })).trades[0].result.id, mc('bread'))
+  assert.equal(pickTrades(offers, tradeRng(1), tradeOptions({ item: 'diamond' })), null)
+  for (let s = 0; s < 50; s++) assert.ok(pickTrades(offers, tradeRng(s), tradeOptions({ portions: '10-64' })).trades.every((t) => t.n0 >= 10 && t.n1 >= 10))
+  assert.equal(pickTrades(offers, tradeRng(1), tradeOptions({ portions: '17' })), null)
+  assert.deepEqual(tradeExpect({ uses: [0, 2], held: { a: 1 } }), { trade: { uses: [0, 2], held: { a: 1 } } })
+})
+
+test('trade judge: uses decide; short / over / wrong / open; drops and missing items are lost; stopped keeps faults (V6, V8)', () => {
+  const offers = fakeOffers()
+  const picked = { offers, trades: [{ index: 1, n1: 3 }, { index: 3, n1: 1 }], given: { [mc('emerald')]: 40, [mc('book')]: 2 } }
+  picked.uses = targetUses(offers, picked.trades)
+  const judgeOf = (final, o = {}) => judgeTrade({ stopped: false, timedOut: false, taskState: 'done', final, picked, ...o })
+  const at = (uses, o) => tradeFinal(offers, picked.given, uses, o)
+  assert.deepEqual([judgeOf(at(picked.uses)).outcome, judgeOf(at(picked.uses)).reached], ['success', true])
+  const short = judgeOf(at([0, 2, 0, 1, 0, 0]))
+  assert.deepEqual([short.outcome, short.account.faults], ['false_success', ['short']])
+  const over = judgeOf(at([0, 4, 0, 1, 0, 0]))
+  assert.deepEqual([over.outcome, over.account.faults], ['overshoot', ['over']])
+  const wrong = judgeOf(at([0, 3, 1, 1, 0, 0]))
+  assert.deepEqual([wrong.outcome, wrong.account.faults], ['mistrade', ['wrong']])
+  assert.deepEqual(judgeOf(at(picked.uses, { open: true })).account.faults, ['open'])
+  // 界面开着时支付格里的东西也算在内（守恒），carried 有东西记 open
+  const inPayment = at(picked.uses, { open: true, move: { [mc('emerald')]: 5 }, payment: { [mc('emerald')]: 5 } })
+  assert.deepEqual([judgeOf(inPayment).outcome, judgeOf(inPayment).account.faults], ['false_success', ['open']])
+  assert.equal(judgeOf(at(picked.uses, { move: { [mc('book')]: 1 }, dropped: { [mc('book')]: 1 } })).outcome, 'lost', 'on the floor')
+  assert.equal(judgeOf(at(picked.uses, { move: { [mc('book')]: 1 } })).outcome, 'lost', 'thrown out of the arena')
+  assert.equal(judgeOf(at(picked.uses, { villager: false })).outcome, 'lost', 'no villager')
+  assert.equal(judgeOf(at(picked.uses, { intact: false })).outcome, 'lost')
+  assert.equal(judgeOf(at([0, 4, 0, 1, 0, 0]), { timedOut: true }).outcome, 'overshoot', 'over beats timeout')
+  assert.equal(judgeOf(at([0, 2, 0, 1, 0, 0]), { timedOut: true, taskState: 'failed' }).outcome, 'timeout')
+  assert.equal(judgeOf(at([0, 2, 0, 1, 0, 0]), { taskState: 'failed' }).outcome, 'failed')
+  const stopped = judgeOf(at([0, 2, 0, 1, 0, 0], { open: true }), { stopped: true, taskState: 'failed' })
+  assert.deepEqual([stopped.outcome, stopped.account.faults], ['aborted', ['short', 'open']])
+  assert.equal(judgeTrade({ stopped: false, timedOut: true, taskState: 'failed', final: null, picked }).outcome, 'timeout')
+
+  // 串联：用换来的绿宝石付款也守恒
+  const chain = { offers, trades: [{ index: 0, n1: 2 }, { index: 1, n1: 3 }], given: { [mc('wheat')]: 40, [mc('emerald')]: 3 } }
+  chain.uses = targetUses(offers, chain.trades)
+  assert.equal(judgeTrade({ stopped: false, timedOut: false, taskState: 'done', final: tradeFinal(offers, chain.given, chain.uses), picked: chain }).outcome, 'success')
+
+  // V7：多换、换错一发现就给原因
+  const withText = { ...picked, trades: picked.trades.map((t) => ({ ...t, text: describeOffers(offers)[t.index] })) }
+  assert.equal(doomedReason(withText, { villager: { uses: picked.uses } }), null)
+  assert.equal(doomedReason(withText, { villager: null }), null)
+  assert.match(doomedReason(withText, { villager: { uses: [0, 4, 0, 1, 0, 0] } }), /^交易次数超过目标：用 minecraft:emerald × 1 换 minecraft:bread × 6的那笔已经交易了 4 次，目标是 3 次，无法挽回$/)
+  assert.match(doomedReason(withText, { villager: { uses: [0, 1, 0, 0, 0, 2] } }), /^做了不在目标里的交易：用 minecraft:emerald × 3 换 minecraft:iron_sword × 1的那笔交易了 2 次，无法挽回$/)
+})
+
+/** 训练场跑一轮：预览给 fakeOffers；脚本按 plan 改村民状态 */
+function tradeHarness({ aimOk = true, mismatch = false, plan = 'exact' } = {}) {
+  const world = { params: null, state: null, previews: [] }
+  const offersOf = (seed) => fakeOffers(seed)
+  const script = ({ req, executor, clock }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    const offers = offersOf(world.params.villager.offerSeed)
+    const given = {}
+    for (const s of world.params.items) given[s.id] = (given[s.id] ?? 0) + s.count
+    const want = world.params.expect.trade.uses
+    if (plan === 'over') {
+      // 第一笔多换一次：训练器在下一次轮询时发现并中止
+      const i = want.findIndex((n) => n > 0)
+      const uses = want.map((n, j) => (j === i ? n + 1 : 0))
+      Object.assign(world.state, { openedAtMs: clock() - 1 }, tradeFinal(offers, given, uses, { open: true }))
+      while (executor.task.state === 'running') await tick()
+      return
+    }
+    Object.assign(world.state, { openedAtMs: clock() - 1, reachedAtMs: clock() }, tradeFinal(offers, given, want))
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_TRADE,
+    onCall: (method, params) => {
+      if (method !== 'arena/trade-preview') return null
+      world.previews.push(params)
+      return { ok: true, data: { ...params, offers: offersOf(params.offerSeed) } }
+    },
+    prepareData: (params) => {
+      world.params = params
+      world.state = { held: {}, carried: {}, payment: {}, dropped: {}, villager: { uuid: 'u', uses: offersOf(0).map(() => 0) }, containerOpen: false, stationIntact: true, openedAtMs: null, reachedAtMs: null }
+      const offers = offersOf(params.villager.offerSeed).map((o) => (mismatch ? { ...o, encoded: 'other' } : o))
+      return { aimOk, station: 'villager', given: params.items, villager: { uuid: 'u', ...params.villager, offers } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('trade run: preview first, prepare carries the villager and the uses expect; the text lists each trade by content; exact trading succeeds', async () => {
+  const h = tradeHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'villager', runs: 3, seed: 11 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /level=1-5，tasks=1-4，n=1-64，extra=0-16；职业池 13 种/)
+  await h.done()
+  const records = h.records('villager')
+  assert.equal(records.length, 3)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.faults, record.doomed, record.doomedMs], [[], null, null])
+    const p = prepares[i]
+    assert.equal(p.station, 'villager')
+    assert.deepEqual(p.villager, { profession: record.profession, type: record.villagerType, level: record.level, offerSeed: record.offerSeed })
+    assert.deepEqual(h.world.previews[i], p.villager, 'prepare uses the previewed villager')
+    assert.deepEqual(p.expect.trade.uses, targetUses(record.offers, record.trades))
+    assert.equal(record.trades.length, record.k)
+    const text = h.instructions[i]
+    const lines = record.trades.map((t, j) => `- ${describeOffers(fakeOffers())[t.index]}的那笔，交易 ${t.n1} 次${j === record.trades.length - 1 ? '。' : '；'}`)
+    assert.equal(text, `你正前方有一个村民，视角已经对准它。你的物品栏里有和它交易要用的物品。\n请和它交易：\n${lines.join('\n')}\n每笔都正好交易这么多次，不要做别的交易。换完以后关掉交易界面。用不完的物品留在物品栏里，不要动其他物品。`)
+    assert.doesNotMatch(text, /右键|选中|Shift|下标|第 \d 笔/, 'no moves, no indexes')
+    assert.equal(typeof record.reachedMs, 'number')
+  }
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/3 轮：会话 run-1，村民交易：\w+ \d 级，/)
+})
+
+test('trade run: trading over the target is caught while polling, the task is stopped and judged overshoot (V7)', async () => {
+  const h = tradeHarness({ plan: 'over' })
+  assert.equal(h.trainer.start({ sessionId: 'console', arena: 'villager', seed: 3 }).ok, true)
+  await h.done()
+  const [record] = h.records('villager')
+  assert.equal(record.outcome, 'overshoot', JSON.stringify(record))
+  assert.match(record.doomed, /^交易次数超过目标：.*无法挽回$/)
+  assert.equal(typeof record.doomedMs, 'number')
+  assert.equal(record.error, null)
+  assert.ok(record.faults.includes('over') && record.faults.includes('open'), JSON.stringify(record.faults))
+})
+
+test('trade run: offers that differ from the preview or a crosshair off the villager stop the run; option checks', async () => {
+  const diff = tradeHarness({ mismatch: true })
+  assert.equal(diff.trainer.start({ sessionId: 'console', arena: 'villager' }).ok, true)
+  await diff.done()
+  assert.match(diff.records('villager')[0].error, /预览和村民交易项不一致/)
+  const off = tradeHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'villager' }).ok, true)
+  await off.done()
+  assert.match(off.records('villager')[0].error, /crosshair is not on the villager/)
+  const none = tradeHarness()
+  assert.equal(none.trainer.start({ sessionId: 'console', arena: 'villager', item: 'diamond' }).ok, true)
+  await none.done()
+  assert.match(none.records('villager')[0].error, /preview: 连续 11 次选不出交易/)
+  assert.equal(none.world.previews.length, 11)
+  const h = tradeHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'villager', crafts: '2' }).error, /不认这些选项：m/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'villager', level: '6' }).error, /level 要写 k 或 a-b（1–5/)
+})
+
+test('trade config: defaults, validation and the report (k grouping, mistrade and fault columns)', async () => {
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.villager, { type: 'trade', origin: [10000, 120, 10390], timeoutSec: 900, level: '1-5', tasks: '1-4', portions: '1-64', extra: '0-16', exclude: { professions: [], items: [] } })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { mine: { type: 'trade', origin: [0, 0, 0] } } } }).training.arenas.mine.tasks, '1-4')
+  assert.throws(() => normalizeConfig({ training: { arenas: { villager: { type: 'trade', origin: [0, 0, 0], exclude: ['x'] } } } }), /villager\.exclude must be \{ professions/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { villager: { type: 'trade', origin: [0, 0, 0], level: '0' } } } }), /training\.arenas\.villager\.level 要写/)
+
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (k, outcome, faults = [], hasChain = false) => ({ batch: 'b1', target: 'x', profession: mc('farmer'), level: 2, trades: [], k, hasChain, doomed: null, faults, outcome, openedMs: 1000, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [rec(2, 'success'), rec(2, 'mistrade', ['wrong']), rec(1, 'overshoot', ['over', 'open'], true), rec(1, 'false_success', ['short'])]
+  const byK = summarize(records, { by: 'k' })
+  assert.equal(byK.trader, true)
+  assert.deepEqual(byK.rows.map((r) => [r.key, r.runs]), [['1 笔', 2], ['2 笔', 2]])
+  assert.deepEqual([byK.total.mistrade, byK.total.overshoot, byK.total.tradeFaults], [1, 1, { short: 1, over: 1, wrong: 1, open: 1 }])
+  assert.match(formatSummary(byK).split('\n')[0], /^交易笔数\t轮数\t成功率\t虚报\t失败\t超时\t中止\t换多\t换错\t丢失\t次数不够\t换多\t换错\t没关界面\t打开交易界面中位/)
+  assert.deepEqual(summarize(records, { by: 'chain' }).rows.map((r) => r.key).sort(), ['无串联', '有串联'])
+  assert.deepEqual(summarize(records, { by: 'level' }).rows.map((r) => r.key), ['2 级'])
+  assert.deepEqual(summarize(records, { by: 'profession' }).rows.map((r) => r.key), ['farmer'])
 })

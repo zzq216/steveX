@@ -32,6 +32,9 @@ import net.minecraft.world.inventory.StonecutterMenu;
 import net.minecraft.world.inventory.LoomMenu;
 import net.minecraft.world.inventory.CartographyTableMenu;
 import net.minecraft.world.inventory.BrewingStandMenu;
+import net.minecraft.world.inventory.CrafterMenu;
+import net.minecraft.world.inventory.MerchantMenu;
+import net.minecraft.world.level.block.entity.CrafterBlockEntity;
 import net.minecraft.world.level.block.entity.BrewingStandBlockEntity;
 import net.minecraft.world.level.block.LoomBlock;
 import net.minecraft.world.inventory.EnchantmentMenu;
@@ -41,6 +44,8 @@ import net.minecraft.world.inventory.SmithingMenu;
 import net.minecraft.world.inventory.AbstractMountInventoryMenu;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.animal.equine.AbstractHorse;
 import net.minecraft.world.entity.animal.nautilus.AbstractNautilus;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
@@ -135,6 +140,9 @@ import net.minecraft.world.phys.Vec3;
  * prepare 的 items 里带 potion 的项发指定药水（P8），用服务器的酿造配方核对题目（{@link BrewArena#check}）；物品按签名计数（瓶子 id#药水，P7）；
  * status 另报物品栏、光标、地上、酿造台五格和燃料值、酿造次数（{@code BrewingBrewMixin} 报给 {@link #onBrew}，P9）。
  *
+ * <p>合成器场地（docs/合成器训练场设计方案.md）：工作站是合成器（{@code crafter}），每轮清空后换一台新的（格子、禁用状态清掉，R8）。
+ * prepare 用服务器配方核对规范摆法的产物（{@link CrafterArena#check}）；status 另报物品栏、光标、地上（按 id）和合成器九格、禁用格、预览产物、通电状态。
+ *
  * <p>锻造台场地（docs/锻造台训练场设计方案.md）：工作站是锻造台（{@code smithing_table}，不会损坏，M1）。arena/smithing-catalog、
  * arena/smithing-preview 是出题用的只读接口（{@link SmithingArena}，M2、M4）；prepare 登记"锻造"写法的目标（{@link Smith}，可以有多个，M7）；
  * 取出产物由 {@code SmithingTakeMixin} 报给 {@link #onSmithingTake}；status 另报物品栏（每件带纹饰）、光标、锻造台三格、地上掉落物、
@@ -144,6 +152,11 @@ import net.minecraft.world.phys.Vec3;
  * prepare 先让玩家下坐骑、清掉场内的坐骑类动物，再按 {@link MountSetup} 生成本轮的动物（{@link MountArena#spawn}，H2），记下 UUID；
  * 准星自检改成实体射线检测；登记"坐骑"写法的目标（{@link MountGoal}，H6）；status 另报动物身上的东西、物品栏、光标、地上掉落物、
  * 界面开没开、骑没骑着、第一次骑上的时刻、有没有不开界面直接装备；finish 先让玩家下来再传送（H8）。动物不在了算工作站被毁。
+ *
+ * <p>村民交易场地（docs/村民交易训练场设计方案.md）：工作站是一只村民（{@code villager}，实体工作站，方块上只留空气，V1）。
+ * arena/trade-preview 是出题用的只读接口（{@link VillagerArena#create}，V2、V3）；prepare 清掉场内的村民，按 {@link VillagerArena.Setup}
+ * 生成本轮的村民（NoAI、无敌、成年），记下 UUID，返回交易描述供插件和预览核对；登记"交易"写法的目标（{@link VillagerArena.Spec}，V9）；
+ * status 另报村民每笔交易的次数、物品栏、光标、支付格、地上（按 id）、界面开没开。村民不在了算工作站被毁。
  */
 public final class ArenaManager {
 
@@ -170,6 +183,8 @@ public final class ArenaManager {
             Map.entry("loom", Blocks.LOOM),
             Map.entry("cartography", Blocks.CARTOGRAPHY_TABLE),
             Map.entry("brewing_stand", Blocks.BREWING_STAND),
+            Map.entry("crafter", Blocks.CRAFTER),
+            Map.entry("villager", Blocks.AIR),
             // 坐骑场地（坐骑方案 H1）：工作站是动物，方块位置上只留空气
             Map.entry("mount", Blocks.AIR));
 
@@ -190,7 +205,9 @@ public final class ArenaManager {
             Map.entry("mount", new Site(new BlockPos(10000, 120, 10240), "mount")),
             Map.entry("loom", new Site(new BlockPos(10000, 120, 10270), "loom")),
             Map.entry("cartography", new Site(new BlockPos(10000, 120, 10300), "cartography")),
-            Map.entry("brewing", new Site(new BlockPos(10000, 120, 10330), "brewing_stand"))));
+            Map.entry("brewing", new Site(new BlockPos(10000, 120, 10330), "brewing_stand")),
+            Map.entry("crafter", new Site(new BlockPos(10000, 120, 10360), "crafter")),
+            Map.entry("villager", new Site(new BlockPos(10000, 120, 10390), "villager"))));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -211,52 +228,62 @@ public final class ArenaManager {
      *   <li>织布机方案 L9（loom 不为 null）：见 {@link LoomArena#reached}。</li>
      *   <li>制图台方案 K9（cartography 不为 null）：见 {@link CartographyArena#reached}。</li>
      *   <li>酿造台方案 P8（brew 不为 null）：容器界面已关闭，光标为空，见 {@link BrewArena#reached}。</li>
+     *   <li>合成器方案 R7（crafter 不为 null）：容器界面已关闭，光标为空，见 {@link CrafterArena#reached}。</li>
+     *   <li>村民交易方案 V9（trade 不为 null）：容器界面已关闭，光标为空，见 {@link VillagerArena#reached}。</li>
      * </ul>
      * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew) {
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew, CrafterArena.Spec crafter, VillagerArena.Spec trade) {
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
-            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null);
+            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
-            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null);
+            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Cook cook) {
-            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Enchant enchant) {
-            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Beacon beacon) {
-            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Anvil anvil) {
-            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null, null, null);
         }
 
         public Expect(List<Smith> smithing) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null, null, null);
         }
 
         public Expect(MountGoal mount) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null, null, null);
         }
 
         public Expect(LoomArena.Spec loom) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null, null, null);
         }
 
         public Expect(CartographyArena.Spec cartography) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null, null, null);
         }
 
         public Expect(BrewArena.Spec brew) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew, null, null);
+        }
+
+        public Expect(CrafterArena.Spec crafter) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, crafter, null);
+        }
+
+        public Expect(VillagerArena.Spec trade) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, trade);
         }
     }
 
@@ -346,6 +373,8 @@ public final class ArenaManager {
         final List<Map<String, Object>> smithingTakes = new ArrayList<>();
         // 坐骑方案 H2、H6：本轮的动物、第一次骑上的时刻、有没有不开界面直接装备（上一 tick 看到的鞍槽 / 身体槽）
         UUID mountUuid;
+        // 村民交易方案 V1：本轮的村民
+        UUID villagerUuid;
         Long rodeAtMs;
         boolean equippedWithoutMenu;
         String lastSaddle;
@@ -421,6 +450,15 @@ public final class ArenaManager {
         if (pos.equals(stationPos(run.origin))) run.brews++;
     }
 
+    /** 合成器工作站（合成器方案）：每轮换新（R8）；材料按 id 计数（R5）。 */
+    public static boolean isCrafter(String station) {
+        return "crafter".equals(station);
+    }
+
+    private static CrafterBlockEntity crafterAt(ServerLevel level, BlockPos o) {
+        return level.getBlockEntity(stationPos(o)) instanceof CrafterBlockEntity crafter ? crafter : null;
+    }
+
     /** 制图台工作站（制图台方案）：关界面时 0、1 两格退回物品栏（F10）；地图按签名计数（K9）。 */
     public static boolean isCartography(String station) {
         return "cartography".equals(station);
@@ -459,6 +497,58 @@ public final class ArenaManager {
     /** 坐骑工作站（坐骑方案）：工作站是一只动物，不是方块。 */
     public static boolean isMount(String station) {
         return "mount".equals(station);
+    }
+
+    /** 村民工作站（村民交易方案）：工作站是一只村民，不是方块。 */
+    public static boolean isVillager(String station) {
+        return "villager".equals(station);
+    }
+
+    /** 本轮的村民；不在了（被清掉、跑出场地范围）→ null */
+    private static Villager villagerOf(ServerLevel level, Run run) {
+        if (run == null || run.villagerUuid == null) return null;
+        Entity entity = level.getEntity(run.villagerUuid);
+        if (!(entity instanceof Villager villager) || !villager.isAlive() || !box(run.origin).contains(villager.position())) return null;
+        return villager;
+    }
+
+    /** 村民的位置（V1）：工作站那一格的中心 */
+    private static Vec3 villagerPos(BlockPos o) {
+        BlockPos at = stationPos(o);
+        return new Vec3(at.getX() + 0.5, at.getY(), at.getZ() + 0.5);
+    }
+
+    /** 站在场内中心朝 +z 时，眼睛 → 村民身上一点的俯角（V1，同坐骑方案 H1：瞄准身高的 0.7） */
+    private static float villagerPitch(ServerPlayer player, BlockPos o) {
+        Vec3 at = villagerPos(o);
+        double aimY = at.y + EntityType.VILLAGER.getHeight() * 0.7;
+        double dy = (o.getY() + 1 + player.getEyeHeight()) - aimY;
+        double dz = at.z - (o.getZ() + 0.5);
+        return (float) Math.toDegrees(Math.atan2(dy, dz));
+    }
+
+    /** 当前界面是不是和本轮村民的交易界面 */
+    private static boolean opensVillager(ServerLevel level, ServerPlayer player, Run run) {
+        if (!(player.containerMenu instanceof MerchantMenu)) return false;
+        Villager villager = villagerOf(level, run);
+        return villager != null && villager.getTradingPlayer() == player;
+    }
+
+    /** 村民交易方案 V3：按 setup 生成一只村民（不放进世界），返回它的交易描述（只读）。 */
+    public static Map<String, Object> tradePreview(MinecraftServer server, VillagerArena.Setup setup) {
+        ServerLevel level = server.overworld();
+        VillagerArena.Created made = VillagerArena.create(level, setup);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("profession", setup.profession());
+        out.put("type", setup.type());
+        out.put("level", setup.level());
+        out.put("offers", VillagerArena.describe(level, made.villager(), made.levels()));
+        return out;
+    }
+
+    /** 村民交易方案 V2：有交易表的职业（只读）。 */
+    public static Map<String, Object> tradeCatalog(MinecraftServer server) {
+        return Map.of("professions", VillagerArena.professions());
     }
 
     /** 坐骑方案 H10：每种动物能装什么、箱子几格（只读）。 */
@@ -994,7 +1084,8 @@ public final class ArenaManager {
      */
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
                                               List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
-                                              Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel, MountSetup mountSetup) {
+                                              Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel, MountSetup mountSetup,
+                                              VillagerArena.Setup villagerSetup) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         Block stationBlock = station(station);
         checkChestItems(chestItems, storageCapacity(station));
@@ -1004,8 +1095,23 @@ public final class ArenaManager {
             if (mountSetup == null) throw new IllegalArgumentException("the mount station needs mount: { animal, saddle?, body?, chest?, strength? }");
             MountArena.type(mountSetup.animal()); // 不认识的动物在这里报错
         }
+        // 村民交易方案 V2：先生成本轮的村民（还不放进世界），参数不对在这里报错
+        VillagerArena.Created villagerMade = null;
+        if (isVillager(station)) {
+            if (villagerSetup == null) throw new IllegalArgumentException("the villager station needs villager: { profession, type, level, offerSeed }");
+            villagerMade = VillagerArena.create(server.overworld(), villagerSetup);
+        }
         String brewProduct = null;
-        if (expect != null && expect.brew() != null) {
+        String crafterProduct = null;
+        if (expect != null && expect.trade() != null) {
+            if (!isVillager(station)) throw new IllegalArgumentException("expect { trade } needs the villager station");
+            int trades = villagerMade.villager().getOffers().size();
+            if (expect.trade().uses().size() != trades) throw new IllegalArgumentException("expect.trade.uses has " + expect.trade().uses().size() + " entries, the villager has " + trades + " trades");
+        } else if (expect != null && expect.crafter() != null) {
+            if (!isCrafter(station)) throw new IllegalArgumentException("expect { crafter } needs the crafter station");
+            // 合成器方案 R8：规范摆法在服务器上合成出目标
+            crafterProduct = CrafterArena.check(server.overworld(), expect.crafter());
+        } else if (expect != null && expect.brew() != null) {
             if (!isBrewer(station)) throw new IllegalArgumentException("expect { brew } needs the brewing_stand station");
             // 酿造台方案 P8：用服务器的酿造配方核对题目，返回产物签名
             brewProduct = BrewArena.check(server.overworld().potionBrewing(), expect.brew());
@@ -1082,6 +1188,11 @@ public final class ArenaManager {
             oldStand.clearContent();
             level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
         }
+        // 合成器（合成器方案 R8、C6）：格子里的东西、禁用状态都在方块实体上；先清空再拆，build 放一台新的
+        if (level.getBlockEntity(stationAt) instanceof CrafterBlockEntity oldCrafter) {
+            oldCrafter.clearContent();
+            level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
+        }
         // 附魔台（附魔台方案 N2）：本轮的书架数决定 build 摆哪些书架、工作站完好检查看哪些格子
         if (isEnchanter(station)) {
             int shelves = enchantSetup != null && enchantSetup.bookshelves() != null ? enchantSetup.bookshelves() : EnchantArena.MAX_SHELVES;
@@ -1106,10 +1217,12 @@ public final class ArenaManager {
         // 2. 清空物品栏（含盔甲、副手）
         player.getInventory().clearContent();
         player.inventoryMenu.getCraftSlots().clearContent();
-        teleportInside(server, player, o, isMount(station) ? mountPitch(player, o, mountSetup.animal()) : stationBlock != null ? stationPitch(player, o) : 0f);
+        teleportInside(server, player, o, isMount(station) ? mountPitch(player, o, mountSetup.animal())
+                : isVillager(station) ? villagerPitch(player, o) : stationBlock != null ? stationPitch(player, o) : 0f);
         // 3. 场内掉落物、经验球、敌对生物
         for (Entity e : level.getEntitiesOfClass(Entity.class, box(o),
-                e -> e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy || (isMount(station) && isMountEntity(e)))) {
+                e -> e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy || (isMount(station) && isMountEntity(e))
+                        || (isVillager(station) && e instanceof Villager))) {
             e.discard();
         }
         // 3b. 坐骑（坐骑方案 H2）：生成本轮的动物，参数不对在这里报错
@@ -1117,6 +1230,13 @@ public final class ArenaManager {
         if (isMount(station)) {
             Vec3 at = mountPos(o, mountSetup.animal());
             mount = MountArena.spawn(level, player, mountSetup, at.x, at.y, at.z, 180f);
+        }
+        // 3c. 村民（村民交易方案 V1）：放进世界，面朝玩家
+        Villager villager = null;
+        if (villagerMade != null) {
+            Vec3 at = villagerPos(o);
+            villager = villagerMade.villager();
+            VillagerArena.place(level, villager, at.x, at.y, at.z, 180f);
         }
         // 4. 状态
         player.setGameMode(GameType.SURVIVAL);
@@ -1180,6 +1300,7 @@ public final class ArenaManager {
             active.lastSaddle = MountArena.worn(mount, EquipmentSlot.SADDLE);
             active.lastBody = MountArena.worn(mount, EquipmentSlot.BODY);
         }
+        if (villager != null) active.villagerUuid = villager.getUUID();
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("arena", arena);
@@ -1199,7 +1320,7 @@ public final class ArenaManager {
         if (stationBlock != null) {
             out.put("station", station);
             out.put("pitch", player.getXRot());
-            out.put("aimOk", mount != null ? aimsAtEntity(player, mount) : aimsAt(player, stationPos(o), stationBlock));
+            out.put("aimOk", mount != null ? aimsAtEntity(player, mount) : villager != null ? aimsAtEntity(player, villager) : aimsAt(player, stationPos(o), stationBlock));
         }
         if (chest != null) {
             // 大箱子没连上时这里是 27（C2 自检）
@@ -1210,6 +1331,7 @@ public final class ArenaManager {
         if (enchantInfo != null) out.put("enchant", enchantInfo);
         if (mapSource != null) out.put("map", mapSource.describe());
         if (brewProduct != null) out.put("brew", Map.of("product", brewProduct));
+        if (crafterProduct != null) out.put("crafter", Map.of("product", crafterProduct));
         if (isBeacon(station)) {
             // 信标方案 G2：新放的信标等级是 0，要等它查完光柱、到 80 tick 的整数倍才数底座；插件轮询 status 的 beacon.levels 等它对上
             Map<String, Object> beaconInfo = new LinkedHashMap<>();
@@ -1230,6 +1352,16 @@ public final class ArenaManager {
             Map<String, Object> mountInfo = new LinkedHashMap<>(MountArena.describe(mount));
             mountInfo.put("items", itemDetails(player));
             out.put("mount", mountInfo);
+        }
+        if (villager != null) {
+            // 村民交易方案 V3：插件拿 offers 和预览逐笔比对
+            Map<String, Object> villagerInfo = new LinkedHashMap<>();
+            villagerInfo.put("uuid", villager.getUUID().toString());
+            villagerInfo.put("profession", villagerSetup.profession());
+            villagerInfo.put("type", villagerSetup.type());
+            villagerInfo.put("level", villager.getVillagerData().level());
+            villagerInfo.put("offers", VillagerArena.describe(level, villager, villagerMade.levels()));
+            out.put("villager", villagerInfo);
         }
         if (isSmithing(station)) {
             // 锻造台方案 M7：插件用它核对材料发对了
@@ -1337,6 +1469,15 @@ public final class ArenaManager {
             out.put("containerOpen", containerOpen(player));
             out.put("brews", active.brews);
         }
+        if (isCrafter(active.stationName)) {
+            // 合成器方案 R5、R8：物品栏（不含光标）、光标、场内地上按 id 计数；合成器九格、禁用格、预览产物、通电状态
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            CrafterBlockEntity crafter = crafterAt(level, active.origin);
+            out.put("crafter", crafter != null ? CrafterArena.state(level, crafter) : null);
+            out.put("containerOpen", containerOpen(player));
+        }
         if (isCartography(active.stationName)) {
             // 制图台方案 K8、K9：物品栏（不含光标）、光标、制图台 0、1 两格（界面开着时；关界面时退回物品栏）、场内地上，都按签名计数
             CartographyArena.Source src = active.mapSource;
@@ -1414,6 +1555,17 @@ public final class ArenaManager {
             out.put("rodeAtMs", active.rodeAtMs);
             out.put("equippedWithoutMenu", active.equippedWithoutMenu);
         }
+        if (isVillager(active.stationName)) {
+            // 村民交易方案 V6：村民每笔交易的次数（不在了为 null）；物品栏（不含光标）、光标、支付格（界面开着时；关界面时退回物品栏）、
+            // 场内地上按 id 计数；界面开没开
+            Villager villager = villagerOf(level, active);
+            out.put("villager", villager != null ? VillagerArena.state(villager) : null);
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("payment", VillagerArena.payment(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("containerOpen", containerOpen(player));
+        }
         if (isSmithing(active.stationName)) {
             // 锻造台方案 M6、M7：物品栏（不含光标）的计数和每件的纹饰，光标，锻造台三格（界面开着时；关界面时退回物品栏），
             // 场内地上（每件带纹饰），界面开没开，每次取出产物的记录
@@ -1435,6 +1587,8 @@ public final class ArenaManager {
         if (isAnvil(run.stationName)) return level.getBlockState(stationPos(run.origin)).is(BlockTags.ANVIL);
         // 坐骑方案 H2：动物还在（活着、在场地范围里）；鹦鹉螺组的水坑不算工作站
         if (isMount(run.stationName)) return mountOf(level, run) != null;
+        // 村民交易方案 V1：村民还在（活着、在场地范围里）
+        if (isVillager(run.stationName)) return villagerOf(level, run) != null;
         for (Map.Entry<BlockPos, Block> e : run.stationBlocks.entrySet()) if (!level.getBlockState(e.getKey()).is(e.getValue())) return false;
         return true;
     }
@@ -1477,7 +1631,8 @@ public final class ArenaManager {
             }
         }
         if (isMount(run.stationName)) trackMount(server.overworld(), player, run);
-        if (run.station != null && run.openedAtMs == null && (isMount(run.stationName) ? opensMount(run, player.containerMenu) : opensStation(run.stationName, player.containerMenu))) {
+        if (run.station != null && run.openedAtMs == null && (isMount(run.stationName) ? opensMount(run, player.containerMenu)
+                : isVillager(run.stationName) ? opensVillager(server.overworld(), player, run) : opensStation(run.stationName, player.containerMenu))) {
             run.openedAtMs = System.currentTimeMillis();
         }
         if (run.expect != null && run.reachedAtMs == null && reached(server.overworld(), player, run)) {
@@ -1522,6 +1677,7 @@ public final class ArenaManager {
             case "loom" -> menu instanceof LoomMenu;
             case "cartography" -> menu instanceof CartographyTableMenu;
             case "brewing_stand" -> menu instanceof BrewingStandMenu;
+            case "crafter" -> menu instanceof CrafterMenu;
             default -> menu instanceof CraftingMenu;
         };
     }
@@ -1532,11 +1688,23 @@ public final class ArenaManager {
         if (run.expect.smithing() != null) return reachedSmithing(player, run.expect.smithing());
         if (!player.containerMenu.getCarried().isEmpty()) return false;
         if (run.expect.mount() != null) return reachedMount(level, player, run);
+        if (run.expect.trade() != null) {
+            // 村民交易方案 V9：界面关闭、光标为空（上面已查）、每笔交易的次数、物品栏
+            if (containerOpen(player)) return false;
+            Villager villager = villagerOf(level, run);
+            return villager != null && VillagerArena.reached(villager, counts(player.getInventory()), run.expect.trade());
+        }
         if (run.expect.brew() != null) {
             // 酿造台方案 P8：界面关闭、光标为空（上面已查）、物品栏和酿造台五格
             if (containerOpen(player)) return false;
             BrewingStandBlockEntity stand = standAt(level, run.origin);
             return stand != null && BrewArena.reached(BrewArena.counts(player.getInventory()), stand, run.expect.brew());
+        }
+        if (run.expect.crafter() != null) {
+            // 合成器方案 R7：界面关闭、光标为空（上面已查）、物品栏和合成器九格
+            if (containerOpen(player)) return false;
+            CrafterBlockEntity crafter = crafterAt(level, run.origin);
+            return crafter != null && CrafterArena.reached(level, counts(player.getInventory()), crafter, run.expect.crafter());
         }
         if (run.expect.cartography() != null) {
             ServerLevel lvl = level;

@@ -479,3 +479,46 @@ test('hasQueuedRequest（2026-11-21）：发给会话、还没绑到回合的开
   claim(3)
   assert.equal(bridge.hasQueuedRequest('s1'), false, '绑到回合上了')
 })
+
+test('事实挪到复盘（事实库写入挪到复盘设计方案 E1–E6）：任务回合没有 fact_write；查源码记到任务名下；复盘目录列"源码"、bt_inspect sources；例行重复也复盘；复盘关掉照旧', async () => {
+  for (const type of ['plan', 'expand', 'recover', 'escalate', 'failed', 'died']) assert.ok(!REQUEST_TOOLS[type].includes('fact_write') && REQUEST_TOOLS[type].includes('mc_source_read'), type)
+  assert.ok(REQUEST_TOOLS.reflect.includes('fact_write'))
+
+  const ctx = setup()
+  const { bridge, executor, claim } = ctx
+  const plan = bridge.startPlanning({ sessionId: 's1', instruction: '算 42' })
+  assert.ok(!claim(1).tools.includes('fact_write'))
+  assert.equal(bridge.factsAtReview, true)
+  bridge.noteSource(plan.taskId, plan.requestId, { tool: 'mc_source_read', file: 'net/minecraft/world/inventory/MerchantMenu.java', start: 1, end: 120 })
+  bridge.noteSource(plan.taskId, plan.requestId, { tool: 'mc_source_search', pattern: 'quickMoveStack', matches: 3, files: 1 })
+  assert.match((await bridge.inspect({ what: 'sources' }, { sessionId: 's1' })).error, /只在复盘回合/)
+  assert.equal(bridge.submitTree({ sessionId: 's1', requestId: plan.requestId, tree: OUTLINE }).ok, true)
+  await runUntil(executor, () => executor.task.state === 'suspended')
+  assert.ok(bridge.doneChanges(executor.task).includes('本任务的回合查过 MC 源码'), '例行重复也要复盘（E5a）')
+  const expand = claim(2)
+  assert.equal(bridge.submitExpansion({ sessionId: 's1', requestId: expand.requestId, subtree: EXPANSION, code: DOUBLE }).ok, true)
+  await runUntil(executor, () => executor.task.state === 'done')
+
+  const review = ctx.delivered.at(-1)
+  assert.equal(review.source.reason, 'reflect')
+  assert.match(review.text, /源码（bt_inspect what=sources）：本任务的规划 \/ 展开 \/ 修复回合查过 2 处/)
+  claim(3)
+  const sources = await bridge.inspect({ what: 'sources' }, { sessionId: 's1' })
+  assert.equal(sources.value.total, 2)
+  assert.deepEqual(sources.value.reads.map((r) => [r.tool, r.file ?? r.pattern, r.requestId]), [['mc_source_read', 'net/minecraft/world/inventory/MerchantMenu.java', 'p1'], ['mc_source_search', 'quickMoveStack', 'p1']])
+  bridge.noteFactWrite('c1')
+  bridge.noteFactWrite(plan.requestId)
+  assert.deepEqual(bridge.factCounts(plan.taskId), { sourceReads: 2, factWrites: 1 }, '只算复盘写的')
+  assert.equal(bridge.reflectDone({ sessionId: 's1', requestId: 'c1', summary: '看过了' }).ok, true)
+  assert.deepEqual(bridge.sourcesOf(plan.taskId), [], '复盘结束释放记账')
+
+  // 没查过源码：目录里没有"源码"这一行
+  const plain = await finished()
+  assert.doesNotMatch(plain.review.text, /源码（bt_inspect what=sources）/)
+
+  // 复盘关掉（E5c）：任务回合照旧给 fact_write，也不按查源码复盘
+  const off = setup({ reflect: { enabled: false } })
+  off.bridge.startPlanning({ sessionId: 's1', instruction: '算 42' })
+  assert.equal(off.bridge.factsAtReview, false)
+  assert.ok(off.claim(1).tools.includes('fact_write'))
+})

@@ -51,9 +51,18 @@ public class ArenaApi {
             Integer beaconLevel = optionalInt(params, "beaconLevel");
             // 坐骑训练场（坐骑方案 H2）：本轮生成什么动物；其他工作站不给
             ArenaManager.MountSetup mountSetup = mountSetup(params.get("mount"));
+            // 村民交易训练场（村民交易方案 V2）：本轮村民的职业、类型、等级、交易项种子；其他工作站不给
+            name.modid.arena.VillagerArena.Setup villagerSetup = villagerSetup(params.get("villager"));
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup));
         });
+        // 村民交易训练场（村民交易方案 V3）：按职业、类型、等级、交易项种子生成交易项，只读、不碰世界
+        handlers.put("arena/trade-preview", params -> {
+            name.modid.arena.VillagerArena.Setup setup = villagerSetup(params);
+            return onServer(10_000, server -> ArenaManager.tradePreview(server, setup));
+        });
+        // 村民交易训练场（村民交易方案 V2）：有交易表的职业，只读
+        handlers.put("arena/trade-catalog", params -> onServer(5_000, ArenaManager::tradeCatalog));
         // 附魔台训练场（附魔台方案 N5）：三档预览，只读、不碰世界
         handlers.put("arena/enchant-preview", params -> {
             if (!(params.get("item") instanceof String item)) throw new IllegalArgumentException("item must be an item id");
@@ -215,6 +224,8 @@ public class ArenaApi {
      * 织布机 { loom: { goals: [{ banner, pattern, color, count }], allowed: [id...] } }（织布机方案 L9）；
      * 制图台 { cartography: { goals: [{ scale, locked, count }], allowed: [id...] } }（制图台方案 K9）；
      * 酿造台 { brew: { fuel, fuelLeft, ingredient, ingredientLeft, potion, potionLeft, placed, products: [签名...] } }（酿造台方案 P8）；
+     * 合成器 { crafter: { target, portions, held: { id: n }, layout: [id | null ×9] } }（合成器方案 R7、R8）；
+     * 交易 { trade: { uses: [n...], held: { id: n } } }（村民交易方案 V9；uses 的个数 = 村民的交易项数）；
      * 坐骑 { mount: { saddle?: id | null, body?: id | null, chest: { id: n }, inventory: { id: n } } }（坐骑方案 H6；写了 saddle / body 才检查，null = 要空着）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
@@ -228,6 +239,30 @@ public class ArenaApi {
             return new ArenaManager.Expect(new ArenaManager.MountGoal(
                     g.containsKey("saddle"), (String) g.get("saddle"), g.containsKey("body"), (String) g.get("body"),
                     Map.copyOf(counts(g.get("chest"), "expect.mount.chest")), Map.copyOf(counts(g.get("inventory"), "expect.mount.inventory"))));
+        }
+        if (m.containsKey("trade")) {
+            String usage = "expect.trade must be { uses: [int...], held: { id: n } }";
+            if (!(m.get("trade") instanceof Map<?, ?> t) || !(t.get("uses") instanceof List<?> rawUses)) throw new IllegalArgumentException(usage);
+            List<Integer> uses = new ArrayList<>();
+            for (Object u : rawUses) {
+                if (!(u instanceof Number n) || n.doubleValue() != Math.rint(n.doubleValue()) || n.intValue() < 0) throw new IllegalArgumentException(usage);
+                uses.add(n.intValue());
+            }
+            return new ArenaManager.Expect(new name.modid.arena.VillagerArena.Spec(List.copyOf(uses), Map.copyOf(counts(t.get("held"), "expect.trade.held"))));
+        }
+        if (m.containsKey("crafter")) {
+            String usage = "expect.crafter must be { target:string, portions:int, held:{id:int}, layout:[string|null ×9] }";
+            if (!(m.get("crafter") instanceof Map<?, ?> c) || !(c.get("target") instanceof String target)
+                    || !(c.get("portions") instanceof Number portions) || !(c.get("layout") instanceof List<?> rawLayout)) {
+                throw new IllegalArgumentException(usage);
+            }
+            List<String> layout = new ArrayList<>();
+            for (Object cell : rawLayout) {
+                if (cell != null && !(cell instanceof String)) throw new IllegalArgumentException(usage);
+                layout.add((String) cell);
+            }
+            return new ArenaManager.Expect(new name.modid.arena.CrafterArena.Spec(target, portions.intValue(),
+                    Map.copyOf(counts(c.get("held"), "expect.crafter.held")), java.util.Collections.unmodifiableList(layout)));
         }
         if (m.containsKey("brew")) {
             String usage = "expect.brew must be { fuel:string, fuelLeft:int, ingredient:string, ingredientLeft:int, potion:string, potionLeft:int, placed:int, products:[string] }";
@@ -342,6 +377,18 @@ public class ArenaApi {
         if (strength != null && !(strength instanceof Number n && n.doubleValue() == Math.rint(n.doubleValue()))) throw new IllegalArgumentException(usage);
         List<ArenaManager.Give> chest = m.get("chest") == null ? List.of() : gives(m.get("chest"), "mount.chest");
         return new ArenaManager.MountSetup(animal, (String) m.get("saddle"), (String) m.get("body"), chest, strength == null ? null : ((Number) strength).intValue());
+    }
+
+    /** 村民交易方案 V2：{ profession, type, level, offerSeed }；null → null。 */
+    @SuppressWarnings("unchecked")
+    private static name.modid.arena.VillagerArena.Setup villagerSetup(Object v) {
+        if (v == null) return null;
+        String usage = "villager must be { profession:string, type:string, level:int, offerSeed:int }";
+        if (!(v instanceof Map<?, ?> m) || !(m.get("profession") instanceof String profession) || !(m.get("type") instanceof String type)) throw new IllegalArgumentException(usage);
+        Map<String, Object> params = (Map<String, Object>) m;
+        Integer level = optionalInt(params, "level");
+        if (level == null || !(params.get("offerSeed") instanceof Number seed) || seed.doubleValue() != Math.rint(seed.doubleValue())) throw new IllegalArgumentException(usage);
+        return new name.modid.arena.VillagerArena.Setup(profession, type, level, seed.longValue());
     }
 
     /** 可选的整数参数：缺省或 null → null；不是整数 → 报错。 */
