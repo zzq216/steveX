@@ -15,11 +15,16 @@ public class SteveXClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(ClientDefaults::onClientTick);
         // v2.30（§5.2.3）：容器内容记忆采集侧会话化状态机（屏幕转移绑定 / 菜单缓存 / 兜底提交）
         ClientTickEvents.END_CLIENT_TICK.register(ContainerMemoryTracker::onClientTick);
+        // 视角平滑转动（docs/视角平滑转动设计方案.md S3）：主要每帧推进（MouseHandlerMixin），客户端 tick 再推一次兜底
+        ClientTickEvents.END_CLIENT_TICK.register(client -> AgentCamera.onFrame());
         // v2.55（多世界记忆隔离）：进入世界按 worldKey 切换记忆目录，退出世界落盘。换维度走 respawn，
         // 不触发 JOIN。两个回调都经 execute 落到客户端主线程（store 的写入都在主线程上）。
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
                 client.execute(() -> VisionWorldContext.onJoin(client)));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
-                client.execute(VisionWorldContext::onDisconnect));
+                client.execute(() -> {
+                    VisionWorldContext.onDisconnect();
+                    AgentCamera.reset();
+                }));
     }
 }

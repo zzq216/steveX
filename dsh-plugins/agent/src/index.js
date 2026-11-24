@@ -9,6 +9,8 @@ import { createRuntime } from './runtime.js'
 import { Bridge, REFLECT_ONLY_TOOLS, CURATE_ONLY_TOOLS, REVIEW_OR_CURATE_TOOLS, KNOWLEDGE_TOOLS } from './llm/bridge.js'
 import { FactTurns } from './llm/fact_turns.js'
 import { FastBridge, FAST_ONLY_TOOLS, FAST_TOOLS } from './llm/fast_bridge.js'
+import { ToolInputTrace } from './llm/tool_input_trace.js'
+import { isMalformedError } from './llm/bridge.js'
 import { loadPrompts } from './llm/prompts.js'
 import { createTools } from './tools/index.js'
 import { METHODS, READ_METHODS } from './game/index.js'
@@ -91,6 +93,7 @@ const USAGE = [
   '/bt train grindstone [runs=…] [seed=…] [tasks=k|a-b] [kind=item|book|mix] [item=<物品>] [enchants=k|a-b] [curses=k|a-b]  砂轮训练场：正前方一个砂轮，物品栏里有 1–4 件带附魔的物品，用砂轮给它们祛魔、产物放回物品栏（不要求关界面）；tasks 是件数（缺省 1-3），kind 是物品种类（mix = 每件 1/4 的概率是附魔书），item 固定第一件，enchants 是每件的非诅咒附魔个数（缺省 1-3），curses 是每件的诅咒个数（0–2，缺省 0-1）；有耐久的物品同一轮里互不同种',
   '/bt train book [runs=…] [seed=…] [books=k|a-b] [pages=k|a-b] [edits=k|a-b]  书与笔训练场（没有工作站）：物品栏里有 1–3 本写了字的书与笔（放在随机格子，当前选中的快捷栏格也随机），把指定的页改成指定的文字或清空，没提到的页保持原样；books 是本数（缺省 1-3），pages 是每本开局几页（缺省 1-6），edits 是每本改几页（缺省 1-3，页号最大到开局页数 + 2）',
   '/bt train sign [runs=…] [seed=…] [kind=text|color|wax] [edits=k|a-b]  告示牌训练场：正前方一块立着的告示牌，三种题型各考一件事——text 逐行改写或清空正面文字（不发物品），color 用染料把正面文字改成指定颜色（发 32–64 个目标颜色的染料），wax 用蜜脾给告示牌涂蜡（发 32–64 个蜜脾）；开局每行一半概率有字、颜色随机，手上是空的；kind 固定题型（缺省每轮三种随机），edits 是 text 题改几行（缺省 1-3，不能和 kind=color / wax 一起写）',
+  '/bt train bow [runs=…] [seed=…] [targets=k|a-b] [dist=a-b]  弓箭训练场：站在射击平台上，前方 48 格见方的空场地里有 1–4 个标靶，每个指定一个面，拉满弓用一支箭射中它的中点；发一把弓和与标靶数相同的箭，开局手上是空的；targets 是标靶数（缺省 1-4），dist 是眼睛到标靶的距离（缺省 8-40）；任务中看不到落点，每一箭的结果在复盘里给出',
   '/bt train mount [runs=…] [seed=…] [group=horse|donkey|camel|llama|nautilus] [animal=<动物>] [task=equip|unequip] [item=<物品>] [total=k|a-b] [move=k|a-b]  坐骑训练场：正前方一只已驯服、不会动的动物（马、僵尸马、驴、骡、骆驼、骆驼尸壳、羊驼、行商羊驼、鹦鹉螺、僵尸鹦鹉螺），给它装上或卸下鞍 / 马铠 / 地毯 / 鹦鹉螺铠，驴骡羊驼另要往它的箱子里放、取恰好 move 个物品；group 固定组（缺省 5 组等概率），animal 固定动物，task 固定装上 / 卸下，item / total / move 只用于驴、羊驼组',
   '/bt train status | stop    训练进度与累计结果 / 中止当前轮并停止后续轮次',
   '',
@@ -425,9 +428,19 @@ function setupPlanner(ctx, config, runtime) {
       agentRestrictions.set(agent.id, allow.length ? agent.ctx.tools.restrict({ allow }) : null)
     })
   }
+  // 坏工具参数定位设计方案 Q1：参数原文一段段经 agent/assistant-stream 发来，按会话记下最近一次请求的
+  const toolInputs = new ToolInputTrace({ dir: config.runtimeDir ? path.join(config.runtimeDir, 'malformed') : null })
+  ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+    try {
+      toolInputs.onFrame(agent?.id, frame)
+    } catch (e) {
+      logger?.warn?.(`[bt] tool input trace: ${e?.message ?? e}`)
+    }
+  })
   ctx.on('agent/disposed', ({ agent }) => {
     agentRestrictions.delete(agent.id)
     turnTools.delete(agent.id)
+    toolInputs.take(agent.id)
     factTurns.onSessionClosed(agent.id)
     fastBridge.onSessionClosed(agent.id)
     bridge.onSessionClosed(agent.id)
@@ -468,13 +481,16 @@ function setupPlanner(ctx, config, runtime) {
   }
   ctx.on('agent/error', ({ agent, turn, error }) => {
     factTurns.endTurn(agent.id, turn)
-    const fast = fastBridge.onTurnError({ sessionId: agent.id, turn, error })
+    // Q2–Q4：坏工具参数时诊断出错位置、存原文；其他出错只把记录丢掉
+    const attempt = toolInputs.take(agent.id)
+    const toolInput = isMalformedError(error) ? toolInputs.report({ sessionId: agent.id, turn, error, attempt }) : null
+    const fast = fastBridge.onTurnError({ sessionId: agent.id, turn, error, toolInput })
     if (fast !== undefined) {
       if (fast?.retry) retryWhenIdle(agent, fast.retry)
       return
     }
     releaseTurn(agent.id, turn)
-    const result = bridge.onTurnError({ sessionId: agent.id, turn, error })
+    const result = bridge.onTurnError({ sessionId: agent.id, turn, error, toolInput })
     if (result?.retry) retryWhenIdle(agent, result.retry)
   })
 

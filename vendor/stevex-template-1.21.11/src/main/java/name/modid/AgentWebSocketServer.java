@@ -6,9 +6,12 @@ import java.net.InetSocketAddress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import name.modid.api.*;
 import name.modid.vision.VisionApi;
@@ -80,6 +83,8 @@ public class AgentWebSocketServer extends WebSocketServer {
     private static final Set<String> busyMethods = ConcurrentHashMap.newKeySet();
     /** 最近一次请求失败的错误消息（status/error 上报），无失败则为空串 */
     private static volatile String lastError = "";
+    /** 异步应答的上限（视角平滑转动设计方案 S4）：最慢的转动（30 度/秒转 200°）约 7 秒 */
+    private static final long ASYNC_TIMEOUT_MS = 10_000;
 
     public AgentWebSocketServer() {
         super(new InetSocketAddress(PORT));
@@ -124,8 +129,34 @@ public class AgentWebSocketServer extends WebSocketServer {
             }
 
             busyMethods.add(method);
+            boolean async = false;
             try {
                 Object result = handler.handle(params);
+                if (result instanceof CompletableFuture<?> future) {
+                    // 异步应答（视角平滑转动设计方案 S4）：handler 交回 future，完成时再发响应；
+                    // 这期间同一连接上的其他请求照常处理
+                    async = true;
+                    future.orTimeout(ASYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS).whenComplete((value, error) -> {
+                        try {
+                            if (error != null) {
+                                Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+                                String msg = cause instanceof TimeoutException ? method + " did not finish within " + ASYNC_TIMEOUT_MS + " ms" : cause.getMessage();
+                                SteveX.LOGGER.error("[Agent] Handler error for method {}: {}", method, msg);
+                                sendError(conn, id, msg);
+                            } else if (value == null) {
+                                sendError(conn, id, "handler returned no result");
+                            } else {
+                                lastError = "";
+                                send(conn, ok(id, value instanceof Map<?, ?> m ? m : Map.of("value", value)));
+                            }
+                        } catch (Exception e) {
+                            SteveX.LOGGER.error("[Agent] Failed to answer {}: {}", method, e.getMessage());
+                        } finally {
+                            busyMethods.remove(method);
+                        }
+                    });
+                    return;
+                }
                 if (result == null) {
                     sendError(conn, id, "handler returned no result");
                     return;
@@ -140,7 +171,7 @@ public class AgentWebSocketServer extends WebSocketServer {
                 SteveX.LOGGER.error("[Agent] Handler error for method {}: {}", method, e.getMessage());
                 sendError(conn, id, e.getMessage());
             } finally {
-                busyMethods.remove(method);
+                if (!async) busyMethods.remove(method);
             }
         } catch (Exception e) {
             SteveX.LOGGER.error("[Agent] Failed to parse message: {}", message, e);

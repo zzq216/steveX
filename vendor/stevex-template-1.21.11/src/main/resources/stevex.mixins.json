@@ -20,13 +20,15 @@
 		"AbstractHorseAccessor",
 		"LlamaAccessor",
 		"BrewingStandAccessor",
-		"BrewingBrewMixin"
+		"BrewingBrewMixin",
+		"AbstractArrowHitMixin"
 	],
 	"client": [
 		"LevelRendererMixin",
 		"ChunkSectionsToRenderMixin",
 		"DeathScreenAccessor",
-		"LivingEntityAccessor"
+		"LivingEntityAccessor",
+		"MouseHandlerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

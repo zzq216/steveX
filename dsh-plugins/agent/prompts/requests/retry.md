@@ -4,7 +4,7 @@
 {{error}}
 ```
 
-请重新用 `{{submitTool}}` 提交（`requestId: "{{requestId}}"`），或用 `bt_abort_task` 放弃并写明理由。
+{{detail}}请重新用 `{{submitTool}}` 提交（`requestId: "{{requestId}}"`），或用 `bt_abort_task` 放弃并写明理由。
 
 {{charge}}
 

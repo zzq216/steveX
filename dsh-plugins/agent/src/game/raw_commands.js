@@ -28,6 +28,8 @@ export function registerRawCommands(registry) {
     if (!isAgentMethod(m.method)) continue
     const params = {}
     for (const def of m.paramDefs ?? []) {
+      // operator 参数（视角转法等）由插件按配置填，不给 agent（视角平滑转动设计方案 S5）
+      if (def.operator) continue
       params[def.name] = { type: TYPE_MAP[def.type] ?? 'any', required: Boolean(def.required), hint: def.hint }
     }
     const read = READ_METHODS.has(m.method)

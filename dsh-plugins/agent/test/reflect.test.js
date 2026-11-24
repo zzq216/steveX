@@ -522,3 +522,63 @@ test('事实挪到复盘（事实库写入挪到复盘设计方案 E1–E6）：
   assert.equal(off.bridge.factsAtReview, false)
   assert.ok(off.claim(1).tools.includes('fact_write'))
 })
+
+test('复盘等训练场判定（弓箭训练场设计方案 Q13）：登记后任务结束先挂起、交来判定说明再发；先交后结束也带上；没变化的任务也复盘；等不到按时发；不登记的不变', async () => {
+  // 判定在任务结束之后才交来：先挂起（busyReason 说在等判定），交来后发出，带"训练场判定"一段
+  const ctx = setup()
+  const plan = await planAndExpand(ctx)
+  ctx.bridge.holdReflect(plan.taskId)
+  await runUntil(ctx.executor, () => ctx.executor.task.state === 'done')
+  assert.equal([...ctx.bridge.requests.values()].some((r) => r.type === 'reflect'), false)
+  assert.match(ctx.bridge.busyReason(), /等训练场判定/)
+  ctx.bridge.releaseReflect(plan.taskId, '本轮结果：success，射中 1/1 个标靶。')
+  const review = ctx.delivered.at(-1)
+  assert.equal(review.source.reason, 'reflect')
+  assert.match(review.text, /## 训练场判定\n\n这一轮由训练场判定，下面是它看到的结果（只是事实）：\n\n本轮结果：success，射中 1\/1 个标靶。\n\n## 目录/)
+  assert.equal(ctx.bridge.reflectHolds.size, 0)
+
+  // 判定先到（任务还没结束）：存着，任务结束时直接带上
+  const early = setup()
+  const earlyPlan = await planAndExpand(early)
+  early.bridge.holdReflect(earlyPlan.taskId)
+  early.bridge.releaseReflect(earlyPlan.taskId, '先到的判定')
+  await runUntil(early.executor, () => early.executor.task.state === 'done')
+  assert.match(early.delivered.at(-1).text, /## 训练场判定[\s\S]*先到的判定/)
+
+  // 例行重复（没有新情况）：不登记就跳过复盘，登记了照样复盘
+  const routine = setup()
+  routine.bridge.doneChanges = () => []
+  await planAndExpand(routine)
+  await runUntil(routine.executor, () => routine.executor.task.state === 'done')
+  assert.equal([...routine.bridge.requests.values()].some((r) => r.type === 'reflect'), false)
+  assert.equal(routine.notified.length, 1)
+  const forced = setup()
+  forced.bridge.doneChanges = () => []
+  const forcedPlan = await planAndExpand(forced)
+  forced.bridge.holdReflect(forcedPlan.taskId)
+  await runUntil(forced.executor, () => forced.executor.task.state === 'done')
+  forced.bridge.releaseReflect(forcedPlan.taskId, '判定')
+  assert.equal(forced.delivered.at(-1).source.reason, 'reflect')
+
+  // 等不到判定：按时发出，写明没有按时给出
+  const late = setup()
+  late.bridge.reflectHoldMs = 5
+  const latePlan = await planAndExpand(late)
+  late.bridge.holdReflect(latePlan.taskId)
+  await runUntil(late.executor, () => late.executor.task.state === 'done')
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.match(late.delivered.at(-1).text, /## 训练场判定[\s\S]*（训练场判定没有按时给出）/)
+  late.bridge.releaseReflect(latePlan.taskId, '迟到的判定')
+  assert.equal([...late.bridge.requests.values()].filter((r) => r.type === 'reflect').length, 1)
+
+  // 复盘关掉：登记的也不复盘，交来的判定直接丢掉；不登记的复盘没有这一段
+  const off = setup({ reflect: { enabled: false } })
+  const offPlan = await planAndExpand(off)
+  off.bridge.holdReflect(offPlan.taskId)
+  await runUntil(off.executor, () => off.executor.task.state === 'done')
+  off.bridge.releaseReflect(offPlan.taskId, '判定')
+  assert.equal(off.bridge.reflectHolds.size, 0)
+  assert.equal(off.notified.length, 1)
+  const plain = await finished()
+  assert.doesNotMatch(plain.review.text, /训练场判定/)
+})

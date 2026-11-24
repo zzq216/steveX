@@ -44,6 +44,8 @@ public class ArenaApi {
             List<String> watch = params.get("watch") == null ? List.of() : strings(params.get("watch"), "watch");
             // 告示牌训练场（告示牌方案 Q4）：开局正面 4 行和颜色；text 题不发物品
             name.modid.arena.SignArena.Setup signSetup = signSetup(params.get("sign"));
+            // 弓箭训练场（弓箭方案 Q3、Q9）：本轮的标靶
+            name.modid.arena.BowArena.Setup bowSetup = params.get("bow") == null ? null : new name.modid.arena.BowArena.Setup(bowTargets(params.get("bow"), "bow"));
             if (items.isEmpty() && chestItems.isEmpty() && params.get("mount") == null && signSetup == null) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
             // 告示牌方案 Q7：开局行、目标行都要写得进编辑框（宽度用客户端字体量，和 sign/set 同一个检查）
             if (signSetup != null) checkSignWidths(signSetup.lines(), "sign.lines");
@@ -61,7 +63,7 @@ public class ArenaApi {
             // 书与笔训练场（书与笔方案 J4）：当前选中的快捷栏格 0–8；不给 = 不动
             Integer selectedSlot = optionalInt(params, "selectedSlot");
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot, signSetup));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot, signSetup, bowSetup));
         });
         // 村民交易训练场（村民交易方案 V3）：按职业、类型、等级、交易项种子生成交易项，只读、不碰世界
         handlers.put("arena/trade-preview", params -> {
@@ -238,6 +240,7 @@ public class ArenaApi {
      * 砂轮 { grindstone: { goals: [{ id, enchantments: { id: level }, damage }] } }（砂轮方案 K8；goals 的顺序和 items 一致）；
      * 书 { book: { goals: [[页文字...], ...] } }（书与笔方案 J11；按多重集合比）；
      * 告示牌 { sign: { lines: [4 个字符串], color, waxed } }（告示牌方案 Q8、Q11）；
+     * 弓箭 { bow: { targets: [{ pos: [x, y, z], face }] } }（弓箭方案 Q7；和 prepare 的 bow 相同）；
      * 坐骑 { mount: { saddle?: id | null, body?: id | null, chest: { id: n }, inventory: { id: n } } }（坐骑方案 H6；写了 saddle / body 才检查，null = 要空着）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
@@ -252,6 +255,7 @@ public class ArenaApi {
                     g.containsKey("saddle"), (String) g.get("saddle"), g.containsKey("body"), (String) g.get("body"),
                     Map.copyOf(counts(g.get("chest"), "expect.mount.chest")), Map.copyOf(counts(g.get("inventory"), "expect.mount.inventory"))));
         }
+        if (m.containsKey("bow")) return new ArenaManager.Expect(new name.modid.arena.BowArena.Spec(bowTargets(m.get("bow"), "expect.bow")));
         if (m.containsKey("sign")) {
             String usage = "expect.sign must be { lines: [4 strings], color: string, waxed: boolean }";
             if (!(m.get("sign") instanceof Map<?, ?> g) || !(g.get("color") instanceof String color) || !(g.get("waxed") instanceof Boolean waxed)) throw new IllegalArgumentException(usage);
@@ -430,6 +434,23 @@ public class ArenaApi {
         Integer level = optionalInt(params, "level");
         if (level == null || !(params.get("offerSeed") instanceof Number seed) || seed.doubleValue() != Math.rint(seed.doubleValue())) throw new IllegalArgumentException(usage);
         return new name.modid.arena.VillagerArena.Setup(profession, type, level, seed.longValue());
+    }
+
+    /** 弓箭方案 Q3、Q9：{ targets: [{ pos: [x, y, z], face: north|south|east|west|up|down }] }。 */
+    private static List<name.modid.arena.BowArena.Target> bowTargets(Object v, String what) {
+        String usage = what + " must be { targets: [{ pos: [x, y, z], face: north|south|east|west|up|down }] }";
+        if (!(v instanceof Map<?, ?> m) || !(m.get("targets") instanceof List<?> raw)) throw new IllegalArgumentException(usage);
+        List<name.modid.arena.BowArena.Target> out = new ArrayList<>();
+        for (Object t : raw) {
+            if (!(t instanceof Map<?, ?> row) || !(row.get("pos") instanceof List<?> pos) || pos.size() != 3 || !(row.get("face") instanceof String face)) throw new IllegalArgumentException(usage);
+            int[] xyz = new int[3];
+            for (int i = 0; i < 3; i++) {
+                if (!(pos.get(i) instanceof Number n) || n.doubleValue() != Math.rint(n.doubleValue())) throw new IllegalArgumentException(usage);
+                xyz[i] = n.intValue();
+            }
+            out.add(new name.modid.arena.BowArena.Target(new BlockPos(xyz[0], xyz[1], xyz[2]), name.modid.arena.BowArena.face(face)));
+        }
+        return List.copyOf(out);
     }
 
     /** 告示牌方案 Q4：{ lines: [4 个字符串], color }；缺省 → null。 */

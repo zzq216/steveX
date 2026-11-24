@@ -14,15 +14,22 @@ export const SOURCE_METHODS = Object.freeze({
   container: 'container/get'
 })
 
+/** 视角平滑转动设计方案 S5：这两个接口的转法（instant、speed）由配置决定，agent 的调用里不能写 */
+export const CAMERA_METHODS = new Set(['camera/turn', 'camera/look-at'])
+export const CAMERA_OPERATOR_PARAMS = ['instant', 'speed']
+export const DEFAULT_CAMERA = Object.freeze({ instant: false, speed: 360 })
+
 export class GameState {
   /**
    * @param {object} options
    * @param {{ call(method: string, params?: object): Promise<any> }} options.mod
    * @param {object} [options.timing]   { clickWaitMs, lookWaitMs, pollMs }
    * @param {number} [options.statePollMs=200]
+   * @param {{ instant: boolean, speed: number }} [options.camera]  视角转法（视角平滑转动设计方案 S5），经 env 发出的视角调用都带上
    */
-  constructor({ mod, timing = {}, statePollMs = 200 }) {
+  constructor({ mod, timing = {}, statePollMs = 200, camera = DEFAULT_CAMERA }) {
     this.mod = mod
+    this.camera = { ...DEFAULT_CAMERA, ...camera }
     this.timing = { clickWaitMs: 80, lookWaitMs: 150, pollMs: 100, ...timing }
     this.statePollMs = statePollMs
     this.cache = new Map() // source → { data, at }
@@ -106,6 +113,14 @@ export class GameState {
   env(signal) {
     const mod = this.mod
     const timing = this.timing
+    const camera = this.camera
+    // 视角平滑转动设计方案 S5：agent 写了转法就报错；没写的按配置补上
+    const withCamera = (method, params) => {
+      if (!CAMERA_METHODS.has(method)) return params
+      const given = CAMERA_OPERATOR_PARAMS.filter((k) => params && Object.prototype.hasOwnProperty.call(params, k))
+      if (given.length) throw new Error(`${method}: ${given.join('、')} 由配置决定，调用里不能写`)
+      return { ...params, instant: camera.instant, speed: camera.speed }
+    }
     const listeners = this.callListeners
     const check = (method, params) => {
       if (signal?.aborted) throw new Error('aborted')
@@ -122,11 +137,11 @@ export class GameState {
       timing,
       async call(method, params = {}) {
         check(method, params)
-        return mod.call(method, params)
+        return mod.call(method, withCamera(method, params))
       },
       async must(method, params = {}) {
         check(method, params)
-        const res = await mod.call(method, params)
+        const res = await mod.call(method, withCamera(method, params))
         if (!res.ok) throw new Error(`${method}: ${res.error}`)
         return res.data
       },

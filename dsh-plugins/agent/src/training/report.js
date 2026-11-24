@@ -6,6 +6,7 @@ import { FAULTS as TRADE_FAULTS, FAULT_NAMES as TRADE_FAULT_NAMES } from './trad
 import { FAULTS as GRINDSTONE_FAULTS, FAULT_NAMES as GRINDSTONE_FAULT_NAMES } from './grindstone.js'
 import { FAULTS as BOOK_FAULTS, FAULT_NAMES as BOOK_FAULT_NAMES } from './book.js'
 import { FAULTS as SIGN_FAULTS, FAULT_NAMES as SIGN_FAULT_NAMES } from './sign.js'
+import { FAULT_NAMES as BOW_FAULT_NAMES } from './bow.js'
 
 /**
  * 训练记录汇总（训练场设计方案 T10）：按目标物品（或配方形状）看成功率、用时、虚报率、token。
@@ -69,8 +70,11 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   const grinder = picked.some(isGrindstoneRecord)
   const booker = picked.some(isBookRecord)
   const signer = picked.some(isSignRecord)
+  const bower = picked.some(isBowRecord)
   // 任务历史（任务历史方案 H10）：记录里有 assessed 字段才显示这几列
   const historyCols = picked.some((r) => r.assessed !== undefined)
+  // 弓箭题（弓箭方案 Q11）：按距离分组时一行是一个标靶，不是一轮
+  if (bower && by === 'dist') return summarizeBowDist(picked)
   const group = (list) => {
     const count = (outcome) => list.filter((r) => r.outcome === outcome).length
     const success = list.filter((r) => r.outcome === 'success')
@@ -99,6 +103,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       bookFaults: Object.fromEntries(BOOK_FAULTS.map((f) => [f, list.filter((r) => isBookRecord(r) && (r.faults ?? []).includes(f)).length])),
       signFaults: Object.fromEntries(SIGN_FAULTS.map((f) => [f, list.filter((r) => isSignRecord(r) && (r.faults ?? []).includes(f)).length])),
       doomedRuns: list.filter((r) => isSignRecord(r) && r.doomed).length,
+      bow: bowStats(list.filter(isBowRecord)),
       misenchanted: count('misenchanted'),
       previewMismatch: list.filter((r) => r.matchedPreview === false).length,
       overpaid: list.filter((r) => Number.isInteger(r.paid) && r.paid > 1).length,
@@ -134,7 +139,55 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, bower, historyCols }
+}
+
+/** 弓箭题（弓箭方案 Q11）：一支箭是射向哪个标靶的——射中的那个，没中的取轨迹最近的那个 */
+const aimedAt = (a) => a.target ?? a.nearest?.target ?? null
+const arrowErr = (a) => a.err ?? a.nearest?.err ?? null
+/** 射向第 i 个标靶的第一支箭有没有射中它；一支都没有 → null */
+function firstArrowHit(r, i) {
+  const first = [...(r.arrows ?? [])].sort((x, y) => x.n - y.n).find((a) => aimedAt(a) === i)
+  return first ? first.result === 'hit' && first.target === i : null
+}
+
+function bowStats(list) {
+  const arrows = list.flatMap((r) => r.arrows ?? [])
+  const firsts = list.flatMap((r) => r.targets.map((_, i) => firstArrowHit(r, i))).filter((x) => x !== null)
+  return {
+    arrows: arrows.length,
+    arrowHits: arrows.filter((a) => a.result === 'hit').length,
+    weakArrows: arrows.filter((a) => a.result === 'weak').length,
+    firstShots: firsts.length,
+    firstHits: firsts.filter(Boolean).length,
+    medianErr: median(arrows.map(arrowErr).filter(Number.isFinite)),
+    doomedLeft: list.filter((r) => r.doomed === 'left-platform').length,
+    doomedOut: list.filter((r) => r.doomed === 'out-of-arrows').length,
+    faults: Object.fromEntries(BOW_ROUND_FAULTS.map((f) => [f, list.filter((r) => (r.faults ?? []).includes(f)).length]))
+  }
+}
+
+/** 离开平台另有 doomed 一栏，原因栏只列这三条 */
+const BOW_ROUND_FAULTS = ['miss', 'weak', 'unshot']
+const DIST_BANDS = [[0, 8, '8 格以内'], [8, 16, '8–16 格'], [16, 24, '16–24 格'], [24, 32, '24–32 格'], [32, 40, '32–40 格'], [40, Infinity, '40 格以上']]
+const distBand = (d) => DIST_BANDS.find(([lo, hi]) => d >= lo && d < hi)?.[2] ?? '（未记录）'
+
+/** 弓箭题按距离分组（Q11）：一行是一个标靶 */
+function summarizeBowDist(picked) {
+  const units = picked.filter(isBowRecord).flatMap((r) => r.targets.map((t, i) => ({ r, i, key: distBand(t.dist) })))
+  const group = (us) => {
+    const arrows = us.flatMap(({ r, i }) => (r.arrows ?? []).filter((a) => aimedAt(a) === i))
+    const firsts = us.map(({ r, i }) => firstArrowHit(r, i)).filter((x) => x !== null)
+    return {
+      targets: us.length, hit: us.filter(({ r, i }) => (r.hitTargets ?? []).includes(i)).length,
+      firstShots: firsts.length, firstHits: firsts.filter(Boolean).length,
+      arrows: arrows.length, medianErr: median(arrows.map(arrowErr).filter(Number.isFinite))
+    }
+  }
+  const order = DIST_BANDS.map(([, , label]) => label)
+  const keys = [...new Set(units.map((u) => u.key))].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+  const rows = keys.map((key) => ({ key, ...group(units.filter((u) => u.key === key)) }))
+  return { rows, total: { key: '（合计）', runs: picked.length, ...group(units) }, by: 'dist', bower: true, bowDist: true }
 }
 
 /** 切石题的记录：materials 是 [{ id, family, styles }]（合成题的材料字段叫 items） */
@@ -160,6 +213,7 @@ const isTradeRecord = (r) => typeof r.profession === 'string' && Array.isArray(r
 /** 砂轮题的记录：有 goals（每件磨完的样子）和 hasBook（K9） */
 const isGrindstoneRecord = (r) => Array.isArray(r.goals) && typeof r.hasBook === 'boolean' && Array.isArray(r.faults)
 /** 告示牌题的记录：有开局 lines、目标 goal（4 行）、color { from, to } 和 wax（Q12） */
+const isBowRecord = (r) => Array.isArray(r.targets) && Array.isArray(r.arrows) && Array.isArray(r.hitTargets)
 const isSignRecord = (r) => Array.isArray(r.goal) && r.goal.length === 4 && typeof r.wax === 'boolean' && typeof r.color?.to === 'string' && Array.isArray(r.faults)
 /** 书与笔题的记录：有 books（每本的开局、修改、目标）和 inHand（J12） */
 const isBookRecord = (r) => Array.isArray(r.books) && typeof r.inHand === 'boolean' && Array.isArray(r.faults)
@@ -207,6 +261,8 @@ function groupKey(r, by) {
   if (by === 'shape') return r.shape
   // 告示牌题（Q12）：按题型；edits 只给 text 题按改了几行分组，其余题型归入"—"
   if (by === 'kind' && isSignRecord(r)) return r.kind
+  // 弓箭题（Q11）：按标靶数
+  if (by === 'targets' && isBowRecord(r)) return `${r.targets.length} 个靶`
   if (by === 'edits' && isSignRecord(r)) return r.kind === 'text' ? `${r.edits.length} 行` : '—'
   // 书与笔题（J12）
   if (by === 'k' && isBookRecord(r)) return `${r.k} 本`
@@ -284,10 +340,12 @@ function portionsKey(r) {
   return Number.isInteger(r.portions) && Number.isInteger(r.crafts) ? `${r.portions}/${r.crafts}` : null
 }
 
-const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子', cells: '配方格数', k: '交易笔数', profession: '职业', chain: '串联', curses: '诅咒', hand: '书在不在手上', edits: '改几行' }
+const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子', cells: '配方格数', k: '交易笔数', profession: '职业', chain: '串联', curses: '诅咒', hand: '书在不在手上', edits: '改几行', dist: '距离' }
 
-export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, historyCols = false }) {
+export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, bower = false, bowDist = false, historyCols = false }) {
   if (total.runs === 0) return '没有训练记录'
+  if (bowDist) return formatBowDist({ rows, total })
+  if (bower) return formatBow({ rows, total, by, historyCols })
   if (signer) return formatSign({ rows, total, by, historyCols })
   if (booker) return formatBook({ rows, total, by, historyCols })
   if (grinder) return formatGrindstone({ rows, total, by, historyCols })
@@ -387,6 +445,29 @@ function formatTrade({ rows, total, by, historyCols }) {
     ...TRADE_FAULTS.map((f) => r.tradeFaults[f]),
     secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
     ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+const errText = (v) => (Number.isFinite(v) ? v.toFixed(2) : '-')
+
+/** 弓箭题的表（弓箭方案 Q11）：一行一组轮次；结果列之后是两种提前结束、各原因的轮数，再是按箭、按标靶算的命中和偏差 */
+function formatBow({ rows, total, by, historyCols }) {
+  const head = [by === 'targets' ? '标靶数' : BY_LABEL[by] ?? '目标', '轮数', '全中率', '虚报', '失败', '超时', '中止', '丢失', '离开平台', '箭用完',
+    ...BOW_ROUND_FAULTS.map((f) => BOW_FAULT_NAMES[f]),
+    '箭命中率', '首箭命中率', '偏差中位', '没拉满的箭', '达成中位', '任务中位', 'token中位',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.lost, r.bow.doomedLeft, r.bow.doomedOut,
+    ...BOW_ROUND_FAULTS.map((f) => r.bow.faults[f]),
+    pct(r.bow.arrowHits, r.bow.arrows), pct(r.bow.firstHits, r.bow.firstShots), errText(r.bow.medianErr), pct(r.bow.weakArrows, r.bow.arrows),
+    secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-',
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/** 弓箭题按距离的表（Q11）：一行是一段距离里的全部标靶 */
+function formatBowDist({ rows, total }) {
+  const head = ['距离', '标靶数', '射中率', '首箭命中率', '射向它的箭', '偏差中位']
+  const line = (r) => [r.key, r.targets, pct(r.hit, r.targets), pct(r.firstHits, r.firstShots), r.arrows, errText(r.medianErr)].join('\t')
   return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
 }
 

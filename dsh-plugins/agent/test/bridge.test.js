@@ -452,3 +452,18 @@ test('bt_write_code：给自己的规划 / 展开 / 修复请求单独写草稿�
   assert.deepEqual([bridge.requests.get(plan.requestId).draftWrites, bridge.requests.get(expandReq).draftWrites], [1, 1])
   assert.match(bridge.writeCode({ sessionId: 's1', requestId: expandReq, name: 'x', signature: SIG, body: 'function main() { return { double: 0 } }' }).error, /已经回答过/)
 })
+
+
+test('坏工具参数定位（坏工具参数定位设计方案 Q3）：坏 JSON 的重试消息在错误后面带上出错位置那一段；别的出错不带', () => {
+  const { bridge, delivered } = setup()
+  const MALFORMED = { message: 'DeepSeek Messages stream: tool input is invalid JSON', code: 'MALFORMED_RESPONSE' }
+  const toolInput = { detail: '出错的是这条消息里的第 1 个工具调用 `bt_submit_tree`（共 1 个）。\n\n', summary: 'in bt_submit_tree at line 1 column 8 (13 chars)' }
+  bridge.startPlanning({ sessionId: 's1', instruction: '做点什么' })
+  claim(bridge, delivered, 1)
+  const first = bridge.onTurnError({ sessionId: 's1', turn: 1, error: MALFORMED, toolInput })
+  assert.ok(first.retry.text.includes('tool input is invalid JSON\n```\n\n出错的是这条消息里的第 1 个工具调用 `bt_submit_tree`（共 1 个）。\n\n请重新用'), first.retry.text)
+  bridge.onPreStep({ sessionId: 's1', turn: 2, step: 1, messages: [{ source: first.retry.source }] })
+  const other = bridge.onTurnError({ sessionId: 's1', turn: 2, error: new Error('boom'), toolInput })
+  assert.ok(other.retry.text.includes('boom\n```\n\n请重新用'), other.retry.text)
+  assert.doesNotMatch(other.retry.text, /出错的是这条消息里/)
+})

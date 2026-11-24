@@ -3,7 +3,7 @@
 {{manual}}任务：{{goal}}
 结果：{{result}}
 
-## 目录
+{{debrief}}## 目录
 
 ```text
 {{directory}}

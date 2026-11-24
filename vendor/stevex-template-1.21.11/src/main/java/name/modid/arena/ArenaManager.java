@@ -100,6 +100,8 @@ import net.minecraft.world.phys.Vec3;
  * <p>几何（以 origin 为场内地板中心方块）：场内 9×9 可站立，地板延伸到 11×11，外圈 3 格高屏障墙；
  * 场外平台在 -x 方向（x ∈ [ox-11, ox-6]，z ∈ [oz-2, oz+2]），立柱上挂告示牌。
  *
+ * <p>弓箭场地（docs/弓箭训练场设计方案.md）：布局不同，见 {@link BowArena}；工作站名 {@code bow}，标靶由 BowArena 放和查。
+ *
  * <p>带工作站的场地（docs/工作台训练场设计方案.md W2）：工作站放在 (ox, oy+1, oz+2)，玩家站在中心朝 +z，
  * 俯角按"眼睛 → 工作站中心"算出，准星正对工作站朝向玩家的那一面。
  *
@@ -200,6 +202,8 @@ public final class ArenaManager {
             Map.entry("crafter", Blocks.CRAFTER),
             Map.entry("grindstone", Blocks.GRINDSTONE),
             Map.entry("sign", Blocks.OAK_SIGN),
+            // 弓箭场地（弓箭方案 Q1）：工作站是本轮的标靶，位置每轮不同，由 BowArena 管
+            Map.entry("bow", Blocks.TARGET),
             Map.entry("villager", Blocks.AIR),
             // 坐骑场地（坐骑方案 H1）：工作站是动物，方块位置上只留空气
             Map.entry("mount", Blocks.AIR));
@@ -226,7 +230,9 @@ public final class ArenaManager {
             Map.entry("villager", new Site(new BlockPos(10000, 120, 10390), "villager")),
             Map.entry("grindstone", new Site(new BlockPos(10000, 120, 10420), "grindstone")),
             Map.entry("book", new Site(new BlockPos(10000, 120, 10450), null)),
-            Map.entry("sign", new Site(new BlockPos(10000, 120, 10480), "sign"))));
+            Map.entry("sign", new Site(new BlockPos(10000, 120, 10480), "sign")),
+            // 弓箭方案 Q1：48 格的空场地放不进 x = 10000 那一排
+            Map.entry("bow", new Site(new BlockPos(10300, 120, 10000), "bow"))));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -252,72 +258,77 @@ public final class ArenaManager {
      *   <li>砂轮方案 K7（grindstone 不为 null）：光标为空，不要求关界面，见 {@link GrindstoneArena#reached}。</li>
      *   <li>书与笔方案 J10（book 不为 null）：光标为空，见 {@link BookArena#reached}。</li>
      *   <li>告示牌方案 Q8（sign 不为 null）：光标为空，见 {@link SignArena#reached}。</li>
+     *   <li>弓箭方案 Q7（bow 不为 null）：每个标靶都被一支有效的箭射中过指定面，不看光标，见 {@link BowArena#reached}。</li>
      * </ul>
      * 取 / 放、要几个、哪些物品算材料这些语义由插件定，mod 只比对。
      */
-    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew, CrafterArena.Spec crafter, VillagerArena.Spec trade, GrindstoneArena.Spec grindstone, BookArena.Spec book, SignArena.Spec sign) {
+    public record Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed, Cook cook, Enchant enchant, Beacon beacon, Anvil anvil, List<Smith> smithing, MountGoal mount, LoomArena.Spec loom, CartographyArena.Spec cartography, BrewArena.Spec brew, CrafterArena.Spec crafter, VillagerArena.Spec trade, GrindstoneArena.Spec grindstone, BookArena.Spec book, SignArena.Spec sign, BowArena.Spec bow) {
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container) {
-            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+            this(inventory, container, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Map<String, Integer> inventory, Map<String, Integer> container, Map<String, Integer> targets, Set<String> allowed) {
-            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+            this(inventory, container, targets, allowed, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Cook cook) {
-            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, cook, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Enchant enchant) {
-            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, enchant, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Beacon beacon) {
-            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, beacon, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(Anvil anvil) {
-            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, anvil, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(List<Smith> smithing) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, smithing, null, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(MountGoal mount) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, mount, null, null, null, null, null, null, null, null, null);
         }
 
         public Expect(LoomArena.Spec loom) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, loom, null, null, null, null, null, null, null, null);
         }
 
         public Expect(CartographyArena.Spec cartography) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, cartography, null, null, null, null, null, null, null);
         }
 
         public Expect(BrewArena.Spec brew) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew, null, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, brew, null, null, null, null, null, null);
         }
 
         public Expect(CrafterArena.Spec crafter) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, crafter, null, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, crafter, null, null, null, null, null);
         }
 
         public Expect(VillagerArena.Spec trade) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, trade, null, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, trade, null, null, null, null);
         }
 
         public Expect(GrindstoneArena.Spec grindstone) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, grindstone, null, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, grindstone, null, null, null);
         }
 
         public Expect(BookArena.Spec book) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, null, book, null);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, null, book, null, null);
         }
 
         public Expect(SignArena.Spec sign) {
-            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, sign);
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, sign, null);
+        }
+
+        public Expect(BowArena.Spec bow) {
+            this(Map.of(), Map.of(), null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, bow);
         }
     }
 
@@ -488,6 +499,11 @@ public final class ArenaManager {
     /** 告示牌工作站（告示牌方案）：每轮拆掉重放（Q1）。 */
     public static boolean isSign(String station) {
         return "sign".equals(station);
+    }
+
+    /** 弓箭工作站（弓箭方案 Q1）：射击平台加空场地，布局和其他场地不同；标靶由 {@link BowArena} 管。 */
+    public static boolean isBow(String station) {
+        return "bow".equals(station);
     }
 
     public static boolean isGrindstone(String station) {
@@ -901,6 +917,8 @@ public final class ArenaManager {
             case "grindstone" -> out.put(at, GrindstoneArena.stationState());
             // 告示牌方案 Q1：立着的橡木告示牌，正面朝向站在原点的玩家（F2）
             case "sign" -> out.put(at, SignArena.stationState());
+            // 弓箭方案 Q1：标靶每轮位置不同，完好检查由 BowArena.intact 做
+            case "bow" -> { }
             // 制图台方案 K1：没有朝向属性
             case "cartography" -> out.put(at, Blocks.CARTOGRAPHY_TABLE.defaultBlockState());
             // 酿造台方案 P1：没有朝向属性；三个药水瓶的方块状态由酿造台自己更新，完好检查只看方块
@@ -943,6 +961,7 @@ public final class ArenaManager {
     /** 世界关闭时丢掉进行中的状态，避免带进下一个世界。 */
     public static void reset() {
         active = null;
+        BowArena.reset();
     }
 
     // ── 搭建 ─────────────────────────────────────────────────────────────
@@ -955,6 +974,8 @@ public final class ArenaManager {
         int ox = o.getX(), oy = o.getY(), oz = o.getZ();
         Map<BlockPos, BlockState> stationAt = stationStates(station, o);
         int placed = 0;
+        // 弓箭方案 Q1：射击平台 + 空场地，不搭 11×11 的场内；场外平台照常
+        if (isBow(station)) return BowArena.build(level, o) + buildOutside(level, arena, o);
         // 场内：地板 11×11，外圈屏障墙 3 格高；场内上方清空（所以箱子上方一定是空气、打得开，箱子方案 S4）。
         // 换箱子大小时，多出来的那半随场内清空改回空气
         for (int dx = -5; dx <= 5; dx++) {
@@ -982,7 +1003,13 @@ public final class ArenaManager {
                 placed += set(level, pos, state);
             }
         }
-        // 场外平台：地板 + 屏障护栏 2 格高（靠场地一侧不设护栏，由场地墙挡住）
+        return placed + buildOutside(level, arena, o);
+    }
+
+    /** 场外平台：地板 + 屏障护栏 2 格高（靠场地一侧不设护栏，由场地墙挡住），立柱上挂告示牌。 */
+    private static int buildOutside(ServerLevel level, String arena, BlockPos o) {
+        int ox = o.getX(), oy = o.getY(), oz = o.getZ();
+        int placed = 0;
         for (int x = ox - 11; x <= ox - 6; x++) {
             for (int z = oz - 2; z <= oz + 2; z++) {
                 placed += set(level, new BlockPos(x, oy, z), Blocks.STONE.defaultBlockState());
@@ -1044,6 +1071,7 @@ public final class ArenaManager {
     }
 
     private static boolean inside(MinecraftServer server, ServerPlayer player, BlockPos o) {
+        if (active != null && isBow(active.stationName)) return BowArena.onPlatform(server, player, o);
         if (player.level() != server.overworld()) return false;
         int bx = player.getBlockX(), by = player.getBlockY(), bz = player.getBlockZ();
         return Math.abs(bx - o.getX()) <= 4 && Math.abs(bz - o.getZ()) <= 4 && by >= o.getY() && by <= o.getY() + 4;
@@ -1138,7 +1166,7 @@ public final class ArenaManager {
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
                                               List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
                                               Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel, MountSetup mountSetup,
-                                              VillagerArena.Setup villagerSetup, Integer selectedSlot, SignArena.Setup signSetup) {
+                                              VillagerArena.Setup villagerSetup, Integer selectedSlot, SignArena.Setup signSetup, BowArena.Setup bowSetup) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         // 书与笔方案 J4：当前选中的快捷栏格
         if (selectedSlot != null && (selectedSlot < 0 || selectedSlot > 8)) throw new IllegalArgumentException("selectedSlot must be within 0-8: " + selectedSlot);
@@ -1159,9 +1187,15 @@ public final class ArenaManager {
         // 告示牌方案 Q4、Q11：告示牌场地一定要给开局内容，别的场地不收
         if (isSign(station) != (signSetup != null)) throw new IllegalArgumentException(isSign(station) ? "the sign station needs sign: { lines: [4 strings], color }" : "sign: {...} needs the sign station");
         if (signSetup != null) SignArena.check(signSetup);
+        // 弓箭方案 Q3、Q9：弓箭场地一定要给标靶，别的场地不收；expect.bow 的标靶要和放的一致
+        if (isBow(station) != (bowSetup != null)) throw new IllegalArgumentException(isBow(station) ? "the bow station needs bow: { targets: [{ pos: [x, y, z], face }] }" : "bow: {...} needs the bow station");
+        if (bowSetup != null) BowArena.check(o, bowSetup.targets());
+        if (expect != null && expect.bow() != null && (bowSetup == null || !expect.bow().targets().equals(bowSetup.targets()))) throw new IllegalArgumentException("expect.bow.targets must equal bow.targets (and needs the bow station)");
         String brewProduct = null;
         String crafterProduct = null;
-        if (expect != null && expect.sign() != null) {
+        if (expect != null && expect.bow() != null) {
+            // 上面已查
+        } else if (expect != null && expect.sign() != null) {
             if (!isSign(station)) throw new IllegalArgumentException("expect { sign } needs the sign station");
             SignArena.check(expect.sign());
         } else if (expect != null && expect.book() != null) {
@@ -1285,6 +1319,8 @@ public final class ArenaManager {
         if (isSign(station)) level.setBlockAndUpdate(stationAt, Blocks.AIR.defaultBlockState());
         build(server, arena, o, station);
         if (isSign(station)) SignArena.write(level, stationAt, signSetup);
+        // 弓箭方案 Q8：build 刚清过空场地（上一轮的标靶一并清掉），删掉场地里的箭、放本轮的标靶
+        if (bowSetup != null) BowArena.begin(level, o, player.getUUID(), bowSetup);
         // 1. 先关界面：2×2 / 工作台合成格里的物品退回物品栏、客户端界面一并关掉；光标物品清掉
         player.containerMenu.setCarried(ItemStack.EMPTY);
         player.closeContainer();
@@ -1292,7 +1328,9 @@ public final class ArenaManager {
         // 2. 清空物品栏（含盔甲、副手）
         player.getInventory().clearContent();
         player.inventoryMenu.getCraftSlots().clearContent();
-        teleportInside(server, player, o, isMount(station) ? mountPitch(player, o, mountSetup.animal())
+        // 弓箭方案 Q1：站在射击平台中心，朝 +x、视线水平
+        if (isBow(station)) player.teleportTo(level, o.getX() + 0.5, o.getY() + 1, o.getZ() + 0.5, Set.of(), -90f, 0f, true);
+        else teleportInside(server, player, o, isMount(station) ? mountPitch(player, o, mountSetup.animal())
                 : isVillager(station) ? villagerPitch(player, o) : stationBlock != null ? stationPitch(player, o) : 0f);
         // 3. 场内掉落物、经验球、敌对生物
         for (Entity e : level.getEntitiesOfClass(Entity.class, box(o),
@@ -1397,7 +1435,7 @@ public final class ArenaManager {
         }
         out.put("given", given);
         out.put("inventory", inventory(player, null));
-        if (stationBlock != null) {
+        if (stationBlock != null && !isBow(station)) {
             out.put("station", station);
             out.put("pitch", player.getXRot());
             out.put("aimOk", mount != null ? aimsAtEntity(player, mount) : villager != null ? aimsAtEntity(player, villager) : aimsAt(player, stationPos(o), stationBlock));
@@ -1421,6 +1459,14 @@ public final class ArenaManager {
             signInfo.put("items", itemDetails(player));
             signInfo.put("selectedSlot", player.getInventory().getSelectedSlot());
             out.put("sign", signInfo);
+        }
+        // 弓箭方案 Q9：插件用它核对标靶放对了、物品发对了、选中格设上了
+        if (isBow(station)) {
+            Map<String, Object> bowInfo = new LinkedHashMap<>();
+            bowInfo.put("targets", BowArena.describe().get("targets"));
+            bowInfo.put("items", itemDetails(player));
+            bowInfo.put("selectedSlot", player.getInventory().getSelectedSlot());
+            out.put("bow", bowInfo);
         }
         // 书与笔方案 J11：插件用它核对书发对了、选中格设上了
         if (expect != null && expect.book() != null) {
@@ -1583,6 +1629,14 @@ public final class ArenaManager {
             out.put("dropped", dropped(level, active.origin));
             out.put("selectedSlot", player.getInventory().getSelectedSlot());
         }
+        if (isBow(active.stationName)) {
+            // 弓箭方案 Q7、Q9：标靶、每一支箭、离开平台的时刻；物品栏（不含光标）、光标、场内地上按 id 计数；选中的快捷栏格
+            out.put("bow", BowArena.describe());
+            out.put("held", counts(player.getInventory()));
+            out.put("carried", carried(player.containerMenu));
+            out.put("dropped", dropped(level, active.origin));
+            out.put("selectedSlot", player.getInventory().getSelectedSlot());
+        }
         if (isGrindstone(active.stationName)) {
             // 砂轮方案 K7、K8：物品栏（不含光标）的计数和每件的签名，光标，砂轮两个输入格（界面开着时；关界面时退回物品栏），
             // 场内地上（按 id 计数和每件的签名），界面开没开
@@ -1710,6 +1764,8 @@ public final class ArenaManager {
 
     /** 工作站的每一格都还是应有的方块（大箱子要两半都在，漏斗下面的红石块也要在，§8 S22）。铁砧开裂、损坏也算在（铁砧方案 A1）。 */
     private static boolean stationIntact(ServerLevel level, Run run) {
+        // 弓箭方案 Q7：标靶都还在
+        if (isBow(run.stationName)) return BowArena.intact(level);
         if (isAnvil(run.stationName)) return level.getBlockState(stationPos(run.origin)).is(BlockTags.ANVIL);
         // 坐骑方案 H2：动物还在（活着、在场地范围里）；鹦鹉螺组的水坑不算工作站
         if (isMount(run.stationName)) return mountOf(level, run) != null;
@@ -1728,6 +1784,8 @@ public final class ArenaManager {
         BlockPos o = active != null ? active.origin : fallbackOrigin;
         // 告示牌方案 Q11：读完状态后清掉登记的编辑人，之后才到的改字包不再改动告示牌
         if (active != null && isSign(active.stationName)) SignArena.release(SignArena.at(server.overworld(), stationPos(o)));
+        // 弓箭方案 Q8：读完状态后删掉还在飞的箭
+        if (active != null && isBow(active.stationName)) BowArena.end(server.overworld());
         boolean beacon = active != null && isBeacon(active.stationName);
         active = null;
         // 坐骑方案 H8：读完状态再让玩家下来（agent 可能骑在动物上）
@@ -1759,6 +1817,8 @@ public final class ArenaManager {
             }
         }
         if (isMount(run.stationName)) trackMount(server.overworld(), player, run);
+        // 弓箭方案 Q7、Q8：箭的轨迹、飞出场地、离开平台
+        if (isBow(run.stationName)) BowArena.tick(server, player);
         if (run.station != null && run.openedAtMs == null && (isMount(run.stationName) ? opensMount(run, player.containerMenu)
                 : isVillager(run.stationName) ? opensVillager(server.overworld(), player, run) : opensStation(run.stationName, player.containerMenu))) {
             run.openedAtMs = System.currentTimeMillis();
@@ -1809,6 +1869,8 @@ public final class ArenaManager {
             case "grindstone" -> menu instanceof GrindstoneMenu;
             // 告示牌没有容器界面（编辑框是客户端界面）
             case "sign" -> false;
+            // 弓箭场地没有界面
+            case "bow" -> false;
             default -> menu instanceof CraftingMenu;
         };
     }
@@ -1817,6 +1879,8 @@ public final class ArenaManager {
     private static boolean reached(ServerLevel level, ServerPlayer player, Run run) {
         // 锻造台方案 M6：只看玩家身上（不含光标）的物品配不配得上，光标上拿着什么不影响
         if (run.expect.smithing() != null) return reachedSmithing(player, run.expect.smithing());
+        // 弓箭方案 Q7：只看标靶，光标上拿着什么不影响
+        if (run.expect.bow() != null) return BowArena.reached();
         if (!player.containerMenu.getCarried().isEmpty()) return false;
         if (run.expect.mount() != null) return reachedMount(level, player, run);
         // 砂轮方案 K7：光标为空（上面已查）、玩家身上按签名恰好是全部目标；不要求关界面

@@ -69,7 +69,7 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 test('parseTrainArgs', () => {
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null, dist: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
@@ -1326,7 +1326,7 @@ test('config: the stonecutter arena has its own defaults and checks; json.stonec
   assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
-  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone", "book" or "sign"/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone", "book", "sign" or "bow"/)
 })
 
 const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
@@ -2446,7 +2446,7 @@ test('anvil options: task, second, enchants, curses and xpLevel; rename has no s
 
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null, dist: null }
   assert.deepEqual(parseTrainArgs(['anvil', 'task=merge', 'second=same', 'item=bow', 'enchants=1-2', 'curses=1', 'xpLevel=50']),
     { ok: true, arena: 'anvil', item: 'bow', runs: 1, seed: null, portions: null, crafts: null, ...none, task: 'merge', second: 'same', enchants: '1-2', curses: '1', xpLevel: 50 })
   assert.match(parseTrainArgs(['anvil', 'task=repair']).error, /task 只能是 merge \/ rename \/ both/)
@@ -5116,4 +5116,270 @@ test('report: sign records group by kind / edits with doomed and a column per fa
   assert.match(formatSummary(byKind).split('\n')[0], /^题型\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t涂蜡后改不了\t编辑框没关\t文字不对\t颜色不对\t蜡不对\t改了背面\t光标上有东西\t扔在地上\t达成中位/)
   assert.deepEqual(summarize(records, { by: 'edits' }).rows.map((r) => r.key).sort(), ['1 行', '2 行', '—'].sort())
   assert.match(formatSummary(summarize(records, { by: 'edits' })).split('\n')[0], /^改几行\t/)
+})
+
+// ── 弓箭训练场（docs/弓箭训练场设计方案.md）──────────────────────────────
+
+const bowModule = await import('../src/training/bow.js')
+const BOW_ORIGIN = [0, 100, 0]
+const ARENAS_BOW = { bow: { type: 'bow', origin: BOW_ORIGIN, timeoutSec: 600, targets: '1-4', dist: '8-40', exclude: [] } }
+const deg = (rad) => (rad * 180) / Math.PI
+
+test('bow options: targets 1–4, dist a-b within 2–60 (§5.2); config defaults and checks; parseTrainArgs takes dist', () => {
+  const { bowOptions } = bowModule
+  assert.deepEqual(bowOptions({}, {}), { targets: { lo: 1, hi: 4 }, dist: { lo: 8, hi: 40 } })
+  assert.deepEqual(bowOptions({ targets: '2', dist: '10-20' }, { targets: '1-4', dist: '8-40' }), { targets: { lo: 2, hi: 2 }, dist: { lo: 10, hi: 20 } })
+  assert.throws(() => bowOptions({ targets: '5' }), /targets 要写 k 或 a-b（1–4/)
+  for (const bad of ['1-10', '10-10', '20-10', '10', '8-61']) assert.throws(() => bowOptions({ dist: bad }), /dist 要写 a-b（2–60，a < b）/, bad)
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.bow, { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', exclude: [] })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0] } } } }).training.arenas.range, { type: 'bow', origin: [0, 100, 0], targets: '1-4', dist: '8-40', exclude: [] })
+  assert.throws(() => normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0], dist: '1-5' } } } }), /training\.arenas\.range\.dist 要写 a-b/)
+  assert.equal(parseTrainArgs(['bow', 'targets=2', 'dist=10-30']).dist, '10-30')
+  assert.match(parseTrainArgs(['bow', 'dist=5']).error, /dist 要写 a-b/)
+})
+
+test('bow ballistics: same per-tick order as vanilla (move, ×0.99, −0.05); pitch for flat shots; face checks — visible, reachable, entered through that face, not too oblique, clear of other targets and the platform (Q3, F2–F5)', () => {
+  const { solvePitch, heightAt, faceOk, segmentBox, spawnPoint, eyePoint, faceCenter, planeError } = bowModule
+  // 与设计文档 F5 的模拟一致：水平 8 / 16 / 32 / 48 格平射要抬高 0.85° / 2.17° / 5.02° / 8.18°
+  assert.deepEqual([8, 16, 32, 48].map((d) => deg(solvePitch(d, 0)).toFixed(2)), ['0.85', '2.17', '5.02', '8.18'])
+  assert.ok(Math.abs(heightAt(solvePitch(32, 0), 32)) < 1e-6)
+  assert.equal(solvePitch(130, 0), null, '同一高度最远约 116 格')
+  // 第一 tick 走满 3 格，之后乘 0.99、竖直减 0.05
+  assert.ok(Math.abs(heightAt(0, 3)) < 1e-12 && Math.abs(heightAt(0, 3 + 2.97) - -0.05) < 1e-12)
+  assert.deepEqual(spawnPoint(BOW_ORIGIN), [0.5, 100 + 1 + 1.62 - 0.1, 0.5])
+  assert.deepEqual(eyePoint(BOW_ORIGIN), [0.5, 102.62, 0.5])
+  assert.deepEqual(faceCenter([20, 102, 0], 'west'), [20, 102.5, 0.5])
+  assert.equal(planeError([0, 0.2, -0.3], 'west'), 0.3)
+  assert.deepEqual(segmentBox([0, 0.5, 0.5], [2, 0.5, 0.5], [1, 0, 0], [2, 1, 1]), { t: 0.5, face: 'west' })
+  assert.equal(segmentBox([0, 2, 0.5], [2, 2, 0.5], [1, 0, 0], [2, 1, 1]), null)
+  // 正前方 20 格、眼睛高度附近：朝玩家的 west 面可以；背面 east、看不到的 north 不行
+  assert.equal(faceOk(BOW_ORIGIN, [20, 102, 0], 'west'), true)
+  assert.equal(faceOk(BOW_ORIGIN, [20, 102, 0], 'east'), false)
+  assert.equal(faceOk(BOW_ORIGIN, [20, 102, 0], 'north'), false)
+  // 正前方挡着另一个标靶就不行
+  assert.equal(faceOk(BOW_ORIGIN, [20, 102, 0], 'west', [[10, 102, 0]]), false)
+  // 头顶上方较远处的底面：看得到，但箭飞到那里已经在往下落，碰不到
+  assert.equal(faceOk(BOW_ORIGIN, [45, 104, 0], 'down'), false)
+  // 几乎侧着看的面（夹角超过 70°）不行
+  assert.equal(faceOk(BOW_ORIGIN, [30, 102, 3], 'north'), false)
+  // 太靠平台侧面：弹道要擦过护栏
+  assert.equal(faceOk(BOW_ORIGIN, [2, 102, -20], 'west'), false)
+})
+
+test('bow sampler: 1–4 targets inside the field, distance in range, at least 3 apart, every face passes the checks against the others; a bow and n arrows in two random slots, empty hand; reproducible (Q2–Q4)', () => {
+  const { sampleBowRound, bowOptions, faceOk, FIELD, BOW, ARROW } = bowModule
+  const options = bowOptions({}, {})
+  const counts = new Set()
+  for (let seed = 0; seed < 40; seed++) {
+    const r = sampleBowRound(seed, options, BOW_ORIGIN)
+    counts.add(r.targets.length)
+    for (const [i, t] of r.targets.entries()) {
+      const rel = t.pos.map((c, k) => c - BOW_ORIGIN[k])
+      assert.ok(rel[0] >= FIELD.x[0] && rel[0] <= FIELD.x[1] && rel[1] >= FIELD.y[0] && rel[1] <= FIELD.y[1] && rel[2] >= FIELD.z[0] && rel[2] <= FIELD.z[1], JSON.stringify(t))
+      assert.ok(t.dist >= 8 - 0.05 && t.dist <= 40 + 0.05, String(t.dist))
+      const others = r.targets.filter((_, j) => j !== i).map((o) => o.pos)
+      assert.ok(others.every((o) => Math.max(...o.map((c, k) => Math.abs(c - t.pos[k]))) >= 3))
+      assert.equal(faceOk(BOW_ORIGIN, t.pos, t.face, others), true, JSON.stringify(t))
+    }
+    const [bowItem, arrows] = r.items
+    assert.deepEqual([bowItem.id, bowItem.count, arrows.id, arrows.count], [BOW, 1, ARROW, r.targets.length])
+    assert.notEqual(bowItem.slot, arrows.slot)
+    assert.ok(r.selectedSlot >= 0 && r.selectedSlot <= 8 && r.selectedSlot !== bowItem.slot && r.selectedSlot !== arrows.slot)
+    assert.deepEqual(sampleBowRound(seed, options, BOW_ORIGIN), r)
+  }
+  assert.deepEqual([...counts].sort(), [1, 2, 3, 4])
+  const near = sampleBowRound(3, bowOptions({ targets: '4', dist: '8-12' }), BOW_ORIGIN)
+  assert.ok(near.targets.length === 4 && near.targets.every((t) => t.dist <= 12.05))
+})
+
+/** mod 登记的一支箭：hit 落在目标点附近；out 从目标面前方穿过平面（偏 0.4 格）飞出去 */
+function bowArrow(n, t, i, result, { at = 0, crit = true } = {}) {
+  const normal = bowModule.NORMALS[t.face]
+  const side = normal[1] === 0 ? [0, 0.4, 0] : [0.4, 0, 0]
+  const before = t.point.map((c, k) => c + normal[k] * 5 + side[k])
+  const after = t.point.map((c, k) => c - normal[k] * 5 + side[k])
+  const base = { n, ms: at, crit, from: [0.5, 102.52, 0.5], velocity: [2.9, 0.2, 0.1], playerPos: [0.5, 101, 0.5], rotation: { yaw: -88, pitch: -4 }, result, resultMs: at + 300 }
+  if (result === 'hit') {
+    const point = t.point.map((c, k) => c + (normal[k] === 0 ? 0.1 : 0))
+    return { ...base, block: t.pos, face: t.face, point, target: i, err: 0.1, offset: point.map((c, k) => c - t.point[k]), path: [before, point] }
+  }
+  return { ...base, path: [before, after] }
+}
+
+function bowHarness({ plan = 'do' } = {}) {
+  const world = { params: null, state: {} }
+  const reflects = []
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    const bow = world.state.bow
+    const shoot = (i, result, extra) => {
+      bow.arrows.push(bowArrow(bow.arrows.length + 1, world.targets[i], i, result, { at: clock(), ...extra }))
+      world.state.held['minecraft:arrow'] -= 1
+      if (result === 'hit') bow.targets[i].hit = true
+    }
+    if (plan === 'do') {
+      world.targets.forEach((_, i) => shoot(i, 'hit'))
+      world.state.reachedAtMs = clock()
+    } else if (plan === 'miss-all') {
+      // 每一支都飞出去：箭用完了还没全中，训练器在下一次轮询时发现并中止
+      world.targets.forEach((_, i) => shoot(i, 'out'))
+      while (executor.task.state === 'running') await tick()
+      return
+    } else if (plan === 'walk-off') {
+      bow.leftPlatformAtMs = clock()
+      while (executor.task.state === 'running') await tick()
+      return
+    } else if (plan === 'weak-then-claim') {
+      shoot(0, 'weak', { crit: false })
+    }
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_BOW,
+    prepareData: (params) => {
+      world.params = params
+      world.targets = params.bow.targets.map((t) => ({ ...t, point: bowModule.faceCenter(t.pos, t.face) }))
+      const n = params.bow.targets.length
+      world.state = {
+        bow: { targets: world.targets.map((t) => ({ pos: t.pos, face: t.face, point: t.point, hit: false })), arrows: [], flying: 0, leftPlatformAtMs: null },
+        held: { 'minecraft:bow': 1, 'minecraft:arrow': n }, carried: {}, dropped: {}, selectedSlot: params.selectedSlot, stationIntact: true, reachedAtMs: null
+      }
+      return { bow: { targets: params.bow.targets, items: params.items.map(({ slot, id, count }) => ({ slot, id, count })), selectedSlot: params.selectedSlot } }
+    },
+    statusData: () => world.state
+  })
+  h.trainer.bridge.holdReflect = (taskId) => reflects.push(['hold', taskId])
+  h.trainer.bridge.releaseReflect = (taskId, text) => reflects.push(['release', taskId, text])
+  return { ...h, world, reflects }
+}
+
+test('bow run: prepare carries the targets, the bow and n arrows, the empty hand and the goal; the text names the points and the rules only (Q5); hitting every target succeeds and the debrief goes to the held reflect (Q13)', async () => {
+  const h = bowHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'bow', runs: 4, seed: 7 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /targets=1-4，dist=8-40/)
+  await h.done()
+  const records = h.records('bow')
+  assert.equal(records.length, 4)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  for (const [i, record] of records.entries()) {
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.faults, record.doomed, record.reached, record.hits], [[], null, true, record.targets.length])
+    assert.deepEqual(record.hitTargets, record.targets.map((_, k) => k))
+    assert.ok(record.arrows.every((a) => a.result === 'hit' && a.err === 0.1 && !('path' in a)))
+    const p = prepares[i]
+    const targets = record.targets.map(({ pos, face }) => ({ pos, face }))
+    assert.equal(p.station, 'bow')
+    assert.deepEqual(p.bow, { targets })
+    assert.deepEqual(p.expect, { bow: { targets } })
+    assert.deepEqual(p.items, record.items)
+    assert.equal(p.selectedSlot, record.selectedSlot)
+    const text = h.instructions[i]
+    const n = record.targets.length
+    assert.ok(text.startsWith(`你站在一个平台上，前方的空中有 ${n} 个标靶（minecraft:target）。你的物品栏里有一把弓（minecraft:bow）和 ${n} 支箭（minecraft:arrow）。\n`), text)
+    for (const t of record.targets) assert.ok(text.includes(`- (${t.point.map((c) => c.toFixed(1)).join(', ')})`), text)
+    assert.match(text, /每个点只有一支箭，顺序不限。没拉满射出的箭不算数；离开平台本轮直接结束。/)
+    assert.doesNotMatch(text, /west|east|north|south|仰角|抬高|格远|key\/|camera/, 'Q5: no face, distance or how-to')
+    assert.ok(!text.includes('\r'))
+  }
+  // Q13：每轮发任务后登记、判定后交来判定说明
+  const holds = h.reflects.filter(([k]) => k === 'hold').map(([, id]) => id)
+  const releases = h.reflects.filter(([k]) => k === 'release')
+  assert.deepEqual(holds, records.map((r) => r.taskId))
+  assert.deepEqual(releases.map(([, id]) => id), holds)
+  assert.match(releases[0][2], /^本轮结果：success（成功），射中 \d\/\d 个标靶。\n\n标靶：\n- 1 号：目标点 \(/)
+  assert.match(releases[0][2], /- 第 1 支：拉满；射出时玩家在 \(0\.50, 101\.00, 0\.50\)，服务端用来射箭的朝向 yaw=-88\.00、pitch=-4\.00；箭从 \(0\.50, 102\.52, 0\.50\) 出发，初速度 \(2\.900, 0\.200, 0\.100\) 格\/tick；结果 hit（射中指定面）：命中方块 /)
+  assert.doesNotMatch(releases[0][2], /应该|建议|抬高/, 'Q13: facts only')
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/4 轮：会话 run-1，弓箭：\d 个靶，/)
+})
+
+test('bow run: arrows used up without hitting everything and walking off the platform end the round early (doomed); a weak arrow and unshot arrows are faults; misses get the nearest target plane; option checks (Q6, Q7)', async () => {
+  const missed = bowHarness({ plan: 'miss-all' })
+  assert.equal(missed.trainer.start({ sessionId: 'console', arena: 'bow', targets: '2', seed: 3 }).ok, true)
+  await missed.done()
+  const [rec] = missed.records('bow')
+  assert.equal(rec.outcome, 'failed', JSON.stringify(rec))
+  assert.equal(rec.doomed, 'out-of-arrows')
+  assert.equal(typeof rec.doomedMs, 'number')
+  assert.deepEqual(rec.faults, ['miss'])
+  for (const [i, a] of rec.arrows.entries()) {
+    assert.equal(a.result, 'out')
+    assert.equal(a.nearest.target, i)
+    assert.ok(Math.abs(a.nearest.err - 0.4) < 1e-9, JSON.stringify(a.nearest))
+  }
+  const debrief = missed.reflects.find(([k]) => k === 'release')[2]
+  assert.match(debrief, /提前结束：箭用完了还有标靶没射中，本轮提前结束。/)
+  assert.match(debrief, /结果 out（飞出场地）；轨迹穿过 1 号标靶指定面所在平面的点 .*，相对目标点偏移 /)
+
+  const walked = bowHarness({ plan: 'walk-off' })
+  assert.equal(walked.trainer.start({ sessionId: 'console', arena: 'bow', seed: 4 }).ok, true)
+  await walked.done()
+  const walkedRec = walked.records('bow')[0]
+  assert.deepEqual([walkedRec.outcome, walkedRec.doomed], ['failed', 'left-platform'])
+  assert.ok(walkedRec.faults.includes('left-platform') && walkedRec.faults.includes('unshot'))
+
+  const weak = bowHarness({ plan: 'weak-then-claim' })
+  assert.equal(weak.trainer.start({ sessionId: 'console', arena: 'bow', targets: '2', seed: 5 }).ok, true)
+  await weak.done()
+  const weakRec = weak.records('bow')[0]
+  assert.deepEqual([weakRec.outcome, weakRec.faults, weakRec.hits], ['false_success', ['miss', 'weak', 'unshot'], 0])
+  assert.match(weak.reflects.find(([k]) => k === 'release')[2], /第 1 支：没拉满；.*结果 weak（没拉满，不算数）/)
+
+  const h = bowHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'bow', item: 'stick' }).error, /弓箭题没有 item= 选项/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'bow', edits: '2' }).error, /不认这些选项：edits/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'bow', dist: '30-10' }).error, /dist 要写 a-b/)
+})
+
+test('bow judge and doomed: all targets hit → reached; doomed only when the platform was left or no arrows are left anywhere (Q7)', () => {
+  const { judgeBow, doomedReason } = bowModule
+  const picked = { targets: [{ pos: [20, 102, 0], face: 'west', point: [20, 102.5, 0.5] }, { pos: [25, 102, 5], face: 'west', point: [25, 102.5, 5.5] }] }
+  const status = (hits, { held = 0, carried = 0, dropped = 0, flying = 0, left = null, pending = false } = {}) => ({
+    bow: { targets: picked.targets.map((t, i) => ({ ...t, hit: i < hits })), arrows: pending ? [{ result: null }] : [], flying, leftPlatformAtMs: left },
+    held: { 'minecraft:arrow': held }, carried: { 'minecraft:arrow': carried }, dropped: { 'minecraft:arrow': dropped }, stationIntact: true
+  })
+  assert.equal(doomedReason(picked, status(1, { held: 1 })), null)
+  assert.equal(doomedReason(picked, status(1, { dropped: 1 })), null, '扔在平台上的箭还能捡回来')
+  assert.equal(doomedReason(picked, status(1, { flying: 1, pending: true })), null, '还有箭在飞')
+  assert.equal(doomedReason(picked, status(2)), null)
+  assert.match(doomedReason(picked, status(1)), /箭已经用完/)
+  assert.match(doomedReason(picked, status(2, { left: 5 })), /离开了射击平台/)
+  assert.deepEqual(judgeBow({ final: status(2), picked, taskState: 'done' }), { outcome: 'success', reached: true, faults: [], hits: 2 })
+  assert.deepEqual(judgeBow({ final: status(1, { held: 1 }), picked, taskState: 'done' }), { outcome: 'false_success', reached: false, faults: ['miss', 'unshot'], hits: 1 })
+  assert.equal(judgeBow({ final: status(1), picked, taskState: 'failed', timedOut: true }).outcome, 'timeout')
+  assert.equal(judgeBow({ final: { ...status(1), stationIntact: false }, picked, taskState: 'done' }).outcome, 'lost')
+  assert.equal(judgeBow({ final: status(2), picked, stopped: true }).outcome, 'aborted')
+})
+
+test('report: bow records group by targets (rounds) and by dist (one row per target) with doomed, faults, arrow and first-arrow hit rates and the median error (Q11)', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const t = (dist) => ({ pos: [0, 0, 0], face: 'west', point: [0, 0.5, 0.5], dist })
+  const rec = (targets, arrows, outcome, { faults = [], doomed = null, hitTargets = [] } = {}) => ({ batch: 'b1', target: `bow:${targets.length}`, targets, arrows, hitTargets, items: [], selectedSlot: 0, hits: hitTargets.length, doomed, faults, outcome, reachedMs: 5000, taskMs: 8000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [
+    rec([t(10)], [{ n: 1, result: 'hit', target: 0, err: 0.1 }], 'success', { hitTargets: [0] }),
+    rec([t(20), t(35)], [{ n: 1, result: 'out', nearest: { target: 0, err: 0.6 } }, { n: 2, result: 'hit', target: 1, err: 0.3 }], 'failed', { faults: ['miss'], doomed: 'out-of-arrows', hitTargets: [1] }),
+    rec([t(30), t(45)], [{ n: 1, result: 'weak', crit: false }], 'false_success', { faults: ['miss', 'weak', 'unshot'] })
+  ]
+  const byTargets = summarize(records, { by: 'targets' })
+  assert.equal(byTargets.bower, true)
+  assert.deepEqual(byTargets.rows.map((r) => [r.key, r.runs]), [['2 个靶', 2], ['1 个靶', 1]])
+  assert.deepEqual(byTargets.total.bow, { arrows: 4, arrowHits: 2, weakArrows: 1, firstShots: 3, firstHits: 2, medianErr: 0.3, doomedLeft: 0, doomedOut: 1, faults: { miss: 2, weak: 1, unshot: 1 } })
+  const table = formatSummary(byTargets).split('\n')
+  assert.match(table[0], /^标靶数\t轮数\t全中率\t虚报\t失败\t超时\t中止\t丢失\t离开平台\t箭用完\t有靶没中\t没拉满\t箭没射完\t箭命中率\t首箭命中率\t偏差中位\t没拉满的箭\t达成中位/)
+  assert.match(table.at(-1), /^（合计）\t3\t33%\t1\t1\t0\t0\t0\t0\t1\t2\t1\t1\t50%\t67%\t0\.30\t25%\t/)
+  const byDist = summarize(records, { by: 'dist' })
+  assert.deepEqual(byDist.rows.map((r) => [r.key, r.targets, r.hit]), [['8–16 格', 1, 1], ['16–24 格', 1, 0], ['24–32 格', 1, 0], ['32–40 格', 1, 1], ['40 格以上', 1, 0]])
+  const distTable = formatSummary(byDist).split('\n')
+  assert.equal(distTable[0], '距离\t标靶数\t射中率\t首箭命中率\t射向它的箭\t偏差中位')
+  assert.equal(distTable.at(-1), '（合计）\t5\t40%\t67%\t3\t0.30')
 })

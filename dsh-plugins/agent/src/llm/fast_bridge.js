@@ -1,6 +1,6 @@
 import { renderTree } from '../bt/overview.js'
 import { inspectFast } from '../fast/inspect.js'
-import { KNOWLEDGE_TOOLS } from './bridge.js'
+import { KNOWLEDGE_TOOLS, isMalformedError } from './bridge.js'
 import { renderTemplate } from './prompts.js'
 
 /**
@@ -140,14 +140,17 @@ export class FastBridge {
    * agent/error：快树会话的回合出错结束。
    * @returns {undefined | null | { retry: OutgoingMessage }}
    */
-  onTurnError({ sessionId, error }) {
+  onTurnError({ sessionId, error, toolInput = null }) {
     const record = this.recordOf(sessionId)
     if (record === undefined) return undefined
     if (!record || !this.isOpen(record)) return null
     const message = String(error?.message ?? error ?? 'unknown error').slice(0, 500)
     const left = this.charge(record, `the turn errored: ${message}`)
     if (left <= 0) return null
-    const text = renderTemplate(this.prompts.requests.fast_retry, { batchId: record.batchId, attemptsLeft: left, error: message })
+    // 坏工具参数定位设计方案 Q3：坏工具参数时说明错在哪
+    const isMalformed = isMalformedError(error)
+    if (isMalformed && toolInput?.summary) this.log(`[fast] ${record.batchId}: malformed tool input ${toolInput.summary}`)
+    const text = renderTemplate(this.prompts.requests.fast_retry, { batchId: record.batchId, attemptsLeft: left, error: message, detail: isMalformed ? toolInput?.detail ?? '' : '' })
     return { retry: this.message(record, text, `重试：快树批次 ${record.batchId}（上一回合出错）`, 'retry') }
   }
 

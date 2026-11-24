@@ -17,7 +17,7 @@ import { TaskHistory } from './history/store.js'
  */
 export function createRuntime(config, deps = {}) {
   const mod = deps.mod ?? createModClient({ url: config.modUrl })
-  const game = new GameState({ mod, timing: config.timing, statePollMs: config.statePollMs })
+  const game = new GameState({ mod, timing: config.timing, statePollMs: config.statePollMs, camera: config.camera })
   const registry = createDefaultRegistry()
   const capsules = createCapsules(config)
   const eventLog = new EventLog({ runtimeDir: config.runtimeDir })

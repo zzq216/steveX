@@ -3,6 +3,7 @@ package name.modid;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 
 import name.modid.arena.ArenaCommand;
@@ -38,6 +39,8 @@ public class SteveX implements ModInitializer {
 
 		// 训练场（docs/训练场设计方案.md）：监测合成统计、清场内敌对生物；游戏内 /arena 传送到场外
 		ServerTickEvents.END_SERVER_TICK.register(ArenaManager::onServerTick);
+		// 弓箭训练场（docs/弓箭训练场设计方案.md Q8）：登记本轮玩家射出的箭
+		ServerEntityEvents.ENTITY_LOAD.register(name.modid.arena.BowArena::onEntityLoad);
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> ArenaManager.reset());
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ArenaCommand.register(dispatcher));
 

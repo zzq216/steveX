@@ -113,7 +113,7 @@ export class Bridge {
    * @param {object} [options.curate]    { everyTasks, listLimit }（整理方案 §5.2 / §5.3）
    * @param {(sessionId, message) => boolean} [options.deliverIdle]  等会话空闲再 followup（自动整理可能在别的回合中途触发）；缺省 = deliver
    */
-  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null, openReviewSession = null, notifyIdle = null }) {
+  constructor({ executor, library, sandbox, prompts, deliver, notify = () => {}, runtimeDir = null, maxInvalidAttempts = 3, releaseTask = () => {}, onBind = () => {}, log = () => {}, now = () => Date.now(), registry = null, reflect = {}, stats = null, curate = {}, deliverIdle = null, history = null, taskUsage = null, openReviewSession = null, notifyIdle = null, reflectHoldMs = 60000 }) {
     this.executor = executor
     this.library = library
     this.sandbox = sandbox
@@ -122,6 +122,9 @@ export class Bridge {
     /** 给自动复盘开新会话（2026-11-07）：(任务会话 id) => Promise<新会话 id>；不给 = 复盘留在任务会话里 */
     this.openReviewSession = openReviewSession
     this.lastDrafts = null        // 最近结束的任务的草稿拷贝（/bt reflect 手动复盘用）
+    // 弓箭训练场设计方案 Q13：taskId → { debrief, ended, pending, timer }；复盘要等训练场判定的任务
+    this.reflectHolds = new Map()
+    this.reflectHoldMs = reflectHoldMs
     this.reflectSeq = 0
     this.stats = stats
     // 任务历史（任务历史方案）：null = 不记；taskUsage(taskId, sessionId) → { turns, tokens }
@@ -310,11 +313,35 @@ export class Bridge {
     }
     const sessionId = this.taskSessions.get(taskId)
     this.taskSessions.delete(taskId)
-    if (!sessionId) return this.maybeCurate()
+    const hold = this.reflectHolds.get(taskId)
+    if (hold) hold.ended = true
+    if (!sessionId) {
+      if (hold) this.reflectHolds.delete(taskId)
+      return this.maybeCurate()
+    }
     this.curateSession = sessionId
     const task = this.executor.task?.taskId === taskId ? this.executor.task : null
     // 发了复盘就先不整理：复盘结束（closeReflect）时再查
-    if (task && this.shouldReflect(summary, task) && this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
+    if (task && this.shouldReflect(summary, task, { verdict: Boolean(hold) })) {
+      if (hold) {
+        // 弓箭训练场设计方案 Q13：等训练场判定出来，带上判定说明再发；最多等 reflectHoldMs
+        hold.pending = { sessionId, task, drafts: this.lastDrafts, summary }
+        if (hold.debrief !== null) return this.sendHeldReflect(taskId, hold.debrief)
+        hold.timer = setTimeout(() => this.sendHeldReflect(taskId, '（训练场判定没有按时给出）'), this.reflectHoldMs)
+        hold.timer.unref?.()
+        this.executor.log(taskId, { event: 'reflect/held' })
+        return
+      }
+      if (this.startReflect({ sessionId, task, drafts: this.lastDrafts }).ok) return
+    } else if (hold) {
+      this.reflectHolds.delete(taskId)
+    }
+    this.endWithoutReflect(summary, task, sessionId)
+  }
+
+  /** 任务结束、不复盘（或复盘发不出去）：写任务历史，往任务会话插一条结束通知，看要不要整理。 */
+  endWithoutReflect(summary, task, sessionId) {
+    const { taskId } = summary
     if (task) this.writeHistory(task, { sessionId })
     this.sourceReads.delete(taskId)
     const text = renderTemplate(this.prompts.requests.task_end, {
@@ -326,11 +353,12 @@ export class Bridge {
 
   // ── 复盘（P4）─────────────────────────────────────────────────────────────
 
-  shouldReflect(summary, task = null) {
+  shouldReflect(summary, task = null, { verdict = false } = {}) {
     const { enabled, onFailed, onDone } = this.reflectConfig
     if (!enabled) return false
     if (summary.state === 'done') {
-      if (onDone === 'always' || !task) return true
+      // 弓箭训练场设计方案 Q13：有训练场判定说明的任务一定复盘（每一箭的结果都是新信息）
+      if (onDone === 'always' || !task || verdict) return true
       const changed = this.doneChanges(task)
       if (changed.length) return true
       const why = '和参考过的同类任务比没有新情况（没有展开 / 修补、没有节点报错、没有执行新草稿或第一次跑的胶囊版本、没有查过源码，mod 调用次数相同）'
@@ -388,7 +416,34 @@ export class Bridge {
    * 发一个复盘请求（任务结束时自动；/bt reflect 手动）。
    * @returns {{ ok: true, requestId } | { ok: false, error }}
    */
-  startReflect({ sessionId, task, drafts = null, manual = false }) {
+  /**
+   * 弓箭训练场设计方案 Q13：训练器登记"这个任务的复盘要等训练场判定"。任务结束时复盘请求先挂起，
+   * 等 releaseReflect 交来判定说明再发，最多等 reflectHoldMs。人手动发起的复盘（/bt reflect）不等。
+   */
+  holdReflect(taskId) {
+    if (taskId) this.reflectHolds.set(taskId, { debrief: null, ended: false, pending: null, timer: null })
+  }
+
+  /** 交来判定说明（Q13）：复盘已经挂起就带上它发出；任务还没结束就先存着；任务已经结束、不复盘就丢掉。 */
+  releaseReflect(taskId, debrief) {
+    const hold = this.reflectHolds.get(taskId)
+    if (!hold) return
+    if (hold.pending) return this.sendHeldReflect(taskId, debrief)
+    if (hold.ended) return this.reflectHolds.delete(taskId)
+    hold.debrief = String(debrief ?? '')
+  }
+
+  sendHeldReflect(taskId, debrief) {
+    const hold = this.reflectHolds.get(taskId)
+    if (!hold?.pending) return
+    this.reflectHolds.delete(taskId)
+    if (hold.timer) clearTimeout(hold.timer)
+    const { sessionId, task, drafts, summary } = hold.pending
+    if (this.startReflect({ sessionId, task, drafts, debrief: String(debrief ?? '') }).ok) return
+    this.endWithoutReflect(summary, task, sessionId)
+  }
+
+  startReflect({ sessionId, task, drafts = null, manual = false, debrief = null }) {
     const open = [...this.requests.values()].find((r) => r.type === 'reflect' && r.taskId === task.taskId && this.isOpen(r))
     if (open) return { ok: false, error: `任务 ${task.taskId} 的复盘请求 ${open.requestId} 还没结束` }
     const requestId = `c${++this.reflectSeq}`
@@ -409,6 +464,8 @@ export class Bridge {
       goal: task.goal ?? '（无）',
       result: task.result ?? '（无）',
       manual: manual ? '（人手动发起的复盘）\n\n' : '',
+      // 弓箭训练场设计方案 Q13：训练场的判定说明，只在有时出现
+      debrief: debrief ? `## 训练场判定\n\n这一轮由训练场判定，下面是它看到的结果（只是事实）：\n\n${debrief}\n\n` : '',
       directory: renderReflectDirectory(directory),
       tree: renderTree(task.spec, { statuses: statusMap(task) }),
       profile: this.history ? `${formatProfile(this.history.profile(task.taskId))}\n${renderLlmLine(this.llmUsage(task.taskId, sessionId), this.history.profile(task.taskId))}` : '（没有启用任务历史）',
@@ -762,6 +819,8 @@ export class Bridge {
     const task = this.activeTask()
     if (task) return `任务 ${task.taskId} 还在 ${task.state}`
     if (this.planning) return `规划请求 ${this.planning} 还没结束`
+    const held = [...this.reflectHolds.entries()].find(([, h]) => h.pending)
+    if (held) return `任务 ${held[0]} 的复盘在等训练场判定`
     const open = [...this.requests.values()].find((r) => (r.type === 'reflect' || r.type === 'curate') && this.isOpen(r))
     if (open) return `${open.type === 'reflect' ? '复盘' : '整理'}请求 ${open.requestId} 还没结束`
     return null
@@ -1054,9 +1113,10 @@ export class Bridge {
    * 算一次不合法尝试，解除回合绑定；还有次数 → 返回一条重试消息（由适配层 followup 开新回合，新回合按来源重新绑定）。
    * 模型 API / 网络故障（流提前断开、超时、限流、5xx……，2026-11-07）不是模型的错：不算不合法尝试，
    * 每个请求另有 TRANSIENT_RETRY_MAX 次重试；用完之后再出这类错照常计次。
+   * toolInput（坏工具参数定位设计方案 Q3）：坏工具参数时 ToolInputTrace.report 的结果 { detail, summary }，detail 放进重试消息
    * @returns {null | { retry: OutgoingMessage } | { failed: true }}
    */
-  onTurnError({ sessionId, turn, error }) {
+  onTurnError({ sessionId, turn, error, toolInput = null }) {
     const key = turnKey(sessionId, turn)
     const requestId = this.turns.get(key)
     if (!requestId) return null
@@ -1090,9 +1150,12 @@ export class Bridge {
         ? `还能再出错 ${attemptsLeft} 次，用完复盘按放弃关闭。`
         : `这次出错算作一次不合法尝试，还剩 ${attemptsLeft} 次。`
     }
+    // 坏工具参数定位设计方案 Q2–Q4：坏工具参数时说明错在哪（只列事实），日志多一行位置
+    const detail = isMalformed ? toolInput?.detail ?? '' : ''
+    if (isMalformed && toolInput?.summary) this.log(`[bt] ${requestId}: malformed tool input ${toolInput.summary}`)
     const template = req.type === 'reflect' ? this.prompts.requests.reflect_retry : this.prompts.requests.retry
     const drafts = this.draftRefs()
-    const text = renderTemplate(template, { requestId, submitTool: SUBMIT_TOOL[req.type], charge, error: message, drafts: drafts.length ? drafts.map((ref) => `\`${ref}\``).join('、') : '（没有）' })
+    const text = renderTemplate(template, { requestId, submitTool: SUBMIT_TOOL[req.type], charge, error: message, detail, drafts: drafts.length ? drafts.map((ref) => `\`${ref}\``).join('、') : '（没有）' })
     return { retry: { text, summary: `重试：请求 ${requestId}（上一回合出错）`, source: { kind: SOURCE_KIND, taskId: req.taskId, requestId, reason: 'retry' } } }
   }
 
