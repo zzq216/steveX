@@ -1,16 +1,21 @@
 package name.modid.api;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import name.modid.AgentWebSocketServer;
 import name.modid.AgentWebSocketServer.WsHandler;
+import name.modid.mixin.AbstractSignEditScreenAccessor;
+import name.modid.mixin.BookEditScreenAccessor;
 import name.modid.vision.ContainerMemoryTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen;
 import net.minecraft.client.gui.screens.inventory.BeaconScreen;
+import net.minecraft.client.gui.screens.inventory.BookEditScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
@@ -72,7 +77,22 @@ public class ContainerApi {
 
             Map<String, Object> data = new LinkedHashMap<>();
             var screen = mc.screen;
-            if (!(screen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?>)) {
+            if (screen instanceof BookEditScreen bookScreen) {
+                // 告示牌训练场设计方案 Q14：书的编辑界面不是容器界面，报界面里的页（含还没保存的改动）和当前页（0 起）
+                var acc = (BookEditScreenAccessor) bookScreen;
+                data.put("type", "book_edit");
+                data.put("slots", List.of());
+                data.put("pages", List.copyOf(acc.getPages()));
+                data.put("currentPage", acc.getCurrentPage());
+            } else if (screen instanceof AbstractSignEditScreen signScreen) {
+                // Q14：告示牌（含悬挂告示牌）的编辑界面，报 4 行（含还没保存的改动）、当前行、是不是正面
+                var acc = (AbstractSignEditScreenAccessor) signScreen;
+                data.put("type", "sign_edit");
+                data.put("slots", List.of());
+                data.put("lines", Arrays.asList(acc.getMessages().clone()));
+                data.put("currentLine", acc.getLine());
+                data.put("isFront", acc.getIsFrontText());
+            } else if (!(screen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?>)) {
                 data.put("type", "none");
                 data.put("slots", List.of());
             } else {
@@ -748,6 +768,11 @@ public class ContainerApi {
                 // 若绑定会话为方块容器 → 写 containers.nbt；否则（背包/工作台等非容器族）为空操作。
                 ContainerMemoryTracker.commitFromClose();
                 mc.player.closeContainer();
+            } else if (mc.screen instanceof BookEditScreen || mc.screen instanceof AbstractSignEditScreen) {
+                // 告示牌训练场设计方案 Q14：书、告示牌的编辑界面等同于按 Esc（Screen.keyPressed → onClose）：
+                // 书关掉、不保存（BookEditScreen 没有重写 onClose / removed）；告示牌关掉时 removed() 保存（AbstractSignEditScreen 101–116 行）。
+                // 保存并关闭仍用 book/close、sign/close
+                mc.screen.onClose();
             }
         });
         return Map.of("status", "ok");

@@ -5,6 +5,7 @@ import { FAULTS as CRAFTER_FAULTS, FAULT_NAMES as CRAFTER_FAULT_NAMES } from './
 import { FAULTS as TRADE_FAULTS, FAULT_NAMES as TRADE_FAULT_NAMES } from './trade.js'
 import { FAULTS as GRINDSTONE_FAULTS, FAULT_NAMES as GRINDSTONE_FAULT_NAMES } from './grindstone.js'
 import { FAULTS as BOOK_FAULTS, FAULT_NAMES as BOOK_FAULT_NAMES } from './book.js'
+import { FAULTS as SIGN_FAULTS, FAULT_NAMES as SIGN_FAULT_NAMES } from './sign.js'
 
 /**
  * 训练记录汇总（训练场设计方案 T10）：按目标物品（或配方形状）看成功率、用时、虚报率、token。
@@ -44,8 +45,8 @@ const secs = (ms) => (ms === null ? '-' : `${(ms / 1000).toFixed(1)}s`)
 /**
  * @param {object[]} records
  * @param {{ last?: number|null, batch?: string|null, by?: 'target'|'shape'|'portions'|'task'|'chest'|'stack'|'fill'|'targets'|'materials'|'styles'|'yield'|'family'|'station'|'band'|'kind'|'slot'|'enchantment'|'effect'|'level'|'payment'|'item'|'second'|'tasks'|'pattern'|'material'|'group'|'animal'|'banners'|'color' }} [filter]
- * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean, cutter: boolean, cooker: boolean, enchanter: boolean, beaconer: boolean, anviler: boolean, smither: boolean, mounter: boolean, loomer: boolean, charter: boolean, brewer: boolean, crafterer: boolean, trader: boolean, grinder: boolean, booker: boolean }}
- *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）；cutter = 切石题的记录；cooker = 熔炉题的记录；enchanter = 附魔台题的记录；beaconer = 信标题的记录；anviler = 铁砧题的记录；smither = 锻造台题的记录；mounter = 坐骑题的记录；loomer = 织布机题的记录；charter = 制图台题的记录；brewer = 酿造台题的记录；crafterer = 合成器题的记录；trader = 村民交易题的记录；grinder = 砂轮题的记录；booker = 书与笔题的记录
+ * @returns {{ rows: object[], total: object, by: string, station: boolean, multi: boolean, storage: boolean, cutter: boolean, cooker: boolean, enchanter: boolean, beaconer: boolean, anviler: boolean, smither: boolean, mounter: boolean, loomer: boolean, charter: boolean, brewer: boolean, crafterer: boolean, trader: boolean, grinder: boolean, booker: boolean, signer: boolean }}
+ *   station = 记录里有工作站字段；multi = 有多份模式的轮次（T14，多出"超量""做够中位"两列）；storage = 箱子题的记录（换一套列）；cutter = 切石题的记录；cooker = 熔炉题的记录；enchanter = 附魔台题的记录；beaconer = 信标题的记录；anviler = 铁砧题的记录；smither = 锻造台题的记录；mounter = 坐骑题的记录；loomer = 织布机题的记录；charter = 制图台题的记录；brewer = 酿造台题的记录；crafterer = 合成器题的记录；trader = 村民交易题的记录；grinder = 砂轮题的记录；booker = 书与笔题的记录；signer = 告示牌题的记录
  */
 export function summarize(records, { last = null, batch = null, by = 'target' } = {}) {
   let picked = batch ? records.filter((r) => r.batch === batch) : records
@@ -67,6 +68,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   const trader = picked.some(isTradeRecord)
   const grinder = picked.some(isGrindstoneRecord)
   const booker = picked.some(isBookRecord)
+  const signer = picked.some(isSignRecord)
   // 任务历史（任务历史方案 H10）：记录里有 assessed 字段才显示这几列
   const historyCols = picked.some((r) => r.assessed !== undefined)
   const group = (list) => {
@@ -95,6 +97,8 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       tradeFaults: Object.fromEntries(TRADE_FAULTS.map((f) => [f, list.filter((r) => isTradeRecord(r) && (r.faults ?? []).includes(f)).length])),
       grindFaults: Object.fromEntries(GRINDSTONE_FAULTS.map((f) => [f, list.filter((r) => isGrindstoneRecord(r) && (r.faults ?? []).includes(f)).length])),
       bookFaults: Object.fromEntries(BOOK_FAULTS.map((f) => [f, list.filter((r) => isBookRecord(r) && (r.faults ?? []).includes(f)).length])),
+      signFaults: Object.fromEntries(SIGN_FAULTS.map((f) => [f, list.filter((r) => isSignRecord(r) && (r.faults ?? []).includes(f)).length])),
+      doomedRuns: list.filter((r) => isSignRecord(r) && r.doomed).length,
       misenchanted: count('misenchanted'),
       previewMismatch: list.filter((r) => r.matchedPreview === false).length,
       overpaid: list.filter((r) => Number.isInteger(r.paid) && r.paid > 1).length,
@@ -130,7 +134,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, historyCols }
 }
 
 /** 切石题的记录：materials 是 [{ id, family, styles }]（合成题的材料字段叫 items） */
@@ -155,6 +159,8 @@ const isCrafterRecord = (r) => Number.isInteger(r.cells) && Array.isArray(r.faul
 const isTradeRecord = (r) => typeof r.profession === 'string' && Array.isArray(r.trades) && 'doomed' in r
 /** 砂轮题的记录：有 goals（每件磨完的样子）和 hasBook（K9） */
 const isGrindstoneRecord = (r) => Array.isArray(r.goals) && typeof r.hasBook === 'boolean' && Array.isArray(r.faults)
+/** 告示牌题的记录：有开局 lines、目标 goal（4 行）、color { from, to } 和 wax（Q12） */
+const isSignRecord = (r) => Array.isArray(r.goal) && r.goal.length === 4 && typeof r.wax === 'boolean' && typeof r.color?.to === 'string' && Array.isArray(r.faults)
 /** 书与笔题的记录：有 books（每本的开局、修改、目标）和 inHand（J12） */
 const isBookRecord = (r) => Array.isArray(r.books) && typeof r.inHand === 'boolean' && Array.isArray(r.faults)
 /** 酿造台题的记录：有配方 recipe、药水 potion 和 brews 字段（P13） */
@@ -199,6 +205,9 @@ const FILL_NAMES = { random: '随机数量', full: '每格满' }
 
 function groupKey(r, by) {
   if (by === 'shape') return r.shape
+  // 告示牌题（Q12）：按题型；edits 只给 text 题按改了几行分组，其余题型归入"—"
+  if (by === 'kind' && isSignRecord(r)) return r.kind
+  if (by === 'edits' && isSignRecord(r)) return r.kind === 'text' ? `${r.edits.length} 行` : '—'
   // 书与笔题（J12）
   if (by === 'k' && isBookRecord(r)) return `${r.k} 本`
   if (by === 'hand') return isBookRecord(r) ? (r.inHand ? '开局在手上' : '要先拿到手上') : null
@@ -275,10 +284,11 @@ function portionsKey(r) {
   return Number.isInteger(r.portions) && Number.isInteger(r.crafts) ? `${r.portions}/${r.crafts}` : null
 }
 
-const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子', cells: '配方格数', k: '交易笔数', profession: '职业', chain: '串联', curses: '诅咒', hand: '书在不在手上' }
+const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子', cells: '配方格数', k: '交易笔数', profession: '职业', chain: '串联', curses: '诅咒', hand: '书在不在手上', edits: '改几行' }
 
-export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, historyCols = false }) {
+export function formatSummary({ rows, total, by = 'target', station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, historyCols = false }) {
   if (total.runs === 0) return '没有训练记录'
+  if (signer) return formatSign({ rows, total, by, historyCols })
   if (booker) return formatBook({ rows, total, by, historyCols })
   if (grinder) return formatGrindstone({ rows, total, by, historyCols })
   if (trader) return formatTrade({ rows, total, by, historyCols })
@@ -376,6 +386,19 @@ function formatTrade({ rows, total, by, historyCols }) {
   const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.overshoot, r.mistrade, r.lost,
     ...TRADE_FAULTS.map((f) => r.tradeFaults[f]),
     secs(r.medianOpenedMs), secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend, r.stationBroken,
+    ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
+}
+
+/** 告示牌题的表（Q12）：结果列之后是提前结束（doomed）和各原因的轮数（一轮可以有多条原因） */
+function formatSign({ rows, total, by, historyCols }) {
+  const head = [by === 'kind' ? '题型' : BY_LABEL[by] ?? '目标', '轮数', '成功率', '虚报', '失败', '超时', '中止', '丢失', '涂蜡后改不了',
+    ...SIGN_FAULTS.map((f) => SIGN_FAULT_NAMES[f]),
+    '达成中位', '任务中位', 'token中位', '用过chat/send',
+    ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.lost, r.doomedRuns,
+    ...SIGN_FAULTS.map((f) => r.signFaults[f]),
+    secs(r.medianReachedMs), secs(r.medianTaskMs), r.medianTokens ?? '-', r.chatSend,
     ...(historyCols ? [r.medianModCalls ?? '-', pct(r.withIssues, r.assessed), pct(r.withPredecessor, r.runs), r.reviewed ? `${r.resolved}/${r.reviewed}` : '-'] : [])].join('\t')
   return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
 }

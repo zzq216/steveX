@@ -15,10 +15,13 @@ const MENU_TYPES = [
 export const STATE_VOCAB = Object.freeze({
   container: Object.freeze({
     type: Object.freeze({
-      values: Object.freeze(['none', 'inventory', ...MENU_TYPES]),
-      note: 'none = 没有打开容器界面；inventory = 玩家背包（按 E）；其余 = MC 菜单注册名：工作台 crafting、熔炉 furnace、'
+      values: Object.freeze(['none', 'inventory', 'mount', 'book_edit', 'sign_edit', ...MENU_TYPES]),
+      note: 'none = 没有打开容器界面；inventory = 玩家背包（按 E）；mount = 坐骑（马、驴、骡、羊驼、骆驼、鹦鹉螺）的物品栏；'
+        + 'book_edit = 书与笔的编辑界面（另有 pages：全部页，含还没保存的改动；currentPage：当前页，0 起）；'
+        + 'sign_edit = 告示牌的编辑界面（另有 lines：4 行，含还没保存的改动；currentLine：当前行 0–3；isFront：是不是正面）；'
+        + '其余 = MC 菜单注册名：工作台 crafting、熔炉 furnace、'
         + '箱子 generic_9x3、大箱子 generic_9x6、发射器 / 投掷器 generic_3x3、村民交易 merchant、附魔台 enchantment',
-      source: 'vendor/stevex-template-1.21.11/src/main/java/name/modid/api/ContainerApi.java:74-85；'
+      source: 'vendor/stevex-template-1.21.11/src/main/java/name/modid/api/ContainerApi.java（getContainer）；'
         + '1.21.11_src/net/minecraft/world/inventory/MenuType.java:12-36'
     })
   })

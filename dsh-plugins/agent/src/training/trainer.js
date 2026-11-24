@@ -18,6 +18,7 @@ import { crafter, parseExtraSpec } from './crafter.js'
 import { parseTradeLevelSpec, trade } from './trade.js'
 import { GRINDSTONE_CHOICES, grindstone, parseCursesSpec } from './grindstone.js'
 import { book, parseBookPagesSpec, parseBooksSpec, parseEditsSpec } from './book.js'
+import { SIGN_CHOICES, sign } from './sign.js'
 
 export { judge, resolveCounts }
 
@@ -41,7 +42,7 @@ export { judge, resolveCounts }
  */
 
 /** 场地配置的 type → 题型模块 */
-const TASK_TYPES = { craft, storage, stonecut, cook, enchant, beacon, anvil, smithing, mount, loom, cartography, brew, crafter, trade, grindstone, book }
+const TASK_TYPES = { craft, storage, stonecut, cook, enchant, beacon, anvil, smithing, mount, loom, cartography, brew, crafter, trade, grindstone, book, sign }
 /** prepare 之后等客户端更新准星目标（W2）：客户端要过 1 个 tick 才知道准星指着工作站 */
 const AIM_SETTLE_MS = 100
 /** 中止之后等任务真正停下的上限 */
@@ -72,6 +73,7 @@ const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSp
  * 酿造台题另有 `[fuel=…] [raw=…] [bottles=…] [n=…] [m=…] [input=…]`（酿造台训练场设计方案 §5；fuel / raw / n / m / input 和熔炉题共用名字）。
  * 合成器题另有 `[item=…] [n=…] [extra=…]`（合成器训练场设计方案 R4；n 和合成题共用名字）。
  * 书与笔题另有 `[books=…] [pages=…] [edits=…]`（书与笔训练场设计方案 §5）。
+ * 告示牌题另有 `[kind=text|color|wax] [edits=…]`（告示牌训练场设计方案 §5；kind 和箱子题、锻造台题、砂轮题共用，edits 和书与笔题共用，都是 1–4）。
  * 砂轮题另有 `[tasks=…] [kind=item|book|mix] [item=…] [enchants=…] [curses=…]`（砂轮训练场设计方案 §5；kind 和箱子题、锻造台题共用，curses 和铁砧题共用——铁砧题是开关 0 / 1，砂轮题是个数 k 或 a-b（0–2），这里两种写法都放行，场地的 setup 再按题型查）。
  * 村民交易题另有 `[profession=…] [level=…] [tasks=…] [n=…] [extra=…] [item=…]`（村民交易训练场设计方案 §5；level 和信标题共用，全局按 1–5 查，信标场地的 setup 再查不超过 4；tasks 和锻造台题共用）。
  * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles、raw、fuel、rawSlots、fuelSlots、level、count、enchants、tasks、total、move、banners、spare、ops、scale、maps、copies、bottles、extra 原样留成字符串（"4" / "2-5"），start 里解析。
@@ -83,7 +85,7 @@ export function parseTrainArgs(words) {
   const out = { ok: true, arena, item: null, runs: 1, seed: null, portions: null, crafts: null, kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null, station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null, effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null }
   for (const option of options) {
     const match = /^(item|runs|seed|n|m|kind|rel|chest|stack|fill|types|targets|materials|slots|styles|bypass|material|station|raw|fuel|rawSlots|fuelSlots|input|fuelItem|bookshelves|xpLevel|effect|amplifier|primary|level|payment|count|task|second|enchants|curses|tasks|base|pattern|group|animal|total|move|banners|spare|itemPatterns|banner|ops|scale|maps|copies|bottles|extra|profession|books|pages|edits)=(.+)$/.exec(option)
-    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=；熔炉题 station= / raw= / fuel= / rawSlots= / fuelSlots= / n= / m= / input= / fuelItem=；附魔台题 item= / bookshelves= / xpLevel=；信标题 effect= / amplifier= / primary= / level= / payment= / count=；铁砧题 task= / second= / item= / enchants= / curses= / xpLevel=；锻造台题 tasks= / kind= / base= / pattern= / material=；坐骑题 group= / animal= / task= / item= / total= / move=；织布机题 banners= / slots= / fill= / styles= / spare= / itemPatterns= / banner=；制图台题 task= / scale= / maps= / copies= / ops= / spare=；酿造台题 fuel= / raw= / bottles= / n= / m= / input=；合成器题 item= / n= / extra=；村民交易题 profession= / level= / tasks= / n= / extra= / item=；砂轮题 tasks= / kind= / item= / enchants= / curses=；书与笔题 books= / pages= / edits=）` }
+    if (!match) return { ok: false, error: `看不懂的选项 "${option}"（可用 item= / runs= / seed=；合成题 n= / m=；箱子题 kind= / rel= / chest= / stack= / fill= / types= / targets=；切石题 materials= / slots= / fill= / styles= / bypass= / material=；熔炉题 station= / raw= / fuel= / rawSlots= / fuelSlots= / n= / m= / input= / fuelItem=；附魔台题 item= / bookshelves= / xpLevel=；信标题 effect= / amplifier= / primary= / level= / payment= / count=；铁砧题 task= / second= / item= / enchants= / curses= / xpLevel=；锻造台题 tasks= / kind= / base= / pattern= / material=；坐骑题 group= / animal= / task= / item= / total= / move=；织布机题 banners= / slots= / fill= / styles= / spare= / itemPatterns= / banner=；制图台题 task= / scale= / maps= / copies= / ops= / spare=；酿造台题 fuel= / raw= / bottles= / n= / m= / input=；合成器题 item= / n= / extra=；村民交易题 profession= / level= / tasks= / n= / extra= / item=；砂轮题 tasks= / kind= / item= / enchants= / curses=；书与笔题 books= / pages= / edits=；告示牌题 kind= / edits=）` }
     const [, key, value] = match
     if (RANGE_OPTIONS[key]) {
       try {
@@ -102,9 +104,9 @@ export function parseTrainArgs(words) {
       if (!MOUNT_CHOICES.group.includes(value)) return { ok: false, error: `group 只能是 ${MOUNT_CHOICES.group.join(' / ')}` }
       out[key] = value
     } else if (key === 'kind') {
-      // 箱子题（take / put / mix）、锻造台题（upgrade / trim）和砂轮题（item / book / mix）共用 kind，这里只查是不是其中之一，场地自己的 setup 再按题型校验
-      const choices = [...STORAGE_CHOICES.kind, ...SMITHING_CHOICES.kind, ...GRINDSTONE_CHOICES.kind]
-      if (!choices.includes(value)) return { ok: false, error: `kind 只能是 ${STORAGE_CHOICES.kind.join(' / ')}（箱子题）、${SMITHING_CHOICES.kind.join(' / ')}（锻造台题）或 ${GRINDSTONE_CHOICES.kind.join(' / ')}（砂轮题）` }
+      // 箱子题（take / put / mix）、锻造台题（upgrade / trim）、砂轮题（item / book / mix）和告示牌题（text / color / wax）共用 kind，这里只查是不是其中之一，场地自己的 setup 再按题型校验
+      const choices = [...STORAGE_CHOICES.kind, ...SMITHING_CHOICES.kind, ...GRINDSTONE_CHOICES.kind, ...SIGN_CHOICES.kind]
+      if (!choices.includes(value)) return { ok: false, error: `kind 只能是 ${STORAGE_CHOICES.kind.join(' / ')}（箱子题）、${SMITHING_CHOICES.kind.join(' / ')}（锻造台题）、${GRINDSTONE_CHOICES.kind.join(' / ')}（砂轮题）或 ${SIGN_CHOICES.kind.join(' / ')}（告示牌题）` }
       out[key] = value
     } else if (STORAGE_CHOICES[key]) {
       if (!STORAGE_CHOICES[key].includes(value)) return { ok: false, error: `${key} 只能是 ${STORAGE_CHOICES[key].join(' / ')}` }

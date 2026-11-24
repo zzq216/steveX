@@ -14,7 +14,10 @@ import net.minecraft.util.StringUtil;
 
 /**
  * 书与笔 API —— 读取/编辑书页文字，翻页，保存并关闭。
- * 工作流: book/get → book/set (逐页编辑) → book/close
+ * 工作流: book/get → (book/page → book/set)… → book/close
+ *
+ * <p>和原版编辑框一致（告示牌训练场设计方案 Q9）：打字只改当前页，翻页是单独的操作（原版的翻页按钮）；
+ * 在最后一页再往后翻会追加一张空页（BookEditScreen.pageForward 140–152 行）。
  *
  * <p>book/set 按书的编辑框同样的规则查文字（书与笔训练场设计方案 J3 做法 A）：不能有编辑框打不出来的字符（§、控制字符、DEL；换行可以），
  * 最多 1024 个字符，按 114 像素宽折行最多 14 行（BookEditScreen 87–88 行）。不符合就报错、页不变、不截断。
@@ -27,6 +30,8 @@ public class BookApi {
     private static final int PAGE_WIDTH = 114;
     /** 1 秒内客户端线程没做完（Map.of 不收 null，所以给一句明确的话） */
     private static final String TIMEOUT = "timed out waiting for the client thread";
+    /** 书最多 100 页（BookEditScreen.appendPageToBook 182–186 行） */
+    private static final int MAX_PAGES = 100;
 
     public static void register(Map<String, WsHandler> handlers) {
         handlers.put("book/get",   BookApi::getBook);
@@ -60,9 +65,12 @@ public class BookApi {
 
     // ==================== 设置文字 ====================
 
+    /** 把当前页改成 text：只改当前页，翻页用 book/page（Q9）。 */
     private static Map<String, Object> setText(Map<String, Object> params) {
-        int targetPage = params.containsKey("page") ? ((Number) params.get("page")).intValue() : -1;
-        String text = (String) params.getOrDefault("text", "");
+        if (params.containsKey("page")) {
+            return Map.of("status", "error", "message", "book/set only edits the current page; turn pages with book/page first");
+        }
+        if (!(params.get("text") instanceof String text)) return Map.of("status", "error", "message", "text must be a string");
         // J3：编辑框打不出来的字符（StringUtil.filterText 会删掉的）直接报错
         String filtered = StringUtil.filterText(text, true);
         if (!filtered.equals(text)) {
@@ -87,39 +95,10 @@ public class BookApi {
                     return;
                 }
                 var acc = (BookEditScreenAccessor) bookScreen;
-                List<String> pages = acc.getPages();
-                int pageIdx;
-
-                if (targetPage >= 0 && targetPage <= pages.size()) {
-                    // targetPage == pages.size() → 追加新页（最多 100 页）
-                    if (targetPage == pages.size()) {
-                        if (pages.size() >= 100) {
-                            result.error = "max 100 pages reached";
-                            latch.countDown();
-                            return;
-                        }
-                        acc.invokeAppendPageToBook();
-                    }
-                    pageIdx = targetPage;
-                } else if (targetPage > pages.size()) {
-                    result.error = "page " + targetPage + " out of range (max " + pages.size() + ")";
-                    latch.countDown();
-                    return;
-                } else {
-                    pageIdx = acc.getCurrentPage();
-                }
-
-                pages.set(pageIdx, text);
+                acc.getPages().set(acc.getCurrentPage(), text);
                 acc.invokeUpdateLocalCopy();
-
-                // 如果在当前页，刷新编辑器显示（updatePageContent 同时重算页码）
-                if (pageIdx == acc.getCurrentPage()) {
-                    acc.invokeUpdatePageContent();
-                } else {
-                    // 改的不是当前页（比如在后面追加了一页）：编辑框不动，只重算右上角的页码缓存（BookEditScreen 53、156、216 行），
-                    // 否则屏幕上的"共 y 页"要等翻页才更新
-                    acc.setNumberOfPages(acc.invokeGetPageNumberMessage());
-                }
+                // 刷新编辑框显示（updatePageContent 同时重算页码）
+                acc.invokeUpdatePageContent();
                 result.ok = true;
             } else {
                 result.error = "book editor not open";
@@ -133,17 +112,28 @@ public class BookApi {
 
     // ==================== 翻页 ====================
 
+    /**
+     * 翻到第 page 页（0 起）：已有的页直接翻过去（等同于连点翻页按钮）；page 等于总页数时追加一张空页再翻过去，
+     * 等同于在最后一页点"下一页"（pageForward 140–152 行），最多 100 页；再往后报错（Q9）。
+     */
     private static Map<String, Object> goToPage(Map<String, Object> params) {
-        int target = ((Number) params.getOrDefault("page", 0)).intValue();
+        if (!(params.get("page") instanceof Number n) || n.doubleValue() != Math.rint(n.doubleValue())) {
+            return Map.of("status", "error", "message", "page must be an integer");
+        }
+        int target = n.intValue();
         var result = new Object(){ boolean ok = false; String error = TIMEOUT; };
         CountDownLatch latch = new CountDownLatch(1);
         Minecraft.getInstance().execute(() -> {
             var mc = Minecraft.getInstance();
             if (mc.screen instanceof BookEditScreen bookScreen) {
                 var acc = (BookEditScreenAccessor) bookScreen;
-                if (target < 0 || target >= acc.getPages().size()) {
-                    result.error = "page " + target + " out of range (0–" + (acc.getPages().size() - 1) + ")";
+                int size = acc.getPages().size();
+                if (target == size && size >= MAX_PAGES) {
+                    result.error = "the book already has " + MAX_PAGES + " pages";
+                } else if (target < 0 || target > size) {
+                    result.error = "page " + target + " out of range (0–" + size + "; " + size + " appends a blank page)";
                 } else {
+                    if (target == size) acc.invokeAppendPageToBook();
                     acc.setCurrentPage(target);
                     acc.invokeUpdatePageContent();
                     acc.invokeUpdateButtonVisibility();

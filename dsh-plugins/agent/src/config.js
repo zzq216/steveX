@@ -16,6 +16,7 @@ import { crafterOptions } from './training/crafter.js'
 import { tradeOptions } from './training/trade.js'
 import { grindstoneOptions } from './training/grindstone.js'
 import { bookOptions } from './training/book.js'
+import { signOptions } from './training/sign.js'
 import { parseCountSpec } from './training/sampler.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
@@ -46,6 +47,8 @@ const TRADE_ARENA_DEFAULTS = Object.freeze({ level: '1-5', tasks: '1-4', portion
 const GRINDSTONE_ARENA_DEFAULTS = Object.freeze({ tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [] })
 /** 用户自己加的书与笔场地（type: 'book'）没写的字段（书与笔训练场设计方案 §6；exclude 不用，留着和其他场地一致） */
 const BOOK_ARENA_DEFAULTS = Object.freeze({ books: '1-3', pages: '1-6', edits: '1-3', exclude: [] })
+/** 用户自己加的告示牌场地（type: 'sign'）没写的字段（告示牌训练场设计方案 §6；kind: null = 每轮三种题型随机；exclude 不用，留着和其他场地一致） */
+const SIGN_ARENA_DEFAULTS = Object.freeze({ kind: null, edits: '1-3', exclude: [] })
 const CARTOGRAPHY_ARENA_DEFAULTS = Object.freeze({ task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] })
 const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
@@ -230,6 +233,8 @@ export const DEFAULTS = Object.freeze({
      *     timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/砂轮训练场设计方案.md
      * 'book' = 书与笔（没有工作站），字段是 { origin, books: 一轮几本 "k" | "a-b"（1–3）, pages: 每本开局几页（1–8）, edits: 每本改几页（1–4）,
      *     exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/书与笔训练场设计方案.md
+     * 'sign' = 告示牌，字段是 { origin, kind: text | color | wax | null（null = 每轮三种随机）, edits: text 题改几行 "k" | "a-b"（1–4）,
+     *     exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/告示牌训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
@@ -249,7 +254,8 @@ export const DEFAULTS = Object.freeze({
       crafter: { type: 'crafter', origin: [10000, 120, 10360], timeoutSec: 900, portions: '1-16', extra: '0-16', exclude: [] },
       villager: { type: 'trade', origin: [10000, 120, 10390], timeoutSec: 900, level: '1-5', tasks: '1-4', portions: '1-64', extra: '0-16', exclude: { professions: [], items: [] } },
       grindstone: { type: 'grindstone', origin: [10000, 120, 10420], timeoutSec: 600, tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [] },
-      book: { type: 'book', origin: [10000, 120, 10450], timeoutSec: 600, books: '1-3', pages: '1-6', edits: '1-3', exclude: [] }
+      book: { type: 'book', origin: [10000, 120, 10450], timeoutSec: 600, books: '1-3', pages: '1-6', edits: '1-3', exclude: [] },
+      sign: { type: 'sign', origin: [10000, 120, 10480], timeoutSec: 300, kind: null, edits: '1-3', exclude: [] }
     }
   },
   planner: {
@@ -320,10 +326,10 @@ export function normalizeConfig(raw = {}) {
       continue
     }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
-      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil', 'grindstone'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : arena.type === 'loom' ? 'banner, dye, banner pattern or pattern item ids' : ['cartography', 'book'].includes(arena.type) ? 'strings (unused)' : arena.type === 'brew' ? 'ingredient, potion or bottle ids' : 'recipe names'}`)
+      throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil', 'grindstone'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : arena.type === 'loom' ? 'banner, dye, banner pattern or pattern item ids' : ['cartography', 'book', 'sign'].includes(arena.type) ? 'strings (unused)' : arena.type === 'brew' ? 'ingredient, potion or bottle ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew', 'crafter', 'trade', 'grindstone', 'book'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone" or "book"`)
+    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew', 'crafter', 'trade', 'grindstone', 'book', 'sign'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone", "book" or "sign"`)
     if (type === 'crafter') {
       try {
         crafterOptions({}, arena)
@@ -370,6 +376,14 @@ export function normalizeConfig(raw = {}) {
     if (type === 'smithing') {
       try {
         parseTasksSpec(arena.tasks)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
+    if (type === 'sign') {
+      try {
+        signOptions({}, arena)
       } catch (error) {
         throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
       }
@@ -526,6 +540,8 @@ function normalizeTraining(raw = {}) {
             ? { ...GRINDSTONE_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
           : type === 'book'
             ? { ...BOOK_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'sign'
+            ? { ...SIGN_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
         : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }

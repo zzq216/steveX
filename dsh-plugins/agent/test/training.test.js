@@ -1326,7 +1326,7 @@ test('config: the stonecutter arena has its own defaults and checks; json.stonec
   assert.ok(config.jsonSources.stonecutting.endsWith(path.join('data', 'stonecutting.json')))
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { bypass: 'maybe' } } } }), /stonecutter.bypass must be one of exclude \| keep/)
   assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { materials: '4' } } } }), /stonecutter.materials 要写/)
-  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone" or "book"/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { stonecutter: { type: 'cut' } } } }), /"craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone", "book" or "sign"/)
 })
 
 const ARENAS_CUT = { stonecutter: { type: 'stonecut', origin: [0, 100, 90], timeoutSec: 900, materials: '1-3', slots: '1-9', fill: 'random', styles: '1-3', bypass: 'exclude', exclude: [] } }
@@ -2750,7 +2750,7 @@ test('smithing options: tasks, kind, base, pattern and material; upgrades have n
   assert.throws(() => smithingOptions({ kind: 'take' }), /锻造台场地的 kind 只能是 upgrade \/ trim/)
   const parsed = parseTrainArgs(['smithing', 'tasks=1-3', 'kind=trim', 'base=minecraft:iron_chestplate', 'pattern=minecraft:wild', 'material=minecraft:gold'])
   assert.deepEqual([parsed.ok, parsed.tasks, parsed.kind, parsed.base, parsed.pattern, parsed.material], [true, '1-3', 'trim', 'minecraft:iron_chestplate', 'minecraft:wild', 'minecraft:gold'])
-  assert.match(parseTrainArgs(['smithing', 'kind=foo']).error, /kind 只能是 take \/ put \/ mix（箱子题）、upgrade \/ trim（锻造台题）或 item \/ book \/ mix（砂轮题）/)
+  assert.match(parseTrainArgs(['smithing', 'kind=foo']).error, /kind 只能是 take \/ put \/ mix（箱子题）、upgrade \/ trim（锻造台题）、item \/ book \/ mix（砂轮题）或 text \/ color \/ wax（告示牌题）/)
   assert.match(parseTrainArgs(['smithing', 'tasks=0']).error, /tasks 要写 k 或 a-b/)
   const config = normalizeConfig({ logger: null })
   assert.deepEqual(config.training.arenas.smithing, { type: 'smithing', origin: [10000, 120, 10210], timeoutSec: 600, tasks: '1-4', exclude: [] })
@@ -4475,7 +4475,7 @@ test('grindstone options: tasks 1–4, kind item / book / mix, enchants 1–5, c
   assert.equal(args.ok, true, args.error)
   assert.deepEqual([args.tasks, args.kind, args.enchants, args.curses], ['2-4', 'book', '2', '0-2'])
   assert.match(parseTrainArgs(['grindstone', 'curses=5']).error, /curses 只能是 0 \/ 1（铁砧题）或 k、a-b（砂轮题，0–2）/)
-  assert.match(parseTrainArgs(['grindstone', 'kind=foo']).error, /或 item \/ book \/ mix（砂轮题）/)
+  assert.match(parseTrainArgs(['grindstone', 'kind=foo']).error, /、item \/ book \/ mix（砂轮题）或 text \/ color \/ wax（告示牌题）/)
   assert.equal(parseTrainArgs(['anvil', 'curses=1']).curses, '1', 'the anvil switch still parses')
 
   const config = normalizeConfig({})
@@ -4873,4 +4873,247 @@ test('report: book records group by k / hand / ops with a column per fault; cart
   const byOps = summarize(records, { by: 'ops' })
   assert.deepEqual(byOps.rows.map((r) => r.key).sort(), ['只改写', '有追加', '有清空', '有追加、有清空'].sort())
   assert.match(formatSummary(byOps).split('\n')[0], /^修改种类\t/)
+})
+
+const signModule = await import('../src/training/sign.js')
+const ARENAS_SIGN = { sign: { type: 'sign', origin: [0, 100, 480], timeoutSec: 300, kind: null, edits: '1-3', exclude: [] } }
+const blankBack = () => ({ lines: ['', '', '', ''], color: 'black', glow: false })
+
+test('sign options: kind text / color / wax or random, edits 1–4 only for text (§5.2); config defaults and checks', () => {
+  const { signOptions } = signModule
+  assert.deepEqual(signOptions({}, ARENAS_SIGN.sign), { kind: null, edits: { lo: 1, hi: 3 } })
+  assert.deepEqual(signOptions({ kind: 'text', edits: '4' }), { kind: 'text', edits: { lo: 4, hi: 4 } })
+  assert.deepEqual(signOptions({ kind: 'wax' }, ARENAS_SIGN.sign), { kind: 'wax', edits: { lo: 1, hi: 3 } })
+  assert.throws(() => signOptions({ kind: 'take' }), /告示牌题的 kind 只能是 text \/ color \/ wax/)
+  assert.throws(() => signOptions({ kind: 'color', edits: '2' }), /edits= 只用于 text 题，不能和 kind=color 一起用/)
+  assert.throws(() => signOptions({ edits: '0-2' }), /edits 要写 k 或 a-b（1–4/)
+
+  const args = parseTrainArgs(['sign', 'kind=color', 'runs=2'])
+  assert.equal(args.ok, true, args.error)
+  assert.deepEqual([args.kind, args.runs], ['color', 2])
+  assert.match(parseTrainArgs(['sign', 'kind=foo']).error, /或 text \/ color \/ wax（告示牌题）/)
+
+  const config = normalizeConfig({})
+  assert.deepEqual(config.training.arenas.sign, { type: 'sign', origin: [10000, 120, 10480], timeoutSec: 300, kind: null, edits: '1-3', exclude: [] })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { s2: { type: 'sign', origin: [0, 0, 0] } } } }).training.arenas.s2, { kind: null, edits: '1-3', exclude: [], type: 'sign', origin: [0, 0, 0] })
+  assert.throws(() => normalizeConfig({ training: { arenas: { s2: { type: 'sign', origin: [0, 0, 0], kind: 'gold' } } } }), /training\.arenas\.s2\.告示牌题的 kind/)
+})
+
+test('sign sampler: three kinds; text edits 1–3 lines with clears only on written lines; color has text and a new dye colour; wax gives honeycomb; 32–64 items, empty hand, unique 2–6 character lines, reproducible (Q4–Q7)', () => {
+  const { signOptions, sampleSignRound, COLORS, dyeOf, HONEYCOMB, TEXT_MIN, TEXT_MAX } = signModule
+  const options = signOptions({}, ARENAS_SIGN.sign)
+  const hanzi = new Set(anvilModule.HANZI)
+  const alnum = /^[A-Za-z0-9]$/
+  const kinds = new Map()
+  let clears = 0
+  let emptyStarts = 0
+  for (let seed = 0; seed < 400; seed++) {
+    const p = sampleSignRound(seed, options)
+    kinds.set(p.kind, (kinds.get(p.kind) ?? 0) + 1)
+    assert.equal(p.lines.length, 4)
+    assert.ok(COLORS.includes(p.color))
+    assert.ok(p.selectedSlot >= 0 && p.selectedSlot <= 8)
+    assert.notEqual(p.selectedSlot, p.item?.slot, 'the hand starts empty (Q6)')
+    if (p.lines.every((l) => l === '')) emptyStarts++
+    const texts = [...p.lines.filter(Boolean), ...p.edits.filter((e) => e.op === 'write').map((e) => e.text)]
+    assert.equal(new Set(texts).size, texts.length, 'every line in a round is unique')
+    for (const t of texts) {
+      const chars = [...t]
+      assert.ok(chars.length >= TEXT_MIN && chars.length <= TEXT_MAX, t)
+      assert.ok(chars.every((c) => hanzi.has(c) || alnum.test(c)), t)
+      assert.ok(chars.some((c) => hanzi.has(c)) && chars.some((c) => alnum.test(c)), t)
+    }
+    if (p.kind === 'text') {
+      assert.equal(p.item, null)
+      assert.equal(p.goalColor, p.color)
+      assert.equal(p.wax, false)
+      assert.ok(p.edits.length >= 1 && p.edits.length <= 3)
+      const lines = p.edits.map((e) => e.line)
+      assert.deepEqual(lines, [...new Set(lines)].sort((a, b) => a - b))
+      const goal = [...p.lines]
+      for (const e of p.edits) {
+        if (e.op === 'clear') {
+          clears++
+          assert.notEqual(p.lines[e.line - 1], '', 'only written lines are cleared')
+        }
+        goal[e.line - 1] = e.op === 'clear' ? '' : e.text
+      }
+      assert.deepEqual(p.goal, goal)
+      assert.notDeepEqual(p.goal, p.lines)
+    } else {
+      assert.deepEqual(p.goal, p.lines)
+      assert.deepEqual(p.edits, [])
+      assert.ok(p.item.slot >= 0 && p.item.slot < 36)
+      assert.ok(p.item.count >= 32 && p.item.count <= 64)
+      if (p.kind === 'color') {
+        assert.ok(p.lines.some((l) => l !== ''), 'a dye needs text on the sign (F6)')
+        assert.notEqual(p.goalColor, p.color)
+        assert.equal(p.item.id, dyeOf(p.goalColor))
+        assert.equal(p.wax, false)
+      } else {
+        assert.equal(p.item.id, HONEYCOMB)
+        assert.equal(p.goalColor, p.color)
+        assert.equal(p.wax, true)
+      }
+    }
+  }
+  assert.deepEqual([...kinds.keys()].sort(), ['color', 'text', 'wax'])
+  assert.ok([...kinds.values()].every((n) => n > 80), JSON.stringify([...kinds]))
+  assert.ok(clears > 0 && emptyStarts > 0)
+  assert.deepEqual(sampleSignRound(7, options), sampleSignRound(7, options))
+  assert.ok([...Array(50).keys()].every((s) => sampleSignRound(s, signOptions({ kind: 'wax' })).kind === 'wax'))
+})
+
+test('sign judge: lines, colour, wax, blank back and a closed editor; editing, text, color, wax, back, cursor, dropped; lost; doomed when waxed after a change (Q8)', () => {
+  const { judgeSign, doomedReason, editsText } = signModule
+  const picked = { kind: 'text', lines: ['a', '', 'c', ''], goal: ['A', '', '', ''], color: 'red', goalColor: 'red', wax: false, edits: [{ line: 1, op: 'write', text: 'A' }, { line: 3, op: 'clear' }] }
+  const sign = (over = {}) => ({ front: { lines: ['A', '', '', ''], color: 'red', glow: false }, back: blankBack(), waxed: false, editing: false, ...over })
+  const judgeWith = (final, extra = {}) => judgeSign({ stopped: false, timedOut: false, taskState: 'done', picked, final: { sign: sign(), carried: {}, dropped: {}, stationIntact: true, ...final }, ...extra })
+  assert.deepEqual(judgeWith({}), { outcome: 'success', reached: true, faults: [] })
+  assert.deepEqual(judgeWith({ sign: sign({ editing: true }) }), { outcome: 'false_success', reached: false, faults: ['editing'] })
+  assert.deepEqual(judgeWith({ sign: sign({ front: { lines: ['a', '', 'c', ''], color: 'red', glow: false } }) }).faults, ['text'])
+  assert.deepEqual(judgeWith({ sign: sign({ front: { lines: ['A', '', '', ''], color: 'blue', glow: false } }) }).faults, ['color'])
+  assert.deepEqual(judgeWith({ sign: sign({ waxed: true }) }).faults, ['wax'])
+  assert.deepEqual(judgeWith({ sign: sign({ back: { lines: ['x', '', '', ''], color: 'black', glow: false } }) }).faults, ['back'])
+  assert.deepEqual(judgeWith({ carried: { 'minecraft:red_dye': 1 } }).faults, ['cursor'])
+  assert.equal(judgeWith({ dropped: { 'minecraft:red_dye': 3 } }).outcome, 'success', 'leftover items do not matter (Q8)')
+  assert.deepEqual(judgeWith({ dropped: { 'minecraft:red_dye': 3 } }, { taskState: 'failed' }).faults, ['dropped'])
+  assert.equal(judgeWith({ sign: sign({ front: { lines: ['A', '', '', ''], color: 'red', glow: true } }) }).outcome, 'success', 'glow is not judged')
+  assert.equal(judgeWith({ sign: null, stationIntact: false }).outcome, 'lost')
+  assert.equal(judgeWith({}, { taskState: 'failed' }).outcome, 'failed')
+  assert.equal(judgeWith({ sign: sign({ editing: true }) }, { timedOut: true, taskState: 'running' }).outcome, 'timeout')
+  assert.equal(judgeWith({}, { stopped: true }).outcome, 'aborted')
+
+  const wax = { kind: 'wax', lines: ['a', '', '', ''], goal: ['a', '', '', ''], color: 'red', goalColor: 'red', wax: true, edits: [] }
+  assert.equal(doomedReason(wax, { sign: sign({ front: { lines: ['a', '', '', ''], color: 'red', glow: false }, waxed: true }) }), null, 'waxing the untouched sign is the goal')
+  assert.equal(doomedReason(wax, { sign: sign({ front: { lines: ['b', '', '', ''], color: 'red', glow: false }, waxed: false }) }), null, 'not waxed yet: still fixable')
+  assert.match(doomedReason(wax, { sign: sign({ front: { lines: ['b', '', '', ''], color: 'red', glow: false }, waxed: true }) }), /涂了蜡，但正面文字不是目标/)
+  assert.equal(doomedReason(wax, { sign: null }), null)
+  const doomed = judgeSign({ stopped: false, timedOut: false, taskState: 'failed', picked: wax, final: { sign: sign({ front: { lines: ['b', '', '', ''], color: 'red', glow: false }, waxed: true }), carried: {}, dropped: {} }, doomed: { reason: 'x', at: 1 } })
+  assert.deepEqual(doomed, { outcome: 'failed', reached: false, faults: ['text', 'wax'] })
+
+  assert.equal(editsText(picked), '- 正面第 1 行改成「A」；\n- 正面第 3 行清空。')
+  assert.equal(editsText({ kind: 'color', goalColor: 'light_blue' }), '- 物品栏里有 minecraft:light_blue_dye，用它把正面文字的颜色改成淡蓝色。')
+  assert.equal(editsText(wax), '- 物品栏里有 minecraft:honeycomb，用它给告示牌涂蜡。')
+})
+
+function signHarness({ plan = 'do', aimOk = true, badState = false } = {}) {
+  const world = { params: null, state: {} }
+  const script = ({ req, executor, clock, setBusy }) => setImmediate(async () => {
+    const tick = () => new Promise((resolve) => setImmediate(resolve))
+    await tick()
+    req.closed = true
+    req.answered = true
+    executor.task = { taskId: req.taskId, state: 'running' }
+    executor.emit('task', { taskId: req.taskId, state: 'running', version: 1 })
+    for (let i = 0; i < 3; i++) await tick()
+    const goal = world.params.expect.sign
+    if (plan === 'scribble-then-wax') {
+      // 先改了字再涂蜡：训练器在下一次轮询时发现并中止
+      world.state.sign = { ...world.state.sign, front: { ...world.state.sign.front, lines: ['zz', '', '', ''] }, waxed: true }
+      while (executor.task.state === 'running') await tick()
+      return
+    }
+    if (plan === 'do') {
+      world.state.sign = { front: { lines: goal.lines, color: goal.color, glow: false }, back: blankBack(), waxed: goal.waxed, editing: false }
+      world.state.reachedAtMs = clock()
+    }
+    for (let i = 0; i < 3; i++) await tick()
+    executor.task.state = 'done'
+    setBusy(2)
+    executor.emit('task', { taskId: req.taskId, state: 'done', version: 2 })
+  })
+  const h = harness({
+    script, arenas: ARENAS_SIGN,
+    prepareData: (params) => {
+      world.params = params
+      const state = { front: { lines: badState ? ['?', '', '', ''] : params.sign.lines, color: params.sign.color, glow: false }, back: blankBack(), waxed: false, editing: false }
+      world.state = { sign: state, held: {}, carried: {}, dropped: {}, selectedSlot: params.selectedSlot, stationIntact: true, reachedAtMs: null }
+      return { aimOk, station: 'sign', sign: { state, items: params.items.map(({ slot, id, count }) => ({ slot, id, count })), selectedSlot: params.selectedSlot } }
+    },
+    statusData: () => world.state
+  })
+  return { ...h, world }
+}
+
+test('sign run: prepare carries the opening sign, items, the empty hand and the goal; the text only states the goal (Q10); doing it succeeds', async () => {
+  const { COLOR_NAMES } = signModule
+  const h = signHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'sign', runs: 9, seed: 5 })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /kind=随机，edits=1-3（只用于 text 题）/)
+  await h.done()
+  const records = h.records('sign')
+  assert.equal(records.length, 9)
+  const prepares = h.calls.filter(([m]) => m === 'arena/prepare').map(([, p]) => p)
+  const kinds = new Set()
+  for (const [i, record] of records.entries()) {
+    kinds.add(record.kind)
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.faults, record.doomed, record.reached], [[], null, true])
+    const p = prepares[i]
+    assert.equal(p.station, 'sign')
+    assert.deepEqual(p.sign, { lines: record.lines, color: record.color.from })
+    assert.deepEqual(p.expect, { sign: { lines: record.goal, color: record.color.to, waxed: record.wax } })
+    assert.deepEqual(p.items, record.items)
+    assert.equal(p.selectedSlot, record.selectedSlot)
+    const text = h.instructions[i]
+    assert.ok(text.startsWith('你正前方有一个告示牌。请按下面的要求修改它：\n'), text)
+    assert.ok(text.trimEnd().endsWith('没有提到的保持原样。'), text)
+    if (record.kind === 'text') for (const e of record.edits) assert.ok(text.includes(e.op === 'clear' ? `- 正面第 ${e.line} 行清空` : `- 正面第 ${e.line} 行改成「${e.text}」`), text)
+    if (record.kind === 'color') assert.ok(text.includes(`- 物品栏里有 minecraft:${record.color.to}_dye，用它把正面文字的颜色改成${COLOR_NAMES[record.color.to]}。`), text)
+    if (record.kind === 'wax') assert.ok(text.includes('- 物品栏里有 minecraft:honeycomb，用它给告示牌涂蜡。'), text)
+    if (record.kind === 'text') assert.doesNotMatch(text, /minecraft:|物品栏/, 'Q10: text rounds name no items')
+    assert.doesNotMatch(text, /右键|sign\/|方向键/, 'Q10: no how-to')
+    assert.ok(!text.includes('\r'))
+  }
+  assert.deepEqual([...kinds].sort(), ['color', 'text', 'wax'])
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/9 轮：会话 run-1，告示牌 (text|color|wax)/)
+})
+
+test('sign run: waxing after changing the text is caught while polling and judged failed (doomed); setup mismatches stop the batch; option checks', async () => {
+  const doomedRun = signHarness({ plan: 'scribble-then-wax' })
+  assert.equal(doomedRun.trainer.start({ sessionId: 'console', arena: 'sign', kind: 'wax', seed: 2 }).ok, true)
+  await doomedRun.done()
+  const [rec] = doomedRun.records('sign')
+  assert.equal(rec.outcome, 'failed', JSON.stringify(rec))
+  assert.equal(rec.doomed, 'waxed-changed')
+  assert.equal(typeof rec.doomedMs, 'number')
+  assert.ok(rec.faults.includes('text') && rec.faults.includes('wax'), JSON.stringify(rec.faults))
+
+  const lazy = signHarness({ plan: 'nothing' })
+  assert.equal(lazy.trainer.start({ sessionId: 'console', arena: 'sign', kind: 'color', seed: 4 }).ok, true)
+  await lazy.done()
+  const lazyRec = lazy.records('sign')[0]
+  assert.deepEqual([lazyRec.outcome, lazyRec.faults], ['false_success', ['color']])
+
+  const off = signHarness({ aimOk: false })
+  assert.equal(off.trainer.start({ sessionId: 'console', arena: 'sign', runs: 3 }).ok, true)
+  await off.done()
+  assert.equal(off.records('sign').length, 1)
+  assert.match(off.records('sign')[0].error, /crosshair is not on the sign/)
+
+  const bad = signHarness({ badState: true })
+  assert.equal(bad.trainer.start({ sessionId: 'console', arena: 'sign', kind: 'wax', seed: 1 }).ok, true)
+  await bad.done()
+  assert.match(bad.records('sign')[0].error, /告示牌的开局内容和题目不一致/)
+
+  const h = signHarness()
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'sign', item: 'stick' }).error, /告示牌题没有 item= 选项/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'sign', books: '2' }).error, /不认这些选项：books/)
+  assert.match(h.trainer.start({ sessionId: 'console', arena: 'sign', kind: 'wax', edits: '2' }).error, /edits= 只用于 text 题/)
+})
+
+test('report: sign records group by kind / edits with doomed and a column per fault', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const rec = (kind, outcome, faults = [], edits = [], doomed = null) => ({ batch: 'b1', target: 'x', kind, lines: ['', '', '', ''], goal: ['', '', '', ''], edits, color: { from: 'red', to: 'red' }, wax: kind === 'wax', items: [], selectedSlot: 0, doomed, faults, outcome, reachedMs: 4000, taskMs: 6000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [rec('text', 'success', [], [{ line: 1 }]), rec('text', 'false_success', ['editing'], [{ line: 1 }, { line: 2 }]), rec('color', 'false_success', ['color']), rec('wax', 'failed', ['text', 'wax'], [], 'waxed-changed')]
+  const byKind = summarize(records, { by: 'kind' })
+  assert.equal(byKind.signer, true)
+  assert.deepEqual(byKind.rows.map((r) => [r.key, r.runs]).sort(), [['color', 1], ['text', 2], ['wax', 1]])
+  assert.deepEqual(byKind.total.signFaults, { editing: 1, text: 1, color: 1, wax: 1, back: 0, cursor: 0, dropped: 0 })
+  assert.equal(byKind.total.doomedRuns, 1)
+  assert.match(formatSummary(byKind).split('\n')[0], /^题型\t轮数\t成功率\t虚报\t失败\t超时\t中止\t丢失\t涂蜡后改不了\t编辑框没关\t文字不对\t颜色不对\t蜡不对\t改了背面\t光标上有东西\t扔在地上\t达成中位/)
+  assert.deepEqual(summarize(records, { by: 'edits' }).rows.map((r) => r.key).sort(), ['1 行', '2 行', '—'].sort())
+  assert.match(formatSummary(summarize(records, { by: 'edits' })).split('\n')[0], /^改几行\t/)
 })

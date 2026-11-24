@@ -42,7 +42,12 @@ public class ArenaApi {
             List<ArenaManager.Give> chestItems = params.get("chestItems") == null ? List.of() : gives(params.get("chestItems"), "chestItems");
             ArenaManager.Expect expect = expect(params.get("expect"));
             List<String> watch = params.get("watch") == null ? List.of() : strings(params.get("watch"), "watch");
-            if (items.isEmpty() && chestItems.isEmpty() && params.get("mount") == null) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
+            // 告示牌训练场（告示牌方案 Q4）：开局正面 4 行和颜色；text 题不发物品
+            name.modid.arena.SignArena.Setup signSetup = signSetup(params.get("sign"));
+            if (items.isEmpty() && chestItems.isEmpty() && params.get("mount") == null && signSetup == null) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
+            // 告示牌方案 Q7：开局行、目标行都要写得进编辑框（宽度用客户端字体量，和 sign/set 同一个检查）
+            if (signSetup != null) checkSignWidths(signSetup.lines(), "sign.lines");
+            if (expect != null && expect.sign() != null) checkSignWidths(expect.sign().lines(), "expect.sign.lines");
             long dayTime = AgentWebSocketServer.num(params, "dayTime", 1000);
             long seed = params.get("seed") instanceof Number n ? n.longValue() : 0L;
             // 附魔台训练场（附魔台方案 N2、N4）：书架数、经验等级、附魔种子；不给 = 书架 15 个，经验和种子不动；其他工作站忽略
@@ -56,7 +61,7 @@ public class ArenaApi {
             // 书与笔训练场（书与笔方案 J4）：当前选中的快捷栏格 0–8；不给 = 不动
             Integer selectedSlot = optionalInt(params, "selectedSlot");
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot));
+            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot, signSetup));
         });
         // 村民交易训练场（村民交易方案 V3）：按职业、类型、等级、交易项种子生成交易项，只读、不碰世界
         handlers.put("arena/trade-preview", params -> {
@@ -232,6 +237,7 @@ public class ArenaApi {
      * 交易 { trade: { uses: [n...], held: { id: n } } }（村民交易方案 V9；uses 的个数 = 村民的交易项数）；
      * 砂轮 { grindstone: { goals: [{ id, enchantments: { id: level }, damage }] } }（砂轮方案 K8；goals 的顺序和 items 一致）；
      * 书 { book: { goals: [[页文字...], ...] } }（书与笔方案 J11；按多重集合比）；
+     * 告示牌 { sign: { lines: [4 个字符串], color, waxed } }（告示牌方案 Q8、Q11）；
      * 坐骑 { mount: { saddle?: id | null, body?: id | null, chest: { id: n }, inventory: { id: n } } }（坐骑方案 H6；写了 saddle / body 才检查，null = 要空着）。
      * 省略 → null（不检测到达）。数量为 0 的项去掉，与 mod 的计数口径一致。
      */
@@ -245,6 +251,11 @@ public class ArenaApi {
             return new ArenaManager.Expect(new ArenaManager.MountGoal(
                     g.containsKey("saddle"), (String) g.get("saddle"), g.containsKey("body"), (String) g.get("body"),
                     Map.copyOf(counts(g.get("chest"), "expect.mount.chest")), Map.copyOf(counts(g.get("inventory"), "expect.mount.inventory"))));
+        }
+        if (m.containsKey("sign")) {
+            String usage = "expect.sign must be { lines: [4 strings], color: string, waxed: boolean }";
+            if (!(m.get("sign") instanceof Map<?, ?> g) || !(g.get("color") instanceof String color) || !(g.get("waxed") instanceof Boolean waxed)) throw new IllegalArgumentException(usage);
+            return new ArenaManager.Expect(new name.modid.arena.SignArena.Spec(List.copyOf(strings(g.get("lines"), "expect.sign.lines")), color, waxed));
         }
         if (m.containsKey("book")) {
             String usage = "expect.book must be { goals: [[string...], ...] }";
@@ -419,6 +430,28 @@ public class ArenaApi {
         Integer level = optionalInt(params, "level");
         if (level == null || !(params.get("offerSeed") instanceof Number seed) || seed.doubleValue() != Math.rint(seed.doubleValue())) throw new IllegalArgumentException(usage);
         return new name.modid.arena.VillagerArena.Setup(profession, type, level, seed.longValue());
+    }
+
+    /** 告示牌方案 Q4：{ lines: [4 个字符串], color }；缺省 → null。 */
+    private static name.modid.arena.SignArena.Setup signSetup(Object v) {
+        if (v == null) return null;
+        if (!(v instanceof Map<?, ?> m) || !(m.get("color") instanceof String color)) throw new IllegalArgumentException("sign must be { lines: [4 strings], color: string }");
+        return new name.modid.arena.SignArena.Setup(List.copyOf(strings(m.get("lines"), "sign.lines")), color);
+    }
+
+    /** 告示牌方案 Q7：每行在客户端线程上按编辑框的规则查（{@link SignApi#lineError}，立着的告示牌行宽 90 像素）；不合格或等不到客户端线程就报错。 */
+    private static void checkSignWidths(List<String> lines, String what) {
+        String error = AgentWebSocketServer.runOnClient(2_000, "Sign width check", ref -> {
+            var font = Minecraft.getInstance().font;
+            String found = "";
+            for (int i = 0; i < lines.size() && found.isEmpty(); i++) {
+                String e = SignApi.lineError(font, SignApi.STANDING_SIGN_WIDTH, lines.get(i));
+                if (e != null) found = what + "[" + i + "]: " + e;
+            }
+            ref.value = found;
+        });
+        if (error == null) throw new IllegalStateException("timed out waiting for the client thread to measure " + what);
+        if (!error.isEmpty()) throw new IllegalArgumentException(error);
     }
 
     /** 可选的整数参数：缺省或 null → null；不是整数 → 报错。 */
