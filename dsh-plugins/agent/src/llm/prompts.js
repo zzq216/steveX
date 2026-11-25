@@ -17,7 +17,7 @@ export const PROMPT_FILES = Object.freeze({
   system: ['identity', 'authoring'],
   skills: ['outline', 'expand', 'recover', 'reflect', 'review', 'fast_reflect', 'fast_author', 'fact_check', 'fact_record', 'curate'],
   requests: ['plan', 'expand', 'recover', 'escalate', 'failed', 'died', 'reminder', 'retry', 'task_end', 'reflect', 'reflect_reminder', 'reflect_retry', 'curate', 'curate_reminder', 'fast_batch', 'fast_reminder', 'fast_retry', 'fact_check', 'fact_reminder'],
-  training: ['craft2x2_named', 'craft2x2_hidden', 'craft2x2_multi', 'craft3x3_named', 'craft3x3_hidden', 'craft3x3_multi', 'chest_take', 'chest_put', 'chest_take_multi', 'chest_put_multi', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil_merge', 'anvil_rename', 'anvil_both', 'smithing', 'mount_equip', 'mount_unequip', 'loom', 'cartography', 'brew', 'crafter', 'trade', 'grindstone', 'book', 'sign', 'bow']
+  training: ['craft2x2_named', 'craft2x2_hidden', 'craft2x2_multi', 'craft3x3_named', 'craft3x3_hidden', 'craft3x3_multi', 'chest_take', 'chest_put', 'chest_take_multi', 'chest_put_multi', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil_merge', 'anvil_rename', 'anvil_both', 'smithing', 'mount_equip', 'mount_unequip', 'loom', 'cartography', 'brew', 'crafter', 'trade', 'grindstone', 'book', 'sign', 'bow', 'crossbow']
 })
 
 export function loadPrompts(dir) {

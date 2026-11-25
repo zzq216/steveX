@@ -12,11 +12,14 @@ import { parseRangeSpec } from './storage.js'
  * - 判定（Q6、Q7）：mod 登记每一支箭；每个标靶都被一支拉满的箭射中过指定面算到达；
  *   离开平台、箭用完还没全中就提前结束（doomed）；aborted → lost → timeout → success / false_success / failed
  * - 判定说明（Q13）：每一箭的结果、射出时服务端的朝向、相对目标点的偏移，交给本轮的复盘
+ * - 弩（第三稿，Q14–Q20）：选项 weapon=bow|crossbow|any，一轮只用一种武器；弩的初速 3.15、偏差和弓相同（F14、F15）；
+ *   弩射出的箭都是暴击箭，不判 weak；装在弩里的箭（status 的 loaded）算进剩余箭数（Q17）
  */
 
 export const INVENTORY_SLOTS = 36
 export const MAX_TARGETS = 4
 export const BOW = 'minecraft:bow'
+export const CROSSBOW = 'minecraft:crossbow'
 export const ARROW = 'minecraft:arrow'
 /** 空场地相对原点的范围（含两端，Q1） */
 export const FIELD = { x: [2, 49], y: [-21, 26], z: [-24, 23] }
@@ -34,6 +37,17 @@ export const SPAWN_DROP = 0.1
 export const SPEED = 3
 export const DRAG = 0.99
 export const GRAVITY = 0.05
+/** 弩的初速（F14，原版是 float 3.15F） */
+export const CROSSBOW_SPEED = Math.fround(3.15)
+/** 武器（第三稿 Q14）：物品、初速、任务文案模板、名字 */
+export const WEAPONS = {
+  bow: { item: BOW, speed: SPEED, template: 'bow', name: '弓' },
+  crossbow: { item: CROSSBOW, speed: CROSSBOW_SPEED, template: 'crossbow', name: '弩' }
+}
+/** weapon= 的取值：any 每轮等概率抽一种 */
+export const WEAPON_CHOICES = ['bow', 'crossbow', 'any']
+/** 记录里的武器；旧记录没有这个字段，按弓算（Q20） */
+export const weaponOf = (record) => record?.weapon ?? 'bow'
 const MAX_TICKS = 400
 const SAMPLE_ATTEMPTS = 200
 const POSITION_TRIES = 3000
@@ -73,11 +87,18 @@ export function parseDistSpec(text) {
   return { lo, hi }
 }
 
+/** weapon=bow|crossbow|any（第三稿 Q14） */
+export function parseWeaponSpec(text) {
+  if (!WEAPON_CHOICES.includes(String(text))) throw new Error(`weapon 只能是 ${WEAPON_CHOICES.join(' / ')}，收到 "${text}"`)
+  return String(text)
+}
+
 /** 选项（§5.2）：命令行的优先，没写的用场地配置 */
 export function bowOptions(args = {}, config = {}) {
   return {
     targets: parseRangeSpec('targets', MAX_TARGETS, args.targets ?? config.targets ?? '1-4'),
-    dist: parseDistSpec(args.dist ?? config.dist ?? '8-40')
+    dist: parseDistSpec(args.dist ?? config.dist ?? '8-40'),
+    weapon: parseWeaponSpec(args.weapon ?? config.weapon ?? 'bow')
   }
 }
 
@@ -94,12 +115,12 @@ export function eyePoint(origin) {
 }
 
 /**
- * 仰角 theta（弧度）、满蓄力射出后，水平走到 d 时的高度（相对出发点）；走不到 → null。
+ * 仰角 theta（弧度）、以初速 speed（缺省弓满蓄力）射出后，水平走到 d 时的高度（相对出发点）；走不到 → null。
  * 每 tick 先按当前速度移动，再乘阻力，再减重力（F4）。
  */
-export function heightAt(theta, d) {
-  let vx = SPEED * Math.cos(theta)
-  let vy = SPEED * Math.sin(theta)
+export function heightAt(theta, d, speed = SPEED) {
+  let vx = speed * Math.cos(theta)
+  let vy = speed * Math.sin(theta)
   let x = 0
   let y = 0
   for (let t = 0; t < MAX_TICKS; t++) {
@@ -117,11 +138,11 @@ export function heightAt(theta, d) {
 }
 
 /** 低弧线：水平距离 d、高度差 h 要用的仰角（弧度）；够不着 → null */
-export function solvePitch(d, h) {
+export function solvePitch(d, h, speed = SPEED) {
   let best = -Infinity
   let bestTheta = null
   for (let deg = -89; deg <= 89; deg += 0.5) {
-    const y = heightAt((deg * Math.PI) / 180, d)
+    const y = heightAt((deg * Math.PI) / 180, d, speed)
     if (y !== null && y > best) {
       best = y
       bestTheta = (deg * Math.PI) / 180
@@ -132,7 +153,7 @@ export function solvePitch(d, h) {
   let hi = bestTheta
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2
-    const y = heightAt(mid, d)
+    const y = heightAt(mid, d, speed)
     if (y === null || y < h) lo = mid
     else hi = mid
   }
@@ -140,15 +161,15 @@ export function solvePitch(d, h) {
 }
 
 /** 从 from 射向 point 的低弧线轨迹（每 tick 一个点，走过 point 再多走一段）；够不着 → null */
-export function trajectory(from, point) {
+export function trajectory(from, point, speed = SPEED) {
   const dx = point[0] - from[0]
   const dz = point[2] - from[2]
   const d = Math.hypot(dx, dz)
-  const theta = solvePitch(d, point[1] - from[1])
+  const theta = solvePitch(d, point[1] - from[1], speed)
   if (theta === null) return null
   const ux = d > 0 ? dx / d : 0
   const uz = d > 0 ? dz / d : 0
-  let v = [SPEED * Math.cos(theta) * ux, SPEED * Math.sin(theta), SPEED * Math.cos(theta) * uz]
+  let v = [speed * Math.cos(theta) * ux, speed * Math.sin(theta), speed * Math.cos(theta) * uz]
   let p = [...from]
   const points = [p]
   for (let t = 0; t < MAX_TICKS; t++) {
@@ -211,17 +232,17 @@ export function planeError(offset, face) {
 }
 
 /**
- * Q3 的 5 个条件：这个面能不能当目标。others = 其他标靶的方块坐标。
+ * Q3 的 5 个条件：这个面能不能当目标。others = 其他标靶的方块坐标；speed = 本轮武器的初速（第三稿 Q19）。
  * @returns {boolean}
  */
-export function faceOk(origin, pos, face, others = []) {
+export function faceOk(origin, pos, face, others = [], speed = SPEED) {
   const eye = eyePoint(origin)
   const center = faceCenter(pos, face)
   const n = NORMALS[face]
   // 1. 看得到：从眼睛看过去，这个面朝着自己
   if (dot(n, sub(eye, center)) <= 0) return false
   // 2. 射得到：低弧线正好穿过中点
-  const path = trajectory(spawnPoint(origin), center)
+  const path = trajectory(spawnPoint(origin), center, speed)
   if (!path) return false
   const [min, max] = blockBox(pos)
   const obstacles = [...others.map((o) => blockBox(o, CLEARANCE)), ...platformBoxes(origin).map(([a, b]) => [a.map((c) => c - CLEARANCE), b.map((c) => c + CLEARANCE)])]
@@ -251,12 +272,16 @@ const distTo = (origin, pos) => norm(sub(pos.map((c) => c + 0.5), eyePoint(origi
 const spacing = (a, b) => Math.max(...a.map((c, i) => Math.abs(c - b[i])))
 
 /**
- * 抽一道题（Q2–Q4）。随机数抽取顺序：标靶数 → 逐个（位置 → 面）→ 弓、箭的格子 → 选中的快捷栏格。
+ * 抽一道题（Q2–Q4）。随机数抽取顺序：（weapon=any 时）武器 → 标靶数 → 逐个（位置 → 面）→ 武器、箭的格子 → 选中的快捷栏格。
+ * 指定了武器时不抽武器，弓的题和加弩之前同一种子出同一道题。面的条件按本轮武器的初速算（第三稿 Q19）。
  * 放完再对每个目标查一遍有没有被后放的标靶挡住，不满足就整题重抽。
- * @returns {{ targets: Array<{ pos, face, point, dist }>, items: Array<{ slot, id, count }>, selectedSlot }}
+ * @returns {{ weapon, targets: Array<{ pos, face, point, dist }>, items: Array<{ slot, id, count }>, selectedSlot }}
  */
 export function sampleBowRound(seed, options, origin) {
   const random = rng(seed)
+  const choice = options.weapon ?? 'bow'
+  const weapon = choice === 'any' ? pickOne(random, ['bow', 'crossbow']) : choice
+  const { item, speed } = WEAPONS[weapon]
   for (let attempt = 0; attempt < SAMPLE_ATTEMPTS; attempt++) {
     const n = between(random, options.targets.lo, options.targets.hi)
     const placed = []
@@ -265,23 +290,24 @@ export function sampleBowRound(seed, options, origin) {
       const dist = distTo(origin, pos)
       if (dist < options.dist.lo || dist > options.dist.hi) continue
       if (placed.some((t) => spacing(t.pos, pos) < MIN_SPACING)) continue
-      const faces = FACES.filter((face) => faceOk(origin, pos, face, placed.map((t) => t.pos)))
+      const faces = FACES.filter((face) => faceOk(origin, pos, face, placed.map((t) => t.pos), speed))
       if (!faces.length) continue
       placed.push({ pos, face: pickOne(random, faces) })
     }
     if (placed.length < n) continue
-    if (!placed.every((t) => faceOk(origin, t.pos, t.face, placed.filter((o) => o !== t).map((o) => o.pos)))) continue
+    if (!placed.every((t) => faceOk(origin, t.pos, t.face, placed.filter((o) => o !== t).map((o) => o.pos), speed))) continue
     const bowSlot = between(random, 0, INVENTORY_SLOTS - 1)
     let arrowSlot = between(random, 0, INVENTORY_SLOTS - 2)
     if (arrowSlot >= bowSlot) arrowSlot++
     const hotbar = [0, 1, 2, 3, 4, 5, 6, 7, 8].filter((s) => s !== bowSlot && s !== arrowSlot)
     return {
+      weapon,
       targets: placed.map((t) => ({ pos: t.pos, face: t.face, point: faceCenter(t.pos, t.face), dist: Math.round(distTo(origin, t.pos) * 10) / 10 })),
-      items: [{ slot: bowSlot, id: BOW, count: 1 }, { slot: arrowSlot, id: ARROW, count: n }],
+      items: [{ slot: bowSlot, id: item, count: 1 }, { slot: arrowSlot, id: ARROW, count: n }],
       selectedSlot: pickOne(random, hotbar)
     }
   }
-  throw new Error(`${SAMPLE_ATTEMPTS} 次都没抽出能做的题（targets=${rangeText(options.targets)}，dist=${options.dist.lo}-${options.dist.hi}）`)
+  throw new Error(`${SAMPLE_ATTEMPTS} 次都没抽出能做的题（weapon=${weapon}，targets=${rangeText(options.targets)}，dist=${options.dist.lo}-${options.dist.hi}）`)
 }
 
 /** mod 的到达检测和放标靶用的标靶列表（Q9） */
@@ -298,9 +324,9 @@ export function pointsText(picked) {
 
 const arrowsIn = (counts) => counts?.[ARROW] ?? 0
 
-/** 本轮还剩几支箭：物品栏、光标、平台上的掉落物、还在飞的 */
+/** 本轮还剩几支箭：物品栏、光标、平台上的掉落物、装在弩里的（第三稿 Q17，F18）、还在飞的 */
 export function arrowsLeft(status) {
-  return arrowsIn(status?.held) + arrowsIn(status?.carried) + arrowsIn(status?.dropped) + (status?.bow?.flying ?? 0)
+  return arrowsIn(status?.held) + arrowsIn(status?.carried) + arrowsIn(status?.dropped) + arrowsIn(status?.loaded) + (status?.bow?.flying ?? 0)
 }
 
 const hitCount = (bow) => (bow?.targets ?? []).filter((t) => t.hit).length
@@ -351,7 +377,7 @@ export function arrowRecords(picked, bow, t0) {
   return arrows.map((a) => {
     const hitBefore = new Set(arrows.filter((b) => b.result === 'hit' && b.resultMs !== null && b.resultMs < a.ms && b.target !== undefined).map((b) => b.target))
     const out = {
-      n: a.n, ms: typeof a.ms === 'number' && typeof t0 === 'number' ? a.ms - t0 : null, crit: a.crit, from: a.from, velocity: a.velocity,
+      n: a.n, ms: typeof a.ms === 'number' && typeof t0 === 'number' ? a.ms - t0 : null, crit: a.crit, weapon: a.weapon ?? null, from: a.from, velocity: a.velocity,
       playerPos: a.playerPos, rotation: a.rotation, result: a.result
     }
     if (a.block) Object.assign(out, { block: a.block, face: a.face, point: a.point })
@@ -366,7 +392,7 @@ export function arrowRecords(picked, bow, t0) {
 }
 
 /**
- * 判定（Q7）。final：bow（targets、arrows、flying、leftPlatformAtMs）、held、carried、dropped、stationIntact。
+ * 判定（Q7）。final：bow（targets、arrows、flying、leftPlatformAtMs）、held、carried、dropped、loaded（弩里的箭）、stationIntact。
  * @returns {{ outcome, reached, faults, hits }}
  */
 export function judgeBow({ stopped, timedOut, taskState, final, picked, doomed = null }) {
@@ -379,7 +405,7 @@ export function judgeBow({ stopped, timedOut, taskState, final, picked, doomed =
   const faults = []
   if (!reached) faults.push('miss')
   if ((bow.arrows ?? []).some((a) => a.result === 'weak')) faults.push('weak')
-  if (arrowsIn(final.held) + arrowsIn(final.carried) > 0) faults.push('unshot')
+  if (arrowsIn(final.held) + arrowsIn(final.carried) + arrowsIn(final.loaded) > 0) faults.push('unshot')
   if (bow.leftPlatformAtMs !== null && bow.leftPlatformAtMs !== undefined) faults.push('left-platform')
   let outcome
   if (doomed) outcome = 'failed'
@@ -400,15 +426,20 @@ const vecText = (v, digits = 2) => (Array.isArray(v) ? `(${v.map((c) => num(c, d
 export function debriefText(record) {
   const targets = record.targets ?? []
   const arrows = record.arrows ?? []
+  const weapon = weaponOf(record)
+  const loaded = arrowsIn(record.final?.loaded)
   const lines = []
+  lines.push(`本轮武器：${WEAPONS[weapon]?.name ?? weapon}（${WEAPONS[weapon]?.item ?? weapon}）。`)
   lines.push(`本轮结果：${record.outcome}（${OUTCOME_TEXT[record.outcome] ?? record.outcome}），射中 ${record.hits ?? 0}/${targets.length} 个标靶。`)
   if (record.doomed) lines.push(`提前结束：${DOOMED_TEXT[record.doomed] ?? record.doomed}。`)
-  if (record.faults?.includes('unshot')) lines.push('报完成时物品栏里还有箭没射。')
+  if (record.faults?.includes('unshot') && arrowsIn(record.final?.held) + arrowsIn(record.final?.carried) > 0) lines.push('报完成时物品栏里还有箭没射。')
+  if (loaded > 0) lines.push(`还有 ${loaded} 支箭装在弩里没射出。`)
   lines.push('', '标靶：')
   for (const [i, t] of targets.entries()) lines.push(`- ${i + 1} 号：目标点 ${fmt(t.point)}（方块 ${fmt(t.pos, 0)} 的 ${t.face} 面），${record.hitTargets?.includes(i) ? '射中' : '没射中'}`)
   lines.push('', arrows.length ? '每一支箭（按射出的顺序）：' : '没有射出任何箭。')
   for (const a of arrows) {
-    const parts = [`- 第 ${a.n} 支：${a.crit ? '拉满' : '没拉满'}`]
+    // 弩只有装满才射得出，不写是否拉满（第三稿 Q20）
+    const parts = [weapon === 'crossbow' ? `- 第 ${a.n} 支` : `- 第 ${a.n} 支：${a.crit ? '拉满' : '没拉满'}`]
     parts.push(`射出时玩家在 ${vecText(a.playerPos)}，服务端用来射箭的朝向 yaw=${num(a.rotation?.yaw)}、pitch=${num(a.rotation?.pitch)}`)
     parts.push(`箭从 ${vecText(a.from)} 出发，初速度 ${vecText(a.velocity, 3)} 格/tick`)
     let result = `结果 ${a.result ?? '（还在飞）'}（${RESULT_NAMES[a.result] ?? '没有结果'}）`
@@ -424,17 +455,17 @@ export function debriefText(record) {
 
 export const bow = {
   type: 'bow',
-  options: ['targets', 'dist'],
+  options: ['targets', 'dist', 'weapon'],
 
   setup(trainer, arena, arenaConfig, args) {
     // item= 是训练器的通用选项，弓箭题用不上，写了就报错，免得以为它起了作用
-    if (args.item) throw new Error('弓箭题没有 item= 选项（可用 targets= / dist=）')
+    if (args.item) throw new Error('弓箭题没有 item= 选项（可用 targets= / dist= / weapon=）')
     return { arena, arenaConfig, options: bowOptions(args, arenaConfig) }
   },
 
   startText(ctx) {
     const o = ctx.options
-    return `targets=${rangeText(o.targets)}，dist=${o.dist.lo}-${o.dist.hi}`
+    return `weapon=${o.weapon}，targets=${rangeText(o.targets)}，dist=${o.dist.lo}-${o.dist.hi}`
   },
 
   batchFields() {
@@ -448,13 +479,14 @@ export const bow = {
   label(ctx, picked, seed) {
     const dists = picked.targets.map((t) => t.dist)
     const span = dists.length === 1 ? `${Math.round(dists[0])} 格` : `${Math.round(Math.min(...dists))}–${Math.round(Math.max(...dists))} 格`
-    return `弓箭：${picked.targets.length} 个靶，${span}（seed=${seed}）`
+    return `${picked.weapon === 'crossbow' ? '弩' : '弓箭'}：${picked.targets.length} 个靶，${span}（seed=${seed}）`
   },
 
   record(ctx, picked) {
     return {
       // target 和其他题型一样是字符串（日志、通知、--by target 用）
-      target: `bow:${picked.targets.length}`,
+      target: `${weaponOf(picked)}:${picked.targets.length}`,
+      weapon: weaponOf(picked),
       targets: picked.targets, items: picked.items, selectedSlot: picked.selectedSlot,
       arrows: [], hits: 0, hitTargets: [],
       doomed: null, doomedMs: null, faults: [], final: null, reached: false, reachedMs: null
@@ -484,8 +516,8 @@ export const bow = {
   },
 
   instruction(ctx, picked, prompts) {
-    // Q5：写目标和规则；不说怎么瞄准、要抬高多少、怎么拉弓，不说是哪个面、距离多远
-    return renderTemplate(prompts.training.bow, { n: picked.targets.length, points: pointsText(picked) })
+    // Q5：写目标和规则；不说怎么瞄准、要抬高多少、怎么拉弓，不说是哪个面、距离多远。弩用自己的模板，不说怎么装填（第三稿 Q16）
+    return renderTemplate(prompts.training[WEAPONS[weaponOf(picked)].template], { n: picked.targets.length, points: pointsText(picked) })
   },
 
   /** Q7：离开平台、箭用完还没全中 → 原因文字（训练器据此中止本轮）；否则 null */
@@ -505,7 +537,7 @@ export const bow = {
       doomed: doomed ? (left ? DOOMED_LEFT : DOOMED_OUT) : null,
       doomedMs: doomed ? doomed.at - t0 : null,
       reachedMs: reachedAtMs !== null ? reachedAtMs - t0 : null,
-      final: final ? { hits: judged.hits, leftPlatformAtMs: bowState?.leftPlatformAtMs ?? null, held: final.held ?? null, carried: final.carried ?? null, dropped: final.dropped ?? null, selectedSlot: final.selectedSlot ?? null } : null
+      final: final ? { hits: judged.hits, leftPlatformAtMs: bowState?.leftPlatformAtMs ?? null, held: final.held ?? null, carried: final.carried ?? null, dropped: final.dropped ?? null, loaded: final.loaded ?? null, selectedSlot: final.selectedSlot ?? null } : null
     }
   },
 
@@ -519,6 +551,6 @@ export const bow = {
   },
 
   annotate(record) {
-    return { targets: Array.isArray(record.targets) ? record.targets.length : null, hits: record.hits ?? null, debrief: record.outcome ? debriefText(record) : null }
+    return { weapon: weaponOf(record), targets: Array.isArray(record.targets) ? record.targets.length : null, hits: record.hits ?? null, debrief: record.outcome ? debriefText(record) : null }
   }
 }

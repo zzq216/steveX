@@ -1631,10 +1631,12 @@ public final class ArenaManager {
         }
         if (isBow(active.stationName)) {
             // 弓箭方案 Q7、Q9：标靶、每一支箭、离开平台的时刻；物品栏（不含光标）、光标、场内地上按 id 计数；选中的快捷栏格
+            // 第三稿 Q17：loaded 是这三处所有弩装着的箭（按 id 数不到）
             out.put("bow", BowArena.describe());
             out.put("held", counts(player.getInventory()));
             out.put("carried", carried(player.containerMenu));
             out.put("dropped", dropped(level, active.origin));
+            out.put("loaded", BowArena.loaded(player, level, box(active.origin)));
             out.put("selectedSlot", player.getInventory().getSelectedSlot());
         }
         if (isGrindstone(active.stationName)) {

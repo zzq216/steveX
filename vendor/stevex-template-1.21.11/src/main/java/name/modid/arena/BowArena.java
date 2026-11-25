@@ -7,11 +7,17 @@ import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ChargedProjectiles;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -42,6 +48,8 @@ public final class BowArena {
     private static final int MAX_PATH = 200;
     /** 玩家中心离开平台多远算离开（站在边沿时中心可以伸出半个身位） */
     private static final double EDGE = 0.3;
+    /** 弩（第三稿）：射出的箭都是暴击箭（F14），不判 weak（Q17） */
+    private static final String CROSSBOW = "minecraft:crossbow";
 
     /** 一个标靶：方块坐标 + 指定的面（Q2）。 */
     public record Target(BlockPos pos, Direction face) {}
@@ -58,6 +66,8 @@ public final class BowArena {
         final UUID uuid;
         final long ms;
         final boolean crit;
+        /** 射出它的武器的物品 id（F14，{@code getWeaponItem}）；读不到 → null */
+        final String weapon;
         final Vec3 from;
         final Vec3 velocity;
         final Vec3 playerPos;
@@ -78,6 +88,8 @@ public final class BowArena {
             this.uuid = arrow.getUUID();
             this.ms = System.currentTimeMillis();
             this.crit = arrow.isCritArrow();
+            ItemStack w = arrow.getWeaponItem();
+            this.weapon = w == null || w.isEmpty() ? null : BuiltInRegistries.ITEM.getKey(w.getItem()).toString();
             this.from = arrow.position();
             this.velocity = arrow.getDeltaMovement();
             this.playerPos = player.position();
@@ -237,7 +249,7 @@ public final class BowArena {
         r.shots.add(new Shot(r.shots.size() + 1, arrow, player));
     }
 
-    /** 箭命中方块（{@code AbstractArrowHitMixin}）：判 hit / repeat / wrong_face / platform / out，没拉满的记 weak（Q6）。 */
+    /** 箭命中方块（{@code AbstractArrowHitMixin}）：判 hit / repeat / wrong_face / platform / out，弓没拉满的记 weak（Q6；弩不判，Q17）。 */
     public static void onHitBlock(AbstractArrow arrow, BlockHitResult hit) {
         Round r = round;
         if (r == null || arrow.level().isClientSide()) return;
@@ -259,7 +271,7 @@ public final class BowArena {
             }
         }
         String result;
-        if (!s.crit) result = "weak";
+        if (!s.crit && !CROSSBOW.equals(s.weapon)) result = "weak";
         else if (idx >= 0 && r.targets.get(idx).face() == s.face) {
             if (r.hit[idx]) result = "repeat";
             else {
@@ -337,6 +349,26 @@ public final class BowArena {
         return n;
     }
 
+    /** 弩装着的箭按 id 加进 out（Q17，F18）。 */
+    private static void addCharged(ItemStack stack, Map<String, Integer> out) {
+        ChargedProjectiles charged = stack.get(DataComponents.CHARGED_PROJECTILES);
+        if (charged == null || charged.isEmpty()) return;
+        for (ItemStack p : charged.getItems()) if (!p.isEmpty()) out.merge(BuiltInRegistries.ITEM.getKey(p.getItem()).toString(), p.getCount(), Integer::sum);
+    }
+
+    /**
+     * status 的 loaded（Q17，F18）：物品栏、光标、场内地上的掉落物里，所有弩装着的东西 { id: count }。
+     * 装在弩里的箭存在组件里，held / carried / dropped 按物品 id 数不到它。
+     */
+    static Map<String, Integer> loaded(ServerPlayer player, ServerLevel level, AABB box) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        Inventory inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) addCharged(inv.getItem(i), out);
+        addCharged(player.containerMenu.getCarried(), out);
+        for (ItemEntity e : level.getEntitiesOfClass(ItemEntity.class, box)) addCharged(e.getItem(), out);
+        return out;
+    }
+
     /** status / finish 的 bow：标靶、每一支箭、命中数、离开平台的时刻（Q9）。 */
     static Map<String, Object> describe() {
         Round r = round;
@@ -362,6 +394,7 @@ public final class BowArena {
             row.put("n", s.n);
             row.put("ms", s.ms);
             row.put("crit", s.crit);
+            row.put("weapon", s.weapon);
             row.put("from", vec(s.from));
             row.put("velocity", vec(s.velocity));
             row.put("playerPos", vec(s.playerPos));

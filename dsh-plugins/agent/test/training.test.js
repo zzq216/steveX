@@ -69,7 +69,7 @@ test('sampler: 2×2 candidates, reproducible seeds, fixed target, craftable resu
 test('parseTrainArgs', () => {
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null, dist: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null, dist: null, weapon: null }
   assert.deepEqual(parseTrainArgs(['craft2x2', 'item=stick', 'runs=5', 'seed=7']), { ok: true, arena: 'craft2x2', item: 'stick', runs: 5, seed: 7, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: null, crafts: null, ...none })
   assert.deepEqual(parseTrainArgs(['craft2x2', 'n=2-5', 'm=1']), { ok: true, arena: 'craft2x2', item: null, runs: 1, seed: null, portions: '2-5', crafts: '1', ...none })
@@ -2446,7 +2446,7 @@ test('anvil options: task, second, enchants, curses and xpLevel; rename has no s
 
   const none = { kind: null, rel: null, chest: null, stack: null, fill: null, types: null, targets: null, materials: null, slots: null, styles: null, bypass: null, material: null,
     station: null, raw: null, fuel: null, rawSlots: null, fuelSlots: null, input: null, fuelItem: null, bookshelves: null, xpLevel: null,
-    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null, dist: null }
+    effect: null, amplifier: null, primary: null, level: null, payment: null, count: null, task: null, second: null, enchants: null, curses: null, tasks: null, base: null, pattern: null, group: null, animal: null, total: null, move: null, banners: null, spare: null, itemPatterns: null, banner: null, ops: null, scale: null, maps: null, copies: null, bottles: null, extra: null, profession: null, books: null, pages: null, edits: null, dist: null, weapon: null }
   assert.deepEqual(parseTrainArgs(['anvil', 'task=merge', 'second=same', 'item=bow', 'enchants=1-2', 'curses=1', 'xpLevel=50']),
     { ok: true, arena: 'anvil', item: 'bow', runs: 1, seed: null, portions: null, crafts: null, ...none, task: 'merge', second: 'same', enchants: '1-2', curses: '1', xpLevel: 50 })
   assert.match(parseTrainArgs(['anvil', 'task=repair']).error, /task 只能是 merge \/ rename \/ both/)
@@ -5127,13 +5127,13 @@ const deg = (rad) => (rad * 180) / Math.PI
 
 test('bow options: targets 1–4, dist a-b within 2–60 (§5.2); config defaults and checks; parseTrainArgs takes dist', () => {
   const { bowOptions } = bowModule
-  assert.deepEqual(bowOptions({}, {}), { targets: { lo: 1, hi: 4 }, dist: { lo: 8, hi: 40 } })
-  assert.deepEqual(bowOptions({ targets: '2', dist: '10-20' }, { targets: '1-4', dist: '8-40' }), { targets: { lo: 2, hi: 2 }, dist: { lo: 10, hi: 20 } })
+  assert.deepEqual(bowOptions({}, {}), { targets: { lo: 1, hi: 4 }, dist: { lo: 8, hi: 40 }, weapon: 'bow' })
+  assert.deepEqual(bowOptions({ targets: '2', dist: '10-20' }, { targets: '1-4', dist: '8-40' }), { targets: { lo: 2, hi: 2 }, dist: { lo: 10, hi: 20 }, weapon: 'bow' })
   assert.throws(() => bowOptions({ targets: '5' }), /targets 要写 k 或 a-b（1–4/)
   for (const bad of ['1-10', '10-10', '20-10', '10', '8-61']) assert.throws(() => bowOptions({ dist: bad }), /dist 要写 a-b（2–60，a < b）/, bad)
   const config = normalizeConfig({})
-  assert.deepEqual(config.training.arenas.bow, { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', exclude: [] })
-  assert.deepEqual(normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0] } } } }).training.arenas.range, { type: 'bow', origin: [0, 100, 0], targets: '1-4', dist: '8-40', exclude: [] })
+  assert.deepEqual(config.training.arenas.bow, { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', weapon: 'bow', exclude: [] })
+  assert.deepEqual(normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0] } } } }).training.arenas.range, { type: 'bow', origin: [0, 100, 0], targets: '1-4', dist: '8-40', weapon: 'bow', exclude: [] })
   assert.throws(() => normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0], dist: '1-5' } } } }), /training\.arenas\.range\.dist 要写 a-b/)
   assert.equal(parseTrainArgs(['bow', 'targets=2', 'dist=10-30']).dist, '10-30')
   assert.match(parseTrainArgs(['bow', 'dist=5']).error, /dist 要写 a-b/)
@@ -5238,6 +5238,10 @@ function bowHarness({ plan = 'do' } = {}) {
       return
     } else if (plan === 'weak-then-claim') {
       shoot(0, 'weak', { crit: false })
+    } else if (plan === 'load-then-claim') {
+      // 弩（第三稿 Q17）：装上一支箭，没射就报完成
+      world.state.held['minecraft:arrow'] -= 1
+      world.state.loaded = { 'minecraft:arrow': 1 }
     }
     for (let i = 0; i < 3; i++) await tick()
     executor.task.state = 'done'
@@ -5297,7 +5301,7 @@ test('bow run: prepare carries the targets, the bow and n arrows, the empty hand
   const releases = h.reflects.filter(([k]) => k === 'release')
   assert.deepEqual(holds, records.map((r) => r.taskId))
   assert.deepEqual(releases.map(([, id]) => id), holds)
-  assert.match(releases[0][2], /^本轮结果：success（成功），射中 \d\/\d 个标靶。\n\n标靶：\n- 1 号：目标点 \(/)
+  assert.match(releases[0][2], /^本轮武器：弓（minecraft:bow）。\n本轮结果：success（成功），射中 \d\/\d 个标靶。\n\n标靶：\n- 1 号：目标点 \(/)
   assert.match(releases[0][2], /- 第 1 支：拉满；射出时玩家在 \(0\.50, 101\.00, 0\.50\)，服务端用来射箭的朝向 yaw=-88\.00、pitch=-4\.00；箭从 \(0\.50, 102\.52, 0\.50\) 出发，初速度 \(2\.900, 0\.200, 0\.100\) 格\/tick；结果 hit（射中指定面）：命中方块 /)
   assert.doesNotMatch(releases[0][2], /应该|建议|抬高/, 'Q13: facts only')
   assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/4 轮：会话 run-1，弓箭：\d 个靶，/)
@@ -5382,4 +5386,122 @@ test('report: bow records group by targets (rounds) and by dist (one row per tar
   const distTable = formatSummary(byDist).split('\n')
   assert.equal(distTable[0], '距离\t标靶数\t射中率\t首箭命中率\t射向它的箭\t偏差中位')
   assert.equal(distTable.at(-1), '（合计）\t5\t40%\t67%\t3\t0.30')
+})
+
+// ── 弩（弓箭训练场设计方案第三稿，Q14–Q20）──────────────────────────────
+
+test('crossbow options: weapon=bow|crossbow|any, default bow from the arena config; parseTrainArgs takes weapon; bad values rejected (Q14, §5.2)', () => {
+  const { bowOptions, parseWeaponSpec } = bowModule
+  assert.equal(bowOptions({ weapon: 'crossbow' }, {}).weapon, 'crossbow')
+  assert.equal(bowOptions({}, { weapon: 'any' }).weapon, 'any')
+  assert.equal(bowOptions({ weapon: 'bow' }, { weapon: 'crossbow' }).weapon, 'bow', '命令行优先')
+  assert.throws(() => parseWeaponSpec('trident'), /weapon 只能是 bow \/ crossbow \/ any/)
+  assert.equal(parseTrainArgs(['bow', 'weapon=crossbow']).weapon, 'crossbow')
+  assert.match(parseTrainArgs(['bow', 'weapon=sword']).error, /weapon 只能是/)
+  assert.throws(() => normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0], weapon: 'sword' } } } }), /training\.arenas\.range\.weapon 只能是/)
+})
+
+test('crossbow ballistics: speed 3.15 (float) with the same per-tick order; flat-shot pitches match F15; faces are checked at the crossbow speed (Q19)', () => {
+  const { solvePitch, heightAt, faceOk, CROSSBOW_SPEED, SPEED, WEAPONS } = bowModule
+  assert.equal(CROSSBOW_SPEED, Math.fround(3.15))
+  assert.deepEqual([WEAPONS.bow.speed, WEAPONS.crossbow.speed], [SPEED, CROSSBOW_SPEED])
+  // 与设计文档 F15 一致：水平 8 / 16 / 32 / 40 / 48 格平射要抬高 0.76° / 1.94° / 4.51° / 5.88° / 7.33°
+  assert.deepEqual([8, 16, 32, 40, 48].map((d) => deg(solvePitch(d, 0, CROSSBOW_SPEED)).toFixed(2)), ['0.76', '1.94', '4.51', '5.88', '7.33'])
+  assert.ok(Math.abs(heightAt(0, CROSSBOW_SPEED, CROSSBOW_SPEED)) < 1e-12)
+  // 弩更平：同一个仰角、同样的距离，弩的箭更高
+  assert.ok(heightAt(solvePitch(40, 0), 40, CROSSBOW_SPEED) > 0.3)
+  assert.equal(faceOk(BOW_ORIGIN, [20, 102, 0], 'west', [], CROSSBOW_SPEED), true)
+})
+
+test('crossbow sampler: weapon=crossbow hands out a crossbow; weapon=bow draws exactly the same rounds as before the crossbow; weapon=any picks either, reproducibly (Q14, Q15, Q19)', () => {
+  const { sampleBowRound, bowOptions, faceOk, CROSSBOW, BOW, ARROW, CROSSBOW_SPEED } = bowModule
+  const legacy = { targets: { lo: 1, hi: 4 }, dist: { lo: 8, hi: 40 } }
+  for (let seed = 0; seed < 10; seed++) {
+    const { weapon, ...bowRound } = sampleBowRound(seed, bowOptions({}, {}), BOW_ORIGIN)
+    assert.equal(weapon, 'bow')
+    const { weapon: _, ...old } = sampleBowRound(seed, legacy, BOW_ORIGIN)
+    assert.deepEqual(bowRound, old, '指定弓时不抽武器，同一种子出同一道题')
+    const x = sampleBowRound(seed, bowOptions({ weapon: 'crossbow' }, {}), BOW_ORIGIN)
+    assert.equal(x.weapon, 'crossbow')
+    assert.deepEqual([x.items[0].id, x.items[0].count, x.items[1].id, x.items[1].count], [CROSSBOW, 1, ARROW, x.targets.length])
+    for (const [i, t] of x.targets.entries()) assert.equal(faceOk(BOW_ORIGIN, t.pos, t.face, x.targets.filter((_, j) => j !== i).map((o) => o.pos), CROSSBOW_SPEED), true)
+  }
+  const any = bowOptions({ weapon: 'any' }, {})
+  const picks = new Set()
+  for (let seed = 0; seed < 20; seed++) {
+    const r = sampleBowRound(seed, any, BOW_ORIGIN)
+    picks.add(r.weapon)
+    assert.equal(r.items[0].id, r.weapon === 'crossbow' ? CROSSBOW : BOW)
+    assert.deepEqual(sampleBowRound(seed, any, BOW_ORIGIN), r)
+  }
+  assert.deepEqual([...picks].sort(), ['bow', 'crossbow'])
+})
+
+test('crossbow run: a crossbow and n arrows, its own text without the full-draw rule or how to load (Q15, Q16); record, label and debrief name the weapon and skip "fully drawn" (Q20)', async () => {
+  const h = bowHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'bow', runs: 2, seed: 11, weapon: 'crossbow' })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /weapon=crossbow，targets=1-4，dist=8-40/)
+  await h.done()
+  const records = h.records('bow')
+  for (const [i, record] of records.entries()) {
+    const n = record.targets.length
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.weapon, record.target], ['crossbow', `crossbow:${n}`])
+    assert.equal(record.items.find((it) => it.id === 'minecraft:crossbow')?.count, 1)
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你站在一个平台上，前方的空中有 ${n} 个标靶（minecraft:target）。你的物品栏里有一把弩（minecraft:crossbow）和 ${n} 支箭（minecraft:arrow）。\n请站在平台上用弩射箭，`), text)
+    assert.match(text, /每个点只有一支箭，顺序不限。离开平台本轮直接结束。\n?$/)
+    assert.doesNotMatch(text, /拉满|装填|key\/|按住/, 'Q16: no full-draw rule, no how-to')
+    assert.ok(!text.includes('\r'))
+  }
+  const debrief = h.reflects.find(([k]) => k === 'release')[2]
+  assert.match(debrief, /^本轮武器：弩（minecraft:crossbow）。\n本轮结果：success/)
+  assert.match(debrief, /- 第 1 支；射出时玩家在 /)
+  assert.doesNotMatch(debrief, /拉满/)
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/2 轮：会话 run-1，弩：\d 个靶，/)
+})
+
+test('crossbow arrows: an arrow loaded in a crossbow still counts as left (no out-of-arrows) and as unshot; the debrief says how many are still loaded (Q17, F18)', async () => {
+  const { doomedReason, judgeBow, arrowsLeft } = bowModule
+  const picked = { weapon: 'crossbow', targets: [{ pos: [20, 102, 0], face: 'west', point: [20, 102.5, 0.5] }] }
+  const status = { bow: { targets: [{ ...picked.targets[0], hit: false }], arrows: [], flying: 0, leftPlatformAtMs: null }, held: { 'minecraft:crossbow': 1 }, carried: {}, dropped: {}, loaded: { 'minecraft:arrow': 1 }, stationIntact: true }
+  assert.equal(arrowsLeft(status), 1)
+  assert.equal(doomedReason(picked, status), null, '装上最后一支箭不算用完')
+  assert.match(doomedReason(picked, { ...status, loaded: {} }), /箭已经用完/)
+  assert.deepEqual(judgeBow({ final: status, picked, taskState: 'done' }).faults, ['miss', 'unshot'])
+
+  const h = bowHarness({ plan: 'load-then-claim' })
+  assert.equal(h.trainer.start({ sessionId: 'console', arena: 'bow', targets: '1', seed: 5, weapon: 'crossbow' }).ok, true)
+  await h.done()
+  const rec = h.records('bow')[0]
+  assert.deepEqual([rec.outcome, rec.faults, rec.doomed, rec.final.loaded], ['false_success', ['miss', 'unshot'], null, { 'minecraft:arrow': 1 }])
+  const debrief = h.reflects.find(([k]) => k === 'release')[2]
+  assert.match(debrief, /还有 1 支箭装在弩里没射出。/)
+  assert.doesNotMatch(debrief, /物品栏里还有箭没射/)
+})
+
+test('report: bow and crossbow records split into one table per weapon; --by weapon gives one row each; the crossbow table has no full-draw columns (Q20)', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const t = (dist) => ({ pos: [0, 0, 0], face: 'west', point: [0, 0.5, 0.5], dist })
+  const rec = (weapon, outcome, arrows, hitTargets) => ({ batch: 'b1', target: `${weapon ?? 'bow'}:1`, ...(weapon ? { weapon } : {}), targets: [t(20)], arrows, hitTargets, items: [], selectedSlot: 0, hits: hitTargets.length, doomed: null, faults: outcome === 'success' ? [] : ['miss'], outcome, reachedMs: 4000, taskMs: 6000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [
+    rec(undefined, 'success', [{ n: 1, result: 'hit', target: 0, err: 0.2 }], [0]),
+    rec('bow', 'false_success', [{ n: 1, result: 'weak', crit: false }], []),
+    rec('crossbow', 'success', [{ n: 1, result: 'hit', target: 0, err: 0.1, weapon: 'minecraft:crossbow' }], [0])
+  ]
+  const split = summarize(records, { by: 'targets' })
+  assert.deepEqual(split.split.map(({ title, summary }) => [title, summary.total.runs]), [['【弓】', 2], ['【弩】', 1]])
+  const text = formatSummary(split)
+  const [bowPart, crossbowPart] = text.split('\n\n')
+  assert.match(bowPart, /^【弓】\n标靶数\t.*\t没拉满\t.*\t没拉满的箭\t/)
+  assert.match(crossbowPart, /^【弩】\n标靶数\t轮数\t全中率\t虚报\t失败\t超时\t中止\t丢失\t离开平台\t箭用完\t有靶没中\t箭没射完\t箭命中率\t首箭命中率\t偏差中位\t达成中位/)
+  assert.doesNotMatch(crossbowPart, /没拉满/)
+  const byDist = formatSummary(summarize(records, { by: 'dist' }))
+  assert.match(byDist, /^【弓】\n距离\t.*\n\n【弩】\n距离\t/s)
+  const byWeapon = summarize(records, { by: 'weapon' })
+  assert.deepEqual(byWeapon.rows.map((r) => [r.key, r.runs]), [['弓', 2], ['弩', 1]])
+  assert.match(formatSummary(byWeapon).split('\n')[0], /^武器\t轮数\t全中率/)
+  // 只有弓的记录：和加弩之前一样，不分表
+  assert.equal(summarize(records.slice(0, 2), { by: 'targets' }).split, undefined)
 })

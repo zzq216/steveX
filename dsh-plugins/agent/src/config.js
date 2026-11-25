@@ -51,7 +51,7 @@ const BOOK_ARENA_DEFAULTS = Object.freeze({ books: '1-3', pages: '1-6', edits: '
 /** 用户自己加的告示牌场地（type: 'sign'）没写的字段（告示牌训练场设计方案 §6；kind: null = 每轮三种题型随机；exclude 不用，留着和其他场地一致） */
 const SIGN_ARENA_DEFAULTS = Object.freeze({ kind: null, edits: '1-3', exclude: [] })
 /** 用户自己加的弓箭场地（type: 'bow'）没写的字段（弓箭训练场设计方案 §6；exclude 不用，留着和其他场地一致） */
-const BOW_ARENA_DEFAULTS = Object.freeze({ targets: '1-4', dist: '8-40', exclude: [] })
+const BOW_ARENA_DEFAULTS = Object.freeze({ targets: '1-4', dist: '8-40', weapon: 'bow', exclude: [] })
 const CARTOGRAPHY_ARENA_DEFAULTS = Object.freeze({ task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] })
 const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
@@ -241,7 +241,7 @@ export const DEFAULTS = Object.freeze({
      * 'sign' = 告示牌，字段是 { origin, kind: text | color | wax | null（null = 每轮三种随机）, edits: text 题改几行 "k" | "a-b"（1–4）,
      *     exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/告示牌训练场设计方案.md
      * 'bow' = 弓箭（射击平台加 48 格的空场地，原点是平台中心），字段是 { origin, targets: 一轮几个标靶 "k" | "a-b"（1–4）,
-     *     dist: 眼睛到标靶的距离 "a-b"（2–60）, exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/弓箭训练场设计方案.md
+     *     dist: 眼睛到标靶的距离 "a-b"（2–60）, weapon: 武器 "bow" | "crossbow" | "any"（缺省 bow，any 每轮等概率抽一种；第三稿加的弩）, exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/弓箭训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
@@ -263,7 +263,7 @@ export const DEFAULTS = Object.freeze({
       grindstone: { type: 'grindstone', origin: [10000, 120, 10420], timeoutSec: 600, tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [] },
       book: { type: 'book', origin: [10000, 120, 10450], timeoutSec: 600, books: '1-3', pages: '1-6', edits: '1-3', exclude: [] },
       sign: { type: 'sign', origin: [10000, 120, 10480], timeoutSec: 300, kind: null, edits: '1-3', exclude: [] },
-      bow: { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', exclude: [] }
+      bow: { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', weapon: 'bow', exclude: [] }
     }
   },
   planner: {

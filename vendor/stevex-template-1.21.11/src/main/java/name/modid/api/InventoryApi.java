@@ -77,6 +77,22 @@ public class InventoryApi {
 
         if (stack.has(DataComponents.UNBREAKABLE)) item.put("unbreakable", true);
 
+        // 弓箭训练场设计方案 Q18（第三稿）：弩装着的东西 [{ id, count }]，没装 → 不出现。原版玩家从弩的外形和物品提示看得到
+        var charged = stack.get(DataComponents.CHARGED_PROJECTILES);
+        if (charged != null && !charged.isEmpty()) {
+            Map<String, Integer> byId = new LinkedHashMap<>();
+            for (var p : charged.getItems())
+                if (!p.isEmpty()) byId.merge(net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(p.getItem()).toString(), p.getCount(), Integer::sum);
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (var e : byId.entrySet()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", e.getKey());
+                row.put("count", e.getValue());
+                list.add(row);
+            }
+            if (!list.isEmpty()) item.put("chargedProjectiles", list);
+        }
+
         var food = stack.get(DataComponents.FOOD);
         if (food != null) {
             Map<String, Object> fd = new LinkedHashMap<>();
