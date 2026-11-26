@@ -5221,7 +5221,7 @@ function bowHarness({ plan = 'do' } = {}) {
     const bow = world.state.bow
     const shoot = (i, result, extra) => {
       bow.arrows.push(bowArrow(bow.arrows.length + 1, world.targets[i], i, result, { at: clock(), ...extra }))
-      world.state.held['minecraft:arrow'] -= 1
+      world.state.held[world.ammo] -= 1
       if (result === 'hit') bow.targets[i].hit = true
     }
     if (plan === 'do') {
@@ -5253,10 +5253,12 @@ function bowHarness({ plan = 'do' } = {}) {
     prepareData: (params) => {
       world.params = params
       world.targets = params.bow.targets.map((t) => ({ ...t, point: bowModule.faceCenter(t.pos, t.face) }))
-      const n = params.bow.targets.length
+      const held = {}
+      for (const it of params.items) held[it.id] = (held[it.id] ?? 0) + it.count
+      world.ammo = held['minecraft:trident'] ? 'minecraft:trident' : 'minecraft:arrow'
       world.state = {
         bow: { targets: world.targets.map((t) => ({ pos: t.pos, face: t.face, point: t.point, hit: false })), arrows: [], flying: 0, leftPlatformAtMs: null },
-        held: { 'minecraft:bow': 1, 'minecraft:arrow': n }, carried: {}, dropped: {}, selectedSlot: params.selectedSlot, stationIntact: true, reachedAtMs: null
+        held, carried: {}, dropped: {}, selectedSlot: params.selectedSlot, stationIntact: true, reachedAtMs: null
       }
       return { bow: { targets: params.bow.targets, items: params.items.map(({ slot, id, count }) => ({ slot, id, count })), selectedSlot: params.selectedSlot } }
     },
@@ -5395,7 +5397,7 @@ test('crossbow options: weapon=bow|crossbow|any, default bow from the arena conf
   assert.equal(bowOptions({ weapon: 'crossbow' }, {}).weapon, 'crossbow')
   assert.equal(bowOptions({}, { weapon: 'any' }).weapon, 'any')
   assert.equal(bowOptions({ weapon: 'bow' }, { weapon: 'crossbow' }).weapon, 'bow', '命令行优先')
-  assert.throws(() => parseWeaponSpec('trident'), /weapon 只能是 bow \/ crossbow \/ any/)
+  assert.throws(() => parseWeaponSpec('sword'), /weapon 只能是 bow \/ crossbow \/ trident \/ any/)
   assert.equal(parseTrainArgs(['bow', 'weapon=crossbow']).weapon, 'crossbow')
   assert.match(parseTrainArgs(['bow', 'weapon=sword']).error, /weapon 只能是/)
   assert.throws(() => normalizeConfig({ training: { arenas: { range: { type: 'bow', origin: [0, 100, 0], weapon: 'sword' } } } }), /training\.arenas\.range\.weapon 只能是/)
@@ -5431,10 +5433,10 @@ test('crossbow sampler: weapon=crossbow hands out a crossbow; weapon=bow draws e
   for (let seed = 0; seed < 20; seed++) {
     const r = sampleBowRound(seed, any, BOW_ORIGIN)
     picks.add(r.weapon)
-    assert.equal(r.items[0].id, r.weapon === 'crossbow' ? CROSSBOW : BOW)
+    assert.equal(r.items[0].id, { bow: BOW, crossbow: CROSSBOW, trident: 'minecraft:trident' }[r.weapon])
     assert.deepEqual(sampleBowRound(seed, any, BOW_ORIGIN), r)
   }
-  assert.deepEqual([...picks].sort(), ['bow', 'crossbow'])
+  assert.deepEqual([...picks].sort(), ['bow', 'crossbow', 'trident'])
 })
 
 test('crossbow run: a crossbow and n arrows, its own text without the full-draw rule or how to load (Q15, Q16); record, label and debrief name the weapon and skip "fully drawn" (Q20)', async () => {
@@ -5504,4 +5506,100 @@ test('report: bow and crossbow records split into one table per weapon; --by wea
   assert.match(formatSummary(byWeapon).split('\n')[0], /^武器\t轮数\t全中率/)
   // 只有弓的记录：和加弩之前一样，不分表
   assert.equal(summarize(records.slice(0, 2), { by: 'targets' }).split, undefined)
+})
+
+// ── 三叉戟（弓箭训练场设计方案第四稿，Q21–Q26）──────────────────────────
+
+test('trident ballistics and sampler: speed 2.5, flat-shot pitches match F22; n tridents in n distinct random slots, no arrows, empty hand; faces checked at 2.5; bow and crossbow rounds unchanged (Q21, Q22, Q25)', () => {
+  const { solvePitch, faceOk, sampleBowRound, bowOptions, TRIDENT, TRIDENT_SPEED, WEAPONS, parseWeaponSpec } = bowModule
+  assert.equal(parseWeaponSpec('trident'), 'trident')
+  assert.equal(WEAPONS.trident.speed, TRIDENT_SPEED)
+  assert.equal(TRIDENT_SPEED, Math.fround(2.5))
+  // 与设计文档 F22 一致：水平 8 / 16 / 32 / 40 / 48 格平射要抬高 1.32° / 3.27° / 7.52° / 9.89° / 12.47°
+  assert.deepEqual([8, 16, 32, 40, 48].map((d) => deg(solvePitch(d, 0, TRIDENT_SPEED)).toFixed(2)), ['1.32', '3.27', '7.52', '9.89', '12.47'])
+  assert.equal(solvePitch(90, 0, TRIDENT_SPEED), null, '同一高度最远约 86 格')
+  const options = bowOptions({ weapon: 'trident' }, {})
+  for (let seed = 0; seed < 15; seed++) {
+    const r = sampleBowRound(seed, options, BOW_ORIGIN)
+    const n = r.targets.length
+    assert.equal(r.weapon, 'trident')
+    assert.equal(r.items.length, n)
+    assert.ok(r.items.every((it) => it.id === TRIDENT && it.count === 1 && it.slot >= 0 && it.slot < 36))
+    assert.equal(new Set(r.items.map((it) => it.slot)).size, n, '各占一格')
+    assert.ok(r.selectedSlot >= 0 && r.selectedSlot <= 8 && !r.items.some((it) => it.slot === r.selectedSlot), '开局手上是空的')
+    for (const [i, t] of r.targets.entries()) assert.equal(faceOk(BOW_ORIGIN, t.pos, t.face, r.targets.filter((_, j) => j !== i).map((o) => o.pos), TRIDENT_SPEED), true)
+    assert.deepEqual(sampleBowRound(seed, options, BOW_ORIGIN), r)
+  }
+  // 弓、弩的题不受影响：同一种子和第三稿一样（第三稿的抽题测试也还在跑）
+  const legacy = { targets: { lo: 1, hi: 4 }, dist: { lo: 8, hi: 40 } }
+  for (let seed = 0; seed < 5; seed++) assert.deepEqual(sampleBowRound(seed, bowOptions({}, {}), BOW_ORIGIN), sampleBowRound(seed, legacy, BOW_ORIGIN))
+})
+
+test('trident run: n tridents, its own text without the full-draw rule or how to throw (Q22, Q23); no weak; record, label and debrief speak of tridents (Q26)', async () => {
+  const h = bowHarness()
+  const started = h.trainer.start({ sessionId: 'console', arena: 'bow', runs: 2, seed: 21, weapon: 'trident' })
+  assert.equal(started.ok, true, started.error)
+  assert.match(started.text, /weapon=trident，/)
+  await h.done()
+  const records = h.records('bow')
+  for (const [i, record] of records.entries()) {
+    const n = record.targets.length
+    assert.equal(record.outcome, 'success', JSON.stringify(record))
+    assert.deepEqual([record.weapon, record.target, record.faults], ['trident', `trident:${n}`, []])
+    assert.equal(record.items.filter((it) => it.id === 'minecraft:trident').length, n)
+    assert.ok(!record.items.some((it) => it.id === 'minecraft:arrow'))
+    const text = h.instructions[i]
+    assert.ok(text.startsWith(`你站在一个平台上，前方的空中有 ${n} 个标靶（minecraft:target）。你的物品栏里有 ${n} 把三叉戟（minecraft:trident）。\n请站在平台上投掷三叉戟，让三叉戟分别命中下面 ${n} 个点：\n`), text)
+    assert.match(text, /每个点只有一把三叉戟，顺序不限。离开平台本轮直接结束。\n?$/)
+    assert.doesNotMatch(text, /拉满|按住|tick|key\/|抬高/, 'Q23: no full-draw rule, no how-to')
+    assert.ok(!text.includes('\r'))
+  }
+  const debrief = h.reflects.find(([k]) => k === 'release')[2]
+  assert.match(debrief, /^本轮武器：三叉戟（minecraft:trident）。\n本轮结果：success/)
+  assert.match(debrief, /每一把三叉戟（按掷出的顺序）：\n- 第 1 把；掷出时玩家在 .*，服务端用来投掷的朝向 .*；三叉戟从 /)
+  assert.doesNotMatch(debrief, /拉满|箭/)
+  assert.match(h.notices.map(([, t]) => t)[0], /^第 1\/2 轮：会话 run-1，三叉戟：\d 个靶，/)
+})
+
+test('trident judge: tridents are the ammo — doomed when none are left anywhere, unshot when some are still held; arrows and loaded do not count; a non-crit trident is no weak fault (Q24, Q26)', async () => {
+  const { doomedReason, judgeBow, arrowsLeft, debriefText } = bowModule
+  const picked = { weapon: 'trident', targets: [{ pos: [20, 102, 0], face: 'west', point: [20, 102.5, 0.5] }, { pos: [25, 102, 5], face: 'west', point: [25, 102.5, 5.5] }] }
+  const status = (hits, { held = {}, dropped = {}, flying = 0, loaded = {} } = {}) => ({
+    bow: { targets: picked.targets.map((t, i) => ({ ...t, hit: i < hits })), arrows: [{ n: 1, crit: false, weapon: 'minecraft:trident', result: hits ? 'hit' : 'out' }], flying, leftPlatformAtMs: null },
+    held, carried: {}, dropped, loaded, stationIntact: true
+  })
+  assert.equal(arrowsLeft(status(1, { held: { 'minecraft:trident': 1, 'minecraft:arrow': 5 } }), 'trident'), 1)
+  assert.equal(doomedReason(picked, status(1, { held: { 'minecraft:trident': 1 } })), null)
+  assert.equal(doomedReason(picked, status(1, { dropped: { 'minecraft:trident': 1 } })), null, '扔在平台上的三叉戟还能捡回来')
+  assert.match(doomedReason(picked, status(1, { held: { 'minecraft:arrow': 3 }, loaded: { 'minecraft:arrow': 1 } })), /三叉戟已经用完，还有标靶没命中/)
+  assert.deepEqual(judgeBow({ final: status(1, { held: { 'minecraft:trident': 1 } }), picked, taskState: 'done' }).faults, ['miss', 'unshot'])
+  assert.deepEqual(judgeBow({ final: status(1), picked, taskState: 'done', doomed: { at: 1 } }).faults, ['miss'], '不是暴击也不判 weak')
+  const text = debriefText({ weapon: 'trident', outcome: 'false_success', hits: 1, targets: picked.targets, hitTargets: [0], arrows: [], faults: ['miss', 'unshot'], doomed: null, final: { held: { 'minecraft:trident': 1 }, carried: {}, loaded: { 'minecraft:arrow': 1 } } })
+  assert.match(text, /报完成时物品栏里还有 1 把三叉戟没掷出。/)
+  assert.doesNotMatch(text, /装在弩里/, '三叉戟不算装填')
+  assert.match(text, /没有掷出任何三叉戟。/)
+  assert.match(debriefText({ weapon: 'trident', outcome: 'failed', hits: 0, targets: picked.targets, arrows: [], doomed: 'out-of-arrows', faults: ['miss'], final: {} }), /提前结束：三叉戟用完了还有标靶没命中，本轮提前结束。/)
+
+  // 整轮：每一投都飞出去，三叉戟用完立刻结束
+  const missed = bowHarness({ plan: 'miss-all' })
+  assert.equal(missed.trainer.start({ sessionId: 'console', arena: 'bow', targets: '2', seed: 3, weapon: 'trident' }).ok, true)
+  await missed.done()
+  const [rec] = missed.records('bow')
+  assert.deepEqual([rec.outcome, rec.doomed, rec.faults], ['failed', 'out-of-arrows', ['miss']])
+})
+
+test('report: three weapons split into three tables; --by weapon gives three rows; the trident table has no full-draw columns and names its columns after tridents (Q26)', async () => {
+  const { summarize, formatSummary } = await import('../src/training/report.js')
+  const t = (dist) => ({ pos: [0, 0, 0], face: 'west', point: [0, 0.5, 0.5], dist })
+  const rec = (weapon, outcome, hitTargets) => ({ batch: 'b1', target: `${weapon}:1`, weapon, targets: [t(20)], arrows: hitTargets.length ? [{ n: 1, result: 'hit', target: 0, err: 0.2 }] : [], hitTargets, items: [], selectedSlot: 0, hits: hitTargets.length, doomed: null, faults: outcome === 'success' ? [] : ['miss'], outcome, reachedMs: 4000, taskMs: 6000, tokens: null, usedChatSend: false, stationIntact: true })
+  const records = [rec('bow', 'success', [0]), rec('crossbow', 'success', [0]), rec('trident', 'success', [0]), rec('trident', 'false_success', [])]
+  const split = summarize(records, { by: 'targets' })
+  assert.deepEqual(split.split.map(({ title, summary }) => [title, summary.total.runs]), [['【弓】', 1], ['【弩】', 1], ['【三叉戟】', 2]])
+  const parts = formatSummary(split).split('\n\n')
+  assert.equal(parts.length, 3)
+  assert.match(parts[0], /^【弓】\n标靶数\t.*\t箭用完\t有靶没中\t没拉满\t箭没射完\t箭命中率\t/)
+  assert.match(parts[1], /^【弩】\n标靶数\t.*\t箭用完\t有靶没中\t箭没射完\t箭命中率\t/)
+  assert.match(parts[2], /^【三叉戟】\n标靶数\t轮数\t全中率\t虚报\t失败\t超时\t中止\t丢失\t离开平台\t三叉戟用完\t有靶没中\t三叉戟没掷完\t命中率\t首箭命中率\t偏差中位\t达成中位/)
+  assert.doesNotMatch(parts[2], /没拉满|箭用完|箭没射完/)
+  assert.deepEqual(summarize(records, { by: 'weapon' }).rows.map((r) => [r.key, r.runs]), [['三叉戟', 2], ['弓', 1], ['弩', 1]])
 })

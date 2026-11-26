@@ -48,8 +48,8 @@ public final class BowArena {
     private static final int MAX_PATH = 200;
     /** 玩家中心离开平台多远算离开（站在边沿时中心可以伸出半个身位） */
     private static final double EDGE = 0.3;
-    /** 弩（第三稿）：射出的箭都是暴击箭（F14），不判 weak（Q17） */
-    private static final String CROSSBOW = "minecraft:crossbow";
+    /** 只有弓射出的箭判 weak（第四稿 Q24）：弩射出的都是暴击箭（F14），三叉戟都不是暴击、也没有拉满一说（F20） */
+    private static final String BOW = "minecraft:bow";
 
     /** 一个标靶：方块坐标 + 指定的面（Q2）。 */
     public record Target(BlockPos pos, Direction face) {}
@@ -249,7 +249,7 @@ public final class BowArena {
         r.shots.add(new Shot(r.shots.size() + 1, arrow, player));
     }
 
-    /** 箭命中方块（{@code AbstractArrowHitMixin}）：判 hit / repeat / wrong_face / platform / out，弓没拉满的记 weak（Q6；弩不判，Q17）。 */
+    /** 箭命中方块（{@code AbstractArrowHitMixin}）：判 hit / repeat / wrong_face / platform / out，弓没拉满的记 weak（Q6；弩、三叉戟不判，Q17、Q24）。 */
     public static void onHitBlock(AbstractArrow arrow, BlockHitResult hit) {
         Round r = round;
         if (r == null || arrow.level().isClientSide()) return;
@@ -271,7 +271,7 @@ public final class BowArena {
             }
         }
         String result;
-        if (!s.crit && !CROSSBOW.equals(s.weapon)) result = "weak";
+        if (!s.crit && BOW.equals(s.weapon)) result = "weak";
         else if (idx >= 0 && r.targets.get(idx).face() == s.face) {
             if (r.hit[idx]) result = "repeat";
             else {

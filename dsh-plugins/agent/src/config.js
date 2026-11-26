@@ -241,7 +241,7 @@ export const DEFAULTS = Object.freeze({
      * 'sign' = 告示牌，字段是 { origin, kind: text | color | wax | null（null = 每轮三种随机）, edits: text 题改几行 "k" | "a-b"（1–4）,
      *     exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/告示牌训练场设计方案.md
      * 'bow' = 弓箭（射击平台加 48 格的空场地，原点是平台中心），字段是 { origin, targets: 一轮几个标靶 "k" | "a-b"（1–4）,
-     *     dist: 眼睛到标靶的距离 "a-b"（2–60）, weapon: 武器 "bow" | "crossbow" | "any"（缺省 bow，any 每轮等概率抽一种；第三稿加的弩）, exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/弓箭训练场设计方案.md
+     *     dist: 眼睛到标靶的距离 "a-b"（2–60）, weapon: 武器 "bow" | "crossbow" | "trident" | "any"（缺省 bow，any 每轮在三种里等概率抽一种；第三稿加的弩、第四稿加的三叉戟）, exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/弓箭训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },

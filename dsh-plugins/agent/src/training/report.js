@@ -81,8 +81,9 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       return { split, rows: [], total: { key: '（合计）', runs: picked.length }, by }
     }
   }
-  // 弩的表不显示"没拉满"的两栏（第三稿 Q20）
-  const crossbowOnly = bower && picked.filter(isBowRecord).every((r) => bowWeapon(r) === 'crossbow')
+  // 没有弓的表不显示"没拉满"的两栏（第三稿 Q20、第四稿 Q26）；只有三叉戟的表换栏名（Q26）
+  const crossbowOnly = bower && picked.filter(isBowRecord).every((r) => bowWeapon(r) !== 'bow')
+  const tridentOnly = bower && picked.filter(isBowRecord).every((r) => bowWeapon(r) === 'trident')
   // 弓箭题（弓箭方案 Q11）：按距离分组时一行是一个标靶，不是一轮
   if (bower && by === 'dist') return summarizeBowDist(picked)
   const group = (list) => {
@@ -149,7 +150,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, bower, crossbowOnly, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, bower, crossbowOnly, tridentOnly, historyCols }
 }
 
 /** 弓箭题（弓箭方案 Q11）：一支箭是射向哪个标靶的——射中的那个，没中的取轨迹最近的那个 */
@@ -178,8 +179,8 @@ function bowStats(list) {
 }
 
 /** 武器（第三稿 Q14、Q20）：旧记录没有 weapon，按弓算 */
-const BOW_WEAPONS = ['bow', 'crossbow']
-const WEAPON_LABEL = { bow: '弓', crossbow: '弩' }
+const BOW_WEAPONS = ['bow', 'crossbow', 'trident']
+const WEAPON_LABEL = { bow: '弓', crossbow: '弩', trident: '三叉戟' }
 const bowWeapon = (r) => r.weapon ?? 'bow'
 
 /** 离开平台另有 doomed 一栏，原因栏只列这三条 */
@@ -358,11 +359,11 @@ function portionsKey(r) {
 
 const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子', cells: '配方格数', k: '交易笔数', profession: '职业', chain: '串联', curses: '诅咒', hand: '书在不在手上', edits: '改几行', dist: '距离', weapon: '武器' }
 
-export function formatSummary({ split = null, rows, total, by = 'target', crossbowOnly = false, station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, bower = false, bowDist = false, historyCols = false }) {
+export function formatSummary({ split = null, rows, total, by = 'target', crossbowOnly = false, tridentOnly = false, station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, bower = false, bowDist = false, historyCols = false }) {
   if (split) return split.map(({ title, summary }) => `${title}\n${formatSummary(summary)}`).join('\n\n')
   if (total.runs === 0) return '没有训练记录'
   if (bowDist) return formatBowDist({ rows, total })
-  if (bower) return formatBow({ rows, total, by, historyCols, crossbowOnly })
+  if (bower) return formatBow({ rows, total, by, historyCols, crossbowOnly, tridentOnly })
   if (signer) return formatSign({ rows, total, by, historyCols })
   if (booker) return formatBook({ rows, total, by, historyCols })
   if (grinder) return formatGrindstone({ rows, total, by, historyCols })
@@ -469,13 +470,14 @@ const errText = (v) => (Number.isFinite(v) ? v.toFixed(2) : '-')
 
 /**
  * 弓箭题的表（弓箭方案 Q11）：一行一组轮次；结果列之后是两种提前结束、各原因的轮数，再是按箭、按标靶算的命中和偏差。
- * 只有弩的记录时不显示"没拉满"的两栏（第三稿 Q20）。
+ * 没有弓的记录时不显示"没拉满"的两栏（第三稿 Q20）；只有三叉戟的记录时，"箭用完""箭没射完""箭命中率"换成三叉戟的说法（第四稿 Q26）。
  */
-function formatBow({ rows, total, by, historyCols, crossbowOnly = false }) {
+function formatBow({ rows, total, by, historyCols, crossbowOnly = false, tridentOnly = false }) {
   const faults = crossbowOnly ? BOW_ROUND_FAULTS.filter((f) => f !== 'weak') : BOW_ROUND_FAULTS
-  const head = [by === 'targets' ? '标靶数' : BY_LABEL[by] ?? '目标', '轮数', '全中率', '虚报', '失败', '超时', '中止', '丢失', '离开平台', '箭用完',
-    ...faults.map((f) => BOW_FAULT_NAMES[f]),
-    '箭命中率', '首箭命中率', '偏差中位', ...(crossbowOnly ? [] : ['没拉满的箭']), '达成中位', '任务中位', 'token中位',
+  const faultName = (f) => (tridentOnly && f === 'unshot' ? '三叉戟没掷完' : BOW_FAULT_NAMES[f])
+  const head = [by === 'targets' ? '标靶数' : BY_LABEL[by] ?? '目标', '轮数', '全中率', '虚报', '失败', '超时', '中止', '丢失', '离开平台', tridentOnly ? '三叉戟用完' : '箭用完',
+    ...faults.map(faultName),
+    tridentOnly ? '命中率' : '箭命中率', '首箭命中率', '偏差中位', ...(crossbowOnly ? [] : ['没拉满的箭']), '达成中位', '任务中位', 'token中位',
     ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
   const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.lost, r.bow.doomedLeft, r.bow.doomedOut,
     ...faults.map((f) => r.bow.faults[f]),

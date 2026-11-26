@@ -77,7 +77,7 @@ const RANGE_OPTIONS = { n: (v) => parseCountSpec(v, 'n'), m: (v) => parseCountSp
  * 合成器题另有 `[item=…] [n=…] [extra=…]`（合成器训练场设计方案 R4；n 和合成题共用名字）。
  * 书与笔题另有 `[books=…] [pages=…] [edits=…]`（书与笔训练场设计方案 §5）。
  * 告示牌题另有 `[kind=text|color|wax] [edits=…]`（告示牌训练场设计方案 §5；kind 和箱子题、锻造台题、砂轮题共用，edits 和书与笔题共用，都是 1–4）。
- * 弓箭题另有 `[targets=…] [dist=a-b] [weapon=bow|crossbow|any]`（弓箭训练场设计方案 §5；targets 和箱子题共用，都是 1–4；weapon 是第三稿加的弩）。
+ * 弓箭题另有 `[targets=…] [dist=a-b] [weapon=bow|crossbow|trident|any]`（弓箭训练场设计方案 §5；targets 和箱子题共用，都是 1–4；weapon 是第三稿加的弩、第四稿加的三叉戟）。
  * 砂轮题另有 `[tasks=…] [kind=item|book|mix] [item=…] [enchants=…] [curses=…]`（砂轮训练场设计方案 §5；kind 和箱子题、锻造台题共用，curses 和铁砧题共用——铁砧题是开关 0 / 1，砂轮题是个数 k 或 a-b（0–2），这里两种写法都放行，场地的 setup 再按题型查）。
  * 村民交易题另有 `[profession=…] [level=…] [tasks=…] [n=…] [extra=…] [item=…]`（村民交易训练场设计方案 §5；level 和信标题共用，全局按 1–5 查，信标场地的 setup 再查不超过 4；tasks 和锻造台题共用）。
  * 这里只查写法；哪个场地认哪些选项由 start 按题型查。n、m、types、targets、materials、slots、styles、raw、fuel、rawSlots、fuelSlots、level、count、enchants、tasks、total、move、banners、spare、ops、scale、maps、copies、bottles、extra 原样留成字符串（"4" / "2-5"），start 里解析。
