@@ -135,7 +135,7 @@ test('参数形态校验（§4.3 / §3.1）', () => {
     { path: 'terrain', fields: [''] },                          // fields 元素空
     { path: 'terrain', fields: 'uuid' },                        // fields 非数组
     { path: 'terrain', fields: ['uuid'], limit: 0 },            // limit 下界
-    { path: 'terrain', fields: ['uuid'], limit: 513 },          // limit 上界
+    { path: 'terrain', fields: ['uuid'], limit: 4097 },         // limit 上界
     { path: 'terrain', fields: ['uuid'], limit: 1.5 },          // limit 非整数
     { path: 'terrain', fields: ['uuid'], filters: [] },         // filters 非对象
     { path: 'terrain', fields: ['uuid'], filters: { 'pos.y': { min: 0, eps: 1 } } }, // 区间未知键

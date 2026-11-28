@@ -169,6 +169,35 @@ public class EntityUnionStore {
         return Map.of("added", added, "updated", updated, "removed", removed, "total", union.size());
     }
 
+    /**
+     * 陆地寻路训练场（docs/陆地寻路训练场设计方案.md Q11）：删掉一个范围内的全部实体（任一占用格在范围内就删），立即落盘。
+     * 场地每轮重建，agent 并没有看见这块地被换掉；判据只删"被证明消失"的格，清不掉换掉的地形，所以整块清。
+     * 渲染线程调用。@return 删掉的条数
+     */
+    public int clearBox(final String dimensionId, final net.minecraft.world.level.levelgen.structure.BoundingBox box) {
+        final LinkedHashMap<String, CompoundTag> union = byDim.get(dimensionId);
+        if (union == null) return 0;
+        int removed = 0;
+        for (var it = union.entrySet().iterator(); it.hasNext(); ) {
+            final ListTag cells = it.next().getValue().getListOrEmpty(KEY_CELLS);
+            for (int i = 0; i < cells.size(); i++) {
+                final BlockPos pos = parseCell(cells.getStringOr(i, ""));
+                if (pos != null && box.isInside(pos)) {
+                    it.remove();
+                    removed++;
+                    break;
+                }
+            }
+        }
+        if (removed > 0) publish(dimensionId);
+        return removed;
+    }
+
+    /** 陆地寻路训练场 Q11：不等限频，立即落盘。 */
+    public void flushNow() {
+        flush();
+    }
+
     // ==================== 内部 ====================
 
     /** 实体条目 tag = {@code entities.nbt} 的同名条目（复用同一实现）+ 并集侧的 {@code cells}。 */

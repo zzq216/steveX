@@ -2,7 +2,7 @@
 /**
  * 训练记录汇总（训练场设计方案 T10；工作台训练场设计方案 W9、W10；箱子训练场设计方案 C12）。
  *
- *   node scripts/training-report.js [场地=craft2x2] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second|tasks|pattern|material|group|animal|banners|color|ops|scale|spare|ingredient|bottle|cells|k|profession|chain|curses|hand|ops|edits|dist|weapon] [--last <N>] [--batch <批次>] [--runtime <dir>]
+ *   node scripts/training-report.js [场地=craft2x2] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second|tasks|pattern|material|group|animal|banners|color|ops|scale|spare|ingredient|bottle|cells|k|profession|chain|curses|hand|ops|edits|dist|weapon|ground|memory|points|edge] [--last <N>] [--batch <批次>] [--runtime <dir>]
  *
  * 箱子场地（type: storage）缺省按 task（取放 / 数量关系）分组，也可以按 chest（箱子大小）、stack（堆叠上限）、fill（每格数量随机 / 取满）、targets（每轮几种目标）、target 分组。
  *
@@ -35,13 +35,13 @@ const runtimeDir = flag('--runtime')
 const last = flag('--last')
 const batch = flag('--batch')
 const byFlag = flag('--by')
-if (args.length > 1 || (byFlag !== null && !['target', 'shape', 'portions', 'task', 'chest', 'stack', 'fill', 'targets', 'materials', 'styles', 'yield', 'family', 'station', 'band', 'kind', 'slot', 'enchantment', 'effect', 'level', 'payment', 'item', 'second', 'tasks', 'pattern', 'material', 'group', 'animal', 'banners', 'color', 'ops', 'scale', 'spare', 'ingredient', 'bottle', 'cells', 'k', 'profession', 'chain', 'curses', 'hand', 'edits', 'dist', 'weapon'].includes(byFlag)) || (last !== null && !(Number.isInteger(Number(last)) && Number(last) > 0))) {
-  console.error('usage: node scripts/training-report.js [arena] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second|tasks|pattern|material|group|animal|banners|color|ops|scale|spare|ingredient|bottle|cells|k|profession|chain|curses|hand|ops|edits|dist|weapon] [--last <N>] [--batch <id>] [--runtime <dir>]')
+if (args.length > 1 || (byFlag !== null && !['target', 'shape', 'portions', 'task', 'chest', 'stack', 'fill', 'targets', 'materials', 'styles', 'yield', 'family', 'station', 'band', 'kind', 'slot', 'enchantment', 'effect', 'level', 'payment', 'item', 'second', 'tasks', 'pattern', 'material', 'group', 'animal', 'banners', 'color', 'ops', 'scale', 'spare', 'ingredient', 'bottle', 'cells', 'k', 'profession', 'chain', 'curses', 'hand', 'edits', 'dist', 'weapon', 'ground', 'memory', 'points', 'edge'].includes(byFlag)) || (last !== null && !(Number.isInteger(Number(last)) && Number(last) > 0))) {
+  console.error('usage: node scripts/training-report.js [arena] [--by target|shape|portions|task|chest|stack|fill|targets|materials|styles|yield|family|station|band|kind|slot|enchantment|effect|level|payment|item|second|tasks|pattern|material|group|animal|banners|color|ops|scale|spare|ingredient|bottle|cells|k|profession|chain|curses|hand|ops|edits|dist|weapon|ground|memory|points|edge] [--last <N>] [--batch <id>] [--runtime <dir>]')
   process.exit(2)
 }
 const config = normalizeConfig({ ...(runtimeDir ? { runtimeDir: path.resolve(runtimeDir) } : {}), logger: null })
 const arena = args[0] ?? 'craft2x2'
-const DEFAULT_BY = { storage: 'task', stonecut: 'family', cook: 'station', enchant: 'kind', beacon: 'effect', anvil: 'task', smithing: 'kind', mount: 'group', loom: 'styles', cartography: 'task', brew: 'ingredient', crafter: 'cells', trade: 'k', grindstone: 'k', book: 'k', sign: 'kind', bow: 'targets' }
+const DEFAULT_BY = { storage: 'task', stonecut: 'family', cook: 'station', enchant: 'kind', beacon: 'effect', anvil: 'task', smithing: 'kind', mount: 'group', loom: 'styles', cartography: 'task', brew: 'ingredient', crafter: 'cells', trade: 'k', grindstone: 'k', book: 'k', sign: 'kind', bow: 'targets', route: 'ground', goal: 'ground' }
 const by = byFlag ?? DEFAULT_BY[config.training.arenas[arena]?.type] ?? 'target'
 const file = path.join(config.runtimeDir, 'training', `${arena}.jsonl`)
 const records = readRecords(file)

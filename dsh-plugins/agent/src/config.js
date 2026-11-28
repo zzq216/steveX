@@ -18,6 +18,7 @@ import { grindstoneOptions } from './training/grindstone.js'
 import { bookOptions } from './training/book.js'
 import { signOptions } from './training/sign.js'
 import { bowOptions } from './training/bow.js'
+import { DEFAULT_TERRAIN_SOURCES, LAND_ORIGIN, landOptions } from './training/land.js'
 import { parseCountSpec } from './training/sampler.js'
 
 /** 用户自己加的箱子场地（type: 'storage'）没写的字段（箱子训练场设计方案 §5） */
@@ -51,7 +52,12 @@ const BOOK_ARENA_DEFAULTS = Object.freeze({ books: '1-3', pages: '1-6', edits: '
 /** 用户自己加的告示牌场地（type: 'sign'）没写的字段（告示牌训练场设计方案 §6；kind: null = 每轮三种题型随机；exclude 不用，留着和其他场地一致） */
 const SIGN_ARENA_DEFAULTS = Object.freeze({ kind: null, edits: '1-3', exclude: [] })
 /** 用户自己加的弓箭场地（type: 'bow'）没写的字段（弓箭训练场设计方案 §6；exclude 不用，留着和其他场地一致） */
-const BOW_ARENA_DEFAULTS = Object.freeze({ targets: '1-4', dist: '8-40', weapon: 'bow', exclude: [] })
+const BOW_ARENA_DEFAULTS = Object.freeze({ targets: '1-4', dist: '8-40', rodDist: '3-10', weapon: 'bow', exclude: [] })
+/** 陆地寻路的两个题型共用的字段（陆地寻路训练场设计方案 §6；两个题型共用 mod 里的一块场地 land，exclude 不用） */
+const LAND_COMMON_DEFAULTS = { origin: LAND_ORIGIN, timeoutSec: 600, memory: 'prefill', relief: { synthetic: '4-12', terrain: '4-24' }, cliffs: '1-3', maxWater: 0.25, markers: true, terrainSources: DEFAULT_TERRAIN_SOURCES, exclude: [] }
+/** 用户自己加的路线题、寻路题场地（type: 'route' / 'goal'）没写的字段 */
+const ROUTE_ARENA_DEFAULTS = Object.freeze({ ...LAND_COMMON_DEFAULTS, ground: 'flat', size: 2, points: '2-4', edge: '0-2', dist: '12-28', offset: '0-16' })
+const GOAL_ARENA_DEFAULTS = Object.freeze({ ...LAND_COMMON_DEFAULTS, ground: 'synthetic', size: 4, dist: '24-56', offset: '0-16' })
 const CARTOGRAPHY_ARENA_DEFAULTS = Object.freeze({ task: 'mix', scale: '0-3', maps: '1-3', copies: '2-5', ops: '1-4', spare: '0-3', exclude: [] })
 const COOK_ARENA_DEFAULTS = Object.freeze({ station: 'random', raw: '64-128', fuel: '64-128', rawSlots: 2, fuelSlots: 2, n: '1-64', m: '1-64', exclude: [] })
 
@@ -88,7 +94,11 @@ export const DEFAULTS = Object.freeze({
   /** 单次提交（大纲 / 展开 / 补丁）编译后的节点上限；2026-11-07 从 15 调到 25（第一次写批量合成时 15 太紧） */
   maxExpansionNodes: 100,
   maxInvalidAttempts: 3,
-  maxValueBytes: 16384,
+  /**
+   * 黑板单个值序列化后的字节上限。2026-11-28 从 16 KB 调到 256 KB：和查询结果的 256 KB 字节预算对齐，
+   * 查得出来就写得进黑板（16 KB 只装得下约 160 条地形记录）。给大模型看的请求里，超过 200 字节的值只给形状，上下文不受影响
+   */
+  maxValueBytes: 262144,
   /** 修复请求的快照缓冲保留最近多少个叶子的前后快照（P2 §4.3） */
   snapshotKeep: 20,
   /** 任务树 reactive 序列缺省的复查间隔（毫秒，P2 §6.2）；树里写了 every 就用树里的 */
@@ -120,8 +130,8 @@ export const DEFAULTS = Object.freeze({
     /** 反思会话用的 DSH 预设（§5.1） */
     sessionPreset: 'stevex'
   },
-  /** 沙箱硬超时：Compute 单次、条件代码单次（快树每 tick 都要算） */
-  sandbox: { timeoutMs: 1000, conditionTimeoutMs: 50, maxOutputBytes: 65536 },
+  /** 沙箱硬超时：Compute 单次、条件代码单次（快树每 tick 都要算）；输出上限 2026-11-28 从 64 KB 调到 256 KB，和黑板上限一致 */
+  sandbox: { timeoutMs: 1000, conditionTimeoutMs: 50, maxOutputBytes: 262144 },
   maxCapsuleDepth: 8,
   /** 每个 Steps / Action 前后读哪些状态来源报告差异（可观测性） */
   /** settle：动作后隔 intervalMs 再读 inventory / container，连续两次一样才拍"执行后"快照，最多 maxReads 次；maxReads 0 = 不等（2026-11-09） */
@@ -241,7 +251,14 @@ export const DEFAULTS = Object.freeze({
      * 'sign' = 告示牌，字段是 { origin, kind: text | color | wax | null（null = 每轮三种随机）, edits: text 题改几行 "k" | "a-b"（1–4）,
      *     exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/告示牌训练场设计方案.md
      * 'bow' = 弓箭（射击平台加 48 格的空场地，原点是平台中心），字段是 { origin, targets: 一轮几个标靶 "k" | "a-b"（1–4）,
-     *     dist: 眼睛到标靶的距离 "a-b"（2–60）, weapon: 武器 "bow" | "crossbow" | "trident" | "any"（缺省 bow，any 每轮在三种里等概率抽一种；第三稿加的弩、第四稿加的三叉戟）, exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/弓箭训练场设计方案.md
+     *     dist: 眼睛到标靶的距离 "a-b"（2–60）, rodDist: 钓竿的轮次没写 dist= 时用的距离 "a-b"（2–16，缺省 3-10，第五稿 Q28）, weapon: 武器 "bow" | "crossbow" | "trident" | "fishing_rod" | "any"（缺省 bow，any 每轮在弓、弩、三叉戟里等概率抽一种，不抽钓竿；第三稿加的弩、第四稿加的三叉戟、第五稿加的钓竿）, exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/弓箭训练场设计方案.md
+     * 'route' / 'goal' = 陆地寻路的路线题 / 寻路题（两个题型共用 mod 里的一块场地 land，原点是场地西北角、平地地板的顶面），字段是 { origin,
+     *     ground: 地形 "flat" | "synthetic" | "terrain" | "any"（寻路题不收 flat；缺省路线 flat、寻路 synthetic）, memory: 记忆 "prefill" | "none" | "any"（缺省 prefill）,
+     *     size: 场地边长（区块）"k" | "a-b"（2–4，可按地形写成 { flat, synthetic, terrain }；缺省路线 2、寻路 4）, points: 路线题的中间点数 "k" | "a-b"（1–8，缺省 2-4）,
+     *     edge: 路线题放在场地最外一圈的中间点数 "k" | "a-b"（0–8，超过本轮点数时取点数；缺省 0-2）, offset: 本轮场地在 x、z 方向各自随机偏移的格数 "k" | "a-b"（0–16，缺省 0-16）,
+     *     dist: 起终点的水平直线距离 "a-b"（4–88，可按地形分开写；缺省路线 12-28、寻路 24-56）, relief: { synthetic, terrain } 高差 "a-b"（缺省 4-12 / 4-24）,
+     *     cliffs: 模拟起伏的悬崖和坑 "k" | "a-b"（0–8，缺省 1-3）, maxWater: 真实世界窗口的水面占比上限（缺省 0.25）, markers: 画观察标记（缺省 true）,
+     *     terrainSources: 真实世界的源区域 [[cx, cz, 区块数], …], exclude: 不用, timeoutSec? / wallTimeoutSec? }（命令行同名选项优先），见 docs/陆地寻路训练场设计方案.md
      */
     arenas: {
       craft2x2: { origin: [10000, 120, 10000], mode: 'named', exclude: [] },
@@ -263,7 +280,9 @@ export const DEFAULTS = Object.freeze({
       grindstone: { type: 'grindstone', origin: [10000, 120, 10420], timeoutSec: 600, tasks: '1-3', kind: 'mix', enchants: '1-3', curses: '0-1', exclude: [] },
       book: { type: 'book', origin: [10000, 120, 10450], timeoutSec: 600, books: '1-3', pages: '1-6', edits: '1-3', exclude: [] },
       sign: { type: 'sign', origin: [10000, 120, 10480], timeoutSec: 300, kind: null, edits: '1-3', exclude: [] },
-      bow: { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', weapon: 'bow', exclude: [] }
+      bow: { type: 'bow', origin: [10300, 120, 10000], timeoutSec: 600, targets: '1-4', dist: '8-40', rodDist: '3-10', weapon: 'bow', exclude: [] },
+      route: { type: 'route', ...ROUTE_ARENA_DEFAULTS },
+      goal: { type: 'goal', ...GOAL_ARENA_DEFAULTS }
     }
   },
   planner: {
@@ -336,11 +355,20 @@ export function normalizeConfig(raw = {}) {
       }
       continue
     }
+    if (arena.type === 'route' || arena.type === 'goal') {
+      // 陆地寻路训练场设计方案 §5.2、§6
+      try {
+        landOptions(arena.type, {}, arena)
+      } catch (error) {
+        throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
+      }
+      continue
+    }
     if (!(Array.isArray(arena.exclude) && arena.exclude.every((r) => typeof r === 'string'))) {
       throw new Error(`stevex-agent config: training.arenas.${name}.exclude must be a list of ${arena.type === 'beacon' ? 'effect ids' : ['storage', 'stonecut', 'cook', 'enchant', 'anvil', 'grindstone'].includes(arena.type) ? 'item ids' : arena.type === 'smithing' ? 'item, trim pattern or trim material ids' : arena.type === 'mount' ? 'item ids' : arena.type === 'loom' ? 'banner, dye, banner pattern or pattern item ids' : ['cartography', 'book', 'sign', 'bow'].includes(arena.type) ? 'strings (unused)' : arena.type === 'brew' ? 'ingredient, potion or bottle ids' : 'recipe names'}`)
     }
     const type = arena.type ?? 'craft'
-    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew', 'crafter', 'trade', 'grindstone', 'book', 'sign', 'bow'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone", "book", "sign" or "bow"`)
+    if (!['craft', 'storage', 'stonecut', 'cook', 'enchant', 'beacon', 'anvil', 'smithing', 'mount', 'loom', 'cartography', 'brew', 'crafter', 'trade', 'grindstone', 'book', 'sign', 'bow', 'route', 'goal'].includes(type)) throw new Error(`stevex-agent config: training.arenas.${name}.type must be "craft", "storage", "stonecut", "cook", "enchant", "beacon", "anvil", "smithing", "mount", "loom", "cartography", "brew", "crafter", "trade", "grindstone", "book", "sign", "bow", "route" or "goal"`)
     if (type === 'crafter') {
       try {
         crafterOptions({}, arena)
@@ -395,6 +423,8 @@ export function normalizeConfig(raw = {}) {
     if (type === 'bow') {
       try {
         bowOptions({}, arena)
+        // 第五稿 Q28：rodDist 只在钓竿的轮次用，配置里写了就一并查
+        bowOptions({ weapon: 'fishing_rod' }, arena)
       } catch (error) {
         throw new Error(`stevex-agent config: training.arenas.${name}.${error.message}`)
       }
@@ -563,6 +593,10 @@ function normalizeTraining(raw = {}) {
             ? { ...SIGN_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
           : type === 'bow'
             ? { ...BOW_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'route'
+            ? { ...ROUTE_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
+          : type === 'goal'
+            ? { ...GOAL_ARENA_DEFAULTS, ...(DEFAULTS.training.arenas[name] ?? {}), ...arena }
         : { grid: 2, station: null, ...(DEFAULTS.training.arenas[name] ?? { mode: 'named', exclude: [] }), ...arena }
   }
   return { ...DEFAULTS.training, ...raw, arenas }

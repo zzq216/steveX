@@ -191,6 +191,37 @@ public class ContainerMemoryStore {
         }
     }
 
+    /**
+     * 陆地寻路训练场（docs/陆地寻路训练场设计方案.md Q11）：删掉一个范围内的全部记录，立即落盘。
+     * 场地每轮重建，agent 并没有看见这块地被换掉；判据只删"被证明消失"的格，清不掉换掉的地形，所以整块清。
+     * 渲染线程调用。@return 删掉的条数
+     */
+    public int clearBox(final String dimensionId, final net.minecraft.world.level.levelgen.structure.BoundingBox box) {
+        final Map<String, RegionBucket> regions = byDim.get(dimensionId);
+        int removed = 0;
+        if (regions != null) {
+            for (Map.Entry<String, RegionBucket> re : regions.entrySet()) {
+                for (var it = re.getValue().containers.keySet().iterator(); it.hasNext(); ) {
+                    final BlockPos pos = VisionRegions.parsePosKey(it.next());
+                    if (pos != null && box.isInside(pos)) {
+                        it.remove();
+                        markDirty(dimensionId, re.getKey());
+                        removed++;
+                    }
+                }
+            }
+        }
+        final Map<String, Integer> pending = pendingDel.get(dimensionId);
+        if (pending != null) {
+            pending.keySet().removeIf(k -> {
+                final BlockPos p = VisionRegions.parsePosKey(k);
+                return p != null && box.isInside(p);
+            });
+        }
+        if (removed > 0) save();
+        return removed;
+    }
+
     public int size() {
         int total = 0;
         for (Map<String, RegionBucket> regions : byDim.values()) {

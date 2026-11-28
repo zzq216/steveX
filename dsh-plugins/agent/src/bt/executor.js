@@ -49,7 +49,7 @@ export class Executor extends EventEmitter {
     this.capsules = capsules
     this.eventLog = eventLog
     this.config = {
-      tickMs: 50, maxExpansionNodes: 100, maxInvalidAttempts: 3, maxValueBytes: 16384, snapshotKeep: 20, reactiveEveryMs: 1000, respawnTimeoutMs: 10000, respawnPollMs: 200,
+      tickMs: 50, maxExpansionNodes: 100, maxInvalidAttempts: 3, maxValueBytes: 262144, snapshotKeep: 20, reactiveEveryMs: 1000, respawnTimeoutMs: 10000, respawnPollMs: 200,
       fastMaxEpisodeMs: 30000,
       ...config,
       observe: { enabled: true, sources: DEFAULT_OBSERVE_SOURCES, byCommand: DEFAULT_OBSERVE_BY_COMMAND, ...(config.observe ?? {}) }

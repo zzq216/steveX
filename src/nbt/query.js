@@ -10,7 +10,8 @@ const { QueryError } = require('./errors')
  */
 
 const DEFAULT_LIMIT = 64
-const MAX_LIMIT = 512
+/** 2026-11-28 从 512 调到 4096：真正的约束是下面的字节预算（和黑板单值上限同为 256 KB）。 */
+const MAX_LIMIT = 4096
 /** 字节上限占位值；实测后回填（§4.5 / §10 审阅点 7）。 */
 const DEFAULT_BYTE_CAP = 256 * 1024
 /** 硬超时占位值；实测后回填（§3.4 / §4.5 / §10 审阅点 7）。 */

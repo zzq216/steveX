@@ -167,6 +167,35 @@ public class TerrainUnionStore {
         return Map.of("added", added, "updated", updated, "removed", removed, "total", total);
     }
 
+    /**
+     * 陆地寻路训练场（docs/陆地寻路训练场设计方案.md Q11）：删掉一个范围内的全部记录，立即落盘。
+     * 场地每轮重建，agent 并没有看见这块地被换掉；判据只删"被证明消失"的格，清不掉换掉的地形，所以整块清。
+     * 渲染线程调用。@return 删掉的条数
+     */
+    public int clearBox(final String dimensionId, final net.minecraft.world.level.levelgen.structure.BoundingBox box) {
+        final Map<String, RegionBucket> regions = byDim.get(dimensionId);
+        if (regions == null) return 0;
+        final Set<String> touched = new LinkedHashSet<>();
+        int removed = 0;
+        for (Map.Entry<String, RegionBucket> re : regions.entrySet()) {
+            for (var it = re.getValue().blocks.keySet().iterator(); it.hasNext(); ) {
+                final BlockPos pos = VisionRegions.parsePosKey(it.next());
+                if (pos != null && box.isInside(pos)) {
+                    it.remove();
+                    touched.add(re.getKey());
+                    removed++;
+                }
+            }
+        }
+        if (removed > 0) publish(dimensionId, touched);
+        return removed;
+    }
+
+    /** 陆地寻路训练场 Q11：不等限频，把已发布的快照立即落盘（prepare 等它写完才返回，发任务时 nbt_query 读到的就是本轮）。 */
+    public void flushNow() {
+        flush();
+    }
+
     // ==================== 内部 ====================
 
     /** 带可见守卫地移除一格批（两条删除通道共用；见 {@link #sync} 注释 ①）。 */

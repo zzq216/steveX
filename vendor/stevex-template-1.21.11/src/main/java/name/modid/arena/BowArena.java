@@ -15,6 +15,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.projectile.FishingHook;
+import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.ChargedProjectiles;
@@ -23,10 +25,12 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
  * 弓箭训练场（docs/弓箭训练场设计方案.md）：场地（Q1）、放标靶、登记本轮射出的每一支箭（Q8）、离开平台的检测（Q7）、到达检测。
- * 全部在服务器线程上调用（同 {@link ArenaManager}）；箭的命中由 {@code AbstractArrowHitMixin} 报来，生成由实体加载事件报来。
+ * 全部在服务器线程上调用（同 {@link ArenaManager}）；箭的命中由 {@code AbstractArrowHitMixin} 报来，浮标的由 {@code FishingHookHitMixin}
+ * 报来，生成由实体加载事件报来。第五稿起"一支箭"也可以是一次抛竿（浮标，Q31）。
  *
  * <p>几何（以 origin 为射击平台中心的地板方块）：平台 3×3（x、z ∈ [o−1, o+1]，顶面 y = oy），玩家站在 (ox, oy+1, oz) 朝 +x；
  * 后面（x = ox−2）和两侧（z = oz ± 2）2 格高屏障护栏，前面敞开。空场地 x ∈ [ox+2, ox+49]、z ∈ [oz−24, oz+23]、y ∈ [oy−21, oy+26]，
@@ -50,6 +54,10 @@ public final class BowArena {
     private static final double EDGE = 0.3;
     /** 只有弓射出的箭判 weak（第四稿 Q24）：弩射出的都是暴击箭（F14），三叉戟都不是暴击、也没有拉满一说（F20） */
     private static final String BOW = "minecraft:bow";
+    /** 浮标没有 getWeaponItem，按实体类型记武器（第五稿 Q31） */
+    private static final String FISHING_ROD = "minecraft:fishing_rod";
+    /** 找浮标碰撞箱贴着的方块时外扩多少（F31：被挡住后碰撞箱正好贴着方块） */
+    private static final double TOUCH = 1.0E-3;
 
     /** 一个标靶：方块坐标 + 指定的面（Q2）。 */
     public record Target(BlockPos pos, Direction face) {}
@@ -57,17 +65,19 @@ public final class BowArena {
     /** prepare 的 bow：本轮的标靶（Q3）。 */
     public record Setup(List<Target> targets) {}
 
-    /** expect.bow：每个标靶都被一支有效的箭射中过指定面（Q7）。 */
+    /** expect.bow：每个标靶都被一次有效的命中碰过指定面（Q7、第五稿 Q31）。 */
     public record Spec(List<Target> targets) {}
 
-    /** 本轮射出的一支箭（Q8）。 */
+    /** 本轮射出的一支箭，或者抛出的一次浮标（Q8；第五稿 Q31）。 */
     private static final class Shot {
         final int n;
         final UUID uuid;
         final long ms;
         final boolean crit;
-        /** 射出它的武器的物品 id（F14，{@code getWeaponItem}）；读不到 → null */
+        /** 射出它的武器的物品 id（F14，{@code getWeaponItem}）；浮标记钓竿；读不到 → null */
         final String weapon;
+        /** 编号超过标靶数（第五稿 Q29）：不管碰到什么都记 extra */
+        final boolean extra;
         final Vec3 from;
         final Vec3 velocity;
         final Vec3 playerPos;
@@ -82,16 +92,24 @@ public final class BowArena {
         Integer target;
         Double err;
         Vec3 offset;
+        /** 怎么判出来的（第五稿 Q31）：ray = 原版的射线命中，contact = 浮标的碰撞箱碰到，entity = 浮标勾住实体；只用于核对 */
+        String via;
 
-        Shot(int n, AbstractArrow arrow, ServerPlayer player) {
+        Shot(int n, Projectile projectile, ServerPlayer player, boolean extra) {
             this.n = n;
-            this.uuid = arrow.getUUID();
+            this.uuid = projectile.getUUID();
             this.ms = System.currentTimeMillis();
-            this.crit = arrow.isCritArrow();
-            ItemStack w = arrow.getWeaponItem();
-            this.weapon = w == null || w.isEmpty() ? null : BuiltInRegistries.ITEM.getKey(w.getItem()).toString();
-            this.from = arrow.position();
-            this.velocity = arrow.getDeltaMovement();
+            this.extra = extra;
+            if (projectile instanceof AbstractArrow arrow) {
+                this.crit = arrow.isCritArrow();
+                ItemStack w = arrow.getWeaponItem();
+                this.weapon = w == null || w.isEmpty() ? null : BuiltInRegistries.ITEM.getKey(w.getItem()).toString();
+            } else {
+                this.crit = false;
+                this.weapon = projectile instanceof FishingHook ? FISHING_ROD : null;
+            }
+            this.from = projectile.position();
+            this.velocity = projectile.getDeltaMovement();
             this.playerPos = player.position();
             this.yaw = player.getYRot();
             this.pitch = player.getXRot();
@@ -194,22 +212,22 @@ public final class BowArena {
         return 1;
     }
 
-    /** 开始一轮：删掉场地里所有的箭，放本轮的标靶（场地刚由 build 清过）。 */
+    /** 开始一轮：删掉场地里所有的箭和浮标，放本轮的标靶（场地刚由 build 清过）。 */
     static void begin(ServerLevel level, BlockPos o, UUID player, Setup setup) {
         for (Entity e : level.getEntitiesOfClass(AbstractArrow.class, bounds(o))) e.discard();
+        for (Entity e : level.getEntitiesOfClass(FishingHook.class, bounds(o))) e.discard();
         for (Target t : setup.targets()) level.setBlockAndUpdate(t.pos(), Blocks.TARGET.defaultBlockState());
         round = new Round(o.immutable(), player, List.copyOf(setup.targets()));
     }
 
-    /** 结束本轮：删掉还在飞的箭。 */
+    /** 结束本轮：删掉还在飞的箭，以及还在外面的浮标（第五稿 Q31）。 */
     static void end(ServerLevel level) {
         Round r = round;
         round = null;
         if (r == null) return;
         for (Shot s : r.shots) {
-            if (s.result != null) continue;
             Entity e = level.getEntity(s.uuid);
-            if (e != null) e.discard();
+            if (e != null && (s.result == null || e instanceof FishingHook)) e.discard();
         }
     }
 
@@ -225,7 +243,7 @@ public final class BowArena {
         return true;
     }
 
-    /** Q7 的到达条件：每个标靶都被一支有效的箭射中过指定面。 */
+    /** Q7 的到达条件：每个标靶都被一次有效的命中碰过指定面（一支有效的箭，或者一次没超出次数的抛竿）。 */
     static boolean reached() {
         Round r = round;
         if (r == null) return false;
@@ -240,24 +258,37 @@ public final class BowArena {
         return Math.abs(dx) <= 1.5 + EDGE && Math.abs(dz) <= 1.5 + EDGE && player.getY() >= o.getY() + 1 - 0.01;
     }
 
-    /** 服务端实体加载：本轮玩家刚射出的箭，登记并改成不能捡（Q8，F7）。 */
+    /**
+     * 服务端实体加载：本轮玩家刚射出的箭，登记并改成不能捡（Q8，F7）；刚抛出的浮标登记为一次抛竿（第五稿 Q31）。
+     * 编号超过标靶数的记 extra（Q29，只有钓竿会出现：箭、三叉戟只发标靶数那么多）。
+     */
     public static void onEntityLoad(Entity entity, ServerLevel level) {
         Round r = round;
-        if (r == null || !(entity instanceof AbstractArrow arrow) || arrow.tickCount != 0) return;
-        if (!(arrow.getOwner() instanceof ServerPlayer player) || !player.getUUID().equals(r.player)) return;
-        arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
-        r.shots.add(new Shot(r.shots.size() + 1, arrow, player));
+        if (r == null || !(entity instanceof AbstractArrow || entity instanceof FishingHook) || entity.tickCount != 0) return;
+        Projectile projectile = (Projectile) entity;
+        if (!(projectile.getOwner() instanceof ServerPlayer player) || !player.getUUID().equals(r.player)) return;
+        if (projectile instanceof AbstractArrow arrow) arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
+        r.shots.add(new Shot(r.shots.size() + 1, projectile, player, r.shots.size() >= r.targets.size()));
     }
 
-    /** 箭命中方块（{@code AbstractArrowHitMixin}）：判 hit / repeat / wrong_face / platform / out，弓没拉满的记 weak（Q6；弩、三叉戟不判，Q17、Q24）。 */
-    public static void onHitBlock(AbstractArrow arrow, BlockHitResult hit) {
+    /**
+     * 箭或浮标命中方块（{@code AbstractArrowHitMixin}、{@code FishingHookHitMixin}，原版的射线命中）：
+     * 判 hit / repeat / wrong_face / platform / out，弓没拉满的记 weak（Q6；弩、三叉戟、钓竿不判，Q17、Q24）。
+     */
+    public static void onHitBlock(Projectile projectile, BlockHitResult hit) {
         Round r = round;
-        if (r == null || arrow.level().isClientSide()) return;
-        Shot s = shotOf(r, arrow.getUUID());
+        if (r == null || projectile.level().isClientSide()) return;
+        Shot s = shotOf(r, projectile.getUUID());
         if (s == null || s.result != null) return;
-        s.block = hit.getBlockPos().immutable();
-        s.face = hit.getDirection();
-        s.point = hit.getLocation();
+        judge(r, s, hit.getBlockPos().immutable(), hit.getDirection(), hit.getLocation(), "ray");
+    }
+
+    /** 碰到方块 block 的 face 面、碰到的点是 point：判定这一支（Q6、Q31）。 */
+    private static void judge(Round r, Shot s, BlockPos block, Direction face, Vec3 point, String via) {
+        s.block = block;
+        s.face = face;
+        s.point = point;
+        s.via = via;
         s.path.add(s.point);
         int idx = -1;
         for (int i = 0; i < r.targets.size(); i++) if (r.targets.get(i).pos().equals(s.block)) idx = i;
@@ -271,7 +302,8 @@ public final class BowArena {
             }
         }
         String result;
-        if (!s.crit && BOW.equals(s.weapon)) result = "weak";
+        if (s.extra) result = "extra"; // 超出次数的抛竿：碰到标靶也不算（Q29）
+        else if (!s.crit && BOW.equals(s.weapon)) result = "weak";
         else if (idx >= 0 && r.targets.get(idx).face() == s.face) {
             if (r.hit[idx]) result = "repeat";
             else {
@@ -285,7 +317,7 @@ public final class BowArena {
     }
 
     private static void resolve(Shot s, String result) {
-        s.result = result;
+        s.result = s.extra ? "extra" : result;
         s.resultMs = System.currentTimeMillis();
     }
 
@@ -325,6 +357,8 @@ public final class BowArena {
                 continue;
             }
             Vec3 p = e.position();
+            Vec3 last = s.path.get(s.path.size() - 1);
+            if (e instanceof FishingHook hook && hookContact(r, s, level, hook, p.subtract(last))) continue;
             if (s.path.size() < MAX_PATH) s.path.add(p);
             if (!bounds.contains(p)) {
                 resolve(s, "out");
@@ -338,6 +372,57 @@ public final class BowArena {
             player.stopRiding();
             ArenaManager.teleportOutside(server, player, r.origin);
         }
+    }
+
+    /**
+     * 浮标这一 tick 没有射线命中、却被方块挡住了，或者勾住了实体（第五稿 F31、F32、Q31）：判定并返回 true；否则 false。
+     * 被挡住时，碰撞箱朝六个方向各外扩 {@link #TOUCH}，找贴着的方块；贴着好几个面时取和这一 tick 的运动方向最正对的那一面。
+     * 命中点取浮标的位置（碰撞箱底面中心）沿法线投到那一面上，和射线命中的参考点相同。
+     */
+    private static boolean hookContact(Round r, Shot s, ServerLevel level, FishingHook hook, Vec3 motion) {
+        if (hook.getHookedIn() != null) {
+            // 场里只可能勾到平台上的掉落物（F32）
+            s.via = "entity";
+            s.path.add(hook.position());
+            resolve(s, "platform");
+            return true;
+        }
+        if (!hook.horizontalCollision && !hook.verticalCollision) return false;
+        AABB box = hook.getBoundingBox();
+        BlockPos best = null;
+        Direction bestFace = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        for (Direction d : Direction.values()) {
+            AABB slab = switch (d) {
+                case EAST -> new AABB(box.maxX, box.minY, box.minZ, box.maxX + TOUCH, box.maxY, box.maxZ);
+                case WEST -> new AABB(box.minX - TOUCH, box.minY, box.minZ, box.minX, box.maxY, box.maxZ);
+                case UP -> new AABB(box.minX, box.maxY, box.minZ, box.maxX, box.maxY + TOUCH, box.maxZ);
+                case DOWN -> new AABB(box.minX, box.minY - TOUCH, box.minZ, box.maxX, box.minY, box.maxZ);
+                case SOUTH -> new AABB(box.minX, box.minY, box.maxZ, box.maxX, box.maxY, box.maxZ + TOUCH);
+                case NORTH -> new AABB(box.minX, box.minY, box.minZ - TOUCH, box.maxX, box.maxY, box.minZ);
+            };
+            for (BlockPos q : BlockPos.betweenClosed(BlockPos.containing(slab.minX, slab.minY, slab.minZ), BlockPos.containing(slab.maxX, slab.maxY, slab.maxZ))) {
+                VoxelShape shape = level.getBlockState(q).getCollisionShape(level, q);
+                if (shape.isEmpty() || !shape.bounds().move(q).intersects(slab)) continue;
+                // 碰到的是方块朝浮标的那一面，法线 = d 的反方向；运动方向越是逆着法线越正对
+                Direction face = d.getOpposite();
+                double score = -(motion.x * face.getStepX() + motion.y * face.getStepY() + motion.z * face.getStepZ());
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = q.immutable();
+                    bestFace = face;
+                }
+            }
+        }
+        if (best == null) return false;
+        Vec3 p = hook.position();
+        Vec3 point = switch (bestFace.getAxis()) {
+            case X -> new Vec3(best.getX() + (bestFace.getStepX() > 0 ? 1 : 0), p.y, p.z);
+            case Y -> new Vec3(p.x, best.getY() + (bestFace.getStepY() > 0 ? 1 : 0), p.z);
+            case Z -> new Vec3(p.x, p.y, best.getZ() + (bestFace.getStepZ() > 0 ? 1 : 0));
+        };
+        judge(r, s, best, bestFace, point, "contact");
+        return true;
     }
 
     /** 还在飞的箭有几支（Q7 的 out-of-arrows 用）。 */
@@ -401,6 +486,7 @@ public final class BowArena {
             row.put("rotation", Map.of("yaw", (double) s.yaw, "pitch", (double) s.pitch));
             row.put("result", s.result);
             row.put("resultMs", s.resultMs);
+            if (s.via != null) row.put("via", s.via);
             if (s.block != null) {
                 row.put("block", pos(s.block));
                 row.put("face", s.face.getSerializedName());

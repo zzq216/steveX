@@ -21,7 +21,7 @@ export function queryTools({ game, methods, readMethods, nbt, nbtSources, json, 
   const queryParams = {
     filters: { type: 'object', additionalProperties: true, description: '键 = 记录内的点分路径，值 = 字面量 / { "min", "max" } 区间 / 数组（任一）；多个键是 AND' },
     fields: { type: 'array', items: { type: 'string' }, required: true, description: '投影：输出哪些路径（必填、非空）' },
-    limit: { type: 'integer', description: '最多返回几条，1..512，默认 64' }
+    limit: { type: 'integer', description: '最多返回几条，1..4096，默认 64；结果另有 256 KB 的字节上限' }
   }
   const options = () => ({ taskId: taskId() ?? undefined })
 
@@ -55,7 +55,8 @@ export function queryTools({ game, methods, readMethods, nbt, nbtSources, json, 
       ].join('\n'),
       parameters: {
         path: { type: 'string', required: true, enum: nbtSources, description: '数据源' },
-        ...queryParams
+        ...queryParams,
+        filters: { ...queryParams.filters, description: `${queryParams.filters.description}；坐标数组（如 pos）可用 .x / .y / .z 取分量，例 { "pos.x": { "min": 0, "max": 31 } }` }
       },
       output: { schema: JSON_OUTPUT, render },
       isConcurrencySafe: () => true,

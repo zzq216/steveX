@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { Sandbox, SandboxError, CapsuleLibrary, saveCapsule, hashEntry, parseRef } from '../src/capsules/index.js'
+import { Sandbox, SandboxError, CapsuleLibrary, saveCapsule, hashEntry, parseRef, createBuiltins } from '../src/capsules/index.js'
 import { createDefaultRegistry } from '../src/commands.js'
 import { tempDir } from './helpers.js'
 
@@ -110,4 +110,10 @@ test('胶囊库：保存时校验——签名、代码能编译、子树能过�
   const leaky = saveCapsule(svc, 'trees', { ...tree, name: 'demo.leaky', body: { act: 'key/hotbar', params: { slot: '$callerKey' } } })
   assert.match(leaky.errors[0], /reads "\$callerKey" but nothing writes/)
   assert.match(saveCapsule(svc, 'trees', { ...tree, name: 'demo.bad', body: { act: 'fly' } }).errors[0], /unknown command "fly"/)
+})
+
+test('内置查询条目的哈希不变：库里的子树钉着 core.json.query@15514cff，签名（含 hint）一改就解析不到（2026-11-28）', () => {
+  const hashes = Object.fromEntries(createBuiltins({}).builtins.map((b) => [`${b.folder}/${b.entry.name}`, hashEntry(b.entry)]))
+  assert.equal(hashes['code/core.json.query'], '15514cff')
+  assert.equal(hashes['code/core.nbt.query'], 'd6fad7bf')
 })

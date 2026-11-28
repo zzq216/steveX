@@ -46,7 +46,9 @@ public class ArenaApi {
             name.modid.arena.SignArena.Setup signSetup = signSetup(params.get("sign"));
             // 弓箭训练场（弓箭方案 Q3、Q9）：本轮的标靶
             name.modid.arena.BowArena.Setup bowSetup = params.get("bow") == null ? null : new name.modid.arena.BowArena.Setup(bowTargets(params.get("bow"), "bow"));
-            if (items.isEmpty() && chestItems.isEmpty() && params.get("mount") == null && signSetup == null) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
+            // 陆地寻路训练场（陆地寻路方案 §3）：起点、中间点、终点、开局偏航角、观察标记、记忆模式；什么都不发
+            name.modid.arena.LandArena.Setup landSetup = landSetup(params.get("land"));
+            if (items.isEmpty() && chestItems.isEmpty() && params.get("mount") == null && signSetup == null && landSetup == null) throw new IllegalArgumentException("items and chestItems are both empty: nothing to hand out");
             // 告示牌方案 Q7：开局行、目标行都要写得进编辑框（宽度用客户端字体量，和 sign/set 同一个检查）
             if (signSetup != null) checkSignWidths(signSetup.lines(), "sign.lines");
             if (expect != null && expect.sign() != null) checkSignWidths(expect.sign().lines(), "expect.sign.lines");
@@ -63,7 +65,17 @@ public class ArenaApi {
             // 书与笔训练场（书与笔方案 J4）：当前选中的快捷栏格 0–8；不给 = 不动
             Integer selectedSlot = optionalInt(params, "selectedSlot");
             UUID uuid = localPlayer();
-            return onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot, signSetup, bowSetup));
+            Map<String, Object> prepared = onServer(15_000, server -> ArenaManager.prepare(server, player(server, uuid), arena, origin, station, items, chestItems, seed, watch, expect, dayTime, enchantSetup, beaconLevel, mountSetup, villagerSetup, selectedSlot, signSetup, bowSetup, landSetup));
+            // 陆地寻路方案 Q11：服务器上的 prepare 做完，再到客户端一侧清除、预填记忆（立即落盘后才返回）
+            if (landSetup != null) prepared.put("memory", landMemory(origin, landSetup));
+            return prepared;
+        });
+        // 陆地寻路训练场（陆地寻路方案 §3 第 1 步）：按地形种类放好本轮场地，交回格子信息；真实世界的窗口要先生成区块，给足时间
+        handlers.put("arena/land-build", params -> {
+            String arena = params.get("arena") == null ? "land" : arena(params);
+            BlockPos origin = origin(params, arena);
+            name.modid.arena.LandArena.Build build = landBuild(params);
+            return onServer(120_000, server -> name.modid.arena.LandArena.build(server, origin, build));
         });
         // 村民交易训练场（村民交易方案 V3）：按职业、类型、等级、交易项种子生成交易项，只读、不碰世界
         handlers.put("arena/trade-preview", params -> {
@@ -114,6 +126,115 @@ public class ArenaApi {
             UUID uuid = localPlayer();
             return onServer(10_000, server -> ArenaManager.finish(server, player(server, uuid), origin));
         });
+    }
+
+    /** arena/land-build 的参数（陆地寻路方案 Q2、Q2b、Q3） */
+    private static name.modid.arena.LandArena.Build landBuild(Map<String, Object> params) {
+        if (!(params.get("ground") instanceof String ground)) throw new IllegalArgumentException("ground must be flat, synthetic or terrain");
+        Integer size = optionalInt(params, "size");
+        if (size == null) throw new IllegalArgumentException("size must be an integer (chunks, 2-4)");
+        int[] heights = null;
+        if (params.get("heights") != null) {
+            if (!(params.get("heights") instanceof List<?> list)) throw new IllegalArgumentException("heights must be a list of integers");
+            heights = new int[list.size()];
+            for (int i = 0; i < list.size(); i++) {
+                if (!(list.get(i) instanceof Number n) || n.doubleValue() != Math.rint(n.doubleValue())) throw new IllegalArgumentException("heights[" + i + "] must be an integer");
+                heights[i] = n.intValue();
+            }
+        }
+        Integer cx = null, cz = null;
+        if (params.get("window") != null) {
+            if (!(params.get("window") instanceof Map<?, ?> w) || !(w.get("cx") instanceof Number x) || !(w.get("cz") instanceof Number z)) throw new IllegalArgumentException("window must be { cx, cz } (chunk coordinates)");
+            cx = x.intValue();
+            cz = z.intValue();
+        }
+        double maxWater = params.get("maxWater") instanceof Number n ? n.doubleValue() : 0.25;
+        int reliefMin = 4, reliefMax = 24;
+        if (params.get("relief") != null) {
+            if (!(params.get("relief") instanceof List<?> rl) || rl.size() != 2 || !(rl.get(0) instanceof Number a) || !(rl.get(1) instanceof Number b)) throw new IllegalArgumentException("relief must be [min, max]");
+            reliefMin = a.intValue();
+            reliefMax = b.intValue();
+        }
+        // 本轮场地在整块场地里的偏移（第四稿 Q19）：[ox, oz]，缺省 [0, 0]；范围由 LandArena.build 按 size 核对
+        int ox = 0, oz = 0;
+        if (params.get("offset") != null) {
+            if (!(params.get("offset") instanceof List<?> ol) || ol.size() != 2 || !(ol.get(0) instanceof Number a) || !(ol.get(1) instanceof Number b)
+                    || a.doubleValue() != Math.rint(a.doubleValue()) || b.doubleValue() != Math.rint(b.doubleValue())) {
+                throw new IllegalArgumentException("offset must be [ox, oz] (integers, blocks)");
+            }
+            ox = a.intValue();
+            oz = b.intValue();
+        }
+        return new name.modid.arena.LandArena.Build(ground, size, heights, cx, cz, maxWater, reliefMin, reliefMax, ox, oz);
+    }
+
+    /** prepare 的 land 参数（陆地寻路方案 §3、Q4b、Q6、Q11）；不给 → null */
+    private static name.modid.arena.LandArena.Setup landSetup(Object v) {
+        if (v == null) return null;
+        if (!(v instanceof Map<?, ?> m)) throw new IllegalArgumentException("land must be { kind, start, yaw, points, goal, markers?, memory? }");
+        if (!(m.get("kind") instanceof String kind)) throw new IllegalArgumentException("land.kind must be route or goal");
+        double[] start = landPos(m.get("start"), "land.start");
+        double[] goal = landPos(m.get("goal"), "land.goal");
+        List<double[]> points = new ArrayList<>();
+        if (m.get("points") != null) {
+            if (!(m.get("points") instanceof List<?> list)) throw new IllegalArgumentException("land.points must be a list of [x, y, z]");
+            for (int i = 0; i < list.size(); i++) points.add(landPos(list.get(i), "land.points[" + i + "]"));
+        }
+        float yaw = m.get("yaw") instanceof Number n ? n.floatValue() : 0f;
+        boolean markers = !Boolean.FALSE.equals(m.get("markers"));
+        Object memory = m.get("memory");
+        if (memory != null && !"prefill".equals(memory) && !"none".equals(memory)) throw new IllegalArgumentException("land.memory must be prefill or none");
+        return new name.modid.arena.LandArena.Setup(kind, start, yaw, points, goal, markers, memory == null ? "none" : (String) memory);
+    }
+
+    private static double[] landPos(Object v, String what) {
+        if (!(v instanceof List<?> list) || list.size() != 3 || !list.stream().allMatch(n -> n instanceof Number)) throw new IllegalArgumentException(what + " must be [x, y, z]");
+        return new double[]{((Number) list.get(0)).doubleValue(), ((Number) list.get(1)).doubleValue(), ((Number) list.get(2)).doubleValue()};
+    }
+
+    /**
+     * 陆地寻路方案 Q11：等客户端载入本轮场地的区块（刚传送过来时可能还没到），再在渲染线程上清掉整块场地的记忆，
+     * memory=prefill 时把本轮场地写进去。出错不抛：prepare 已经开了一轮，返回 { error } 由插件核对后 finish。
+     */
+    private static Map<String, Object> landMemory(BlockPos origin, name.modid.arena.LandArena.Setup setup) {
+        try {
+            net.minecraft.world.level.levelgen.structure.BoundingBox field = name.modid.arena.LandArena.fieldBox();
+            if (field == null) throw new IllegalStateException("the land field is not built");
+            long deadline = System.currentTimeMillis() + 10_000;
+            for (;;) {
+                Boolean loaded = AgentWebSocketServer.runOnClient(2_000, "Arena chunks", ref -> {
+                    var level = Minecraft.getInstance().level;
+                    if (level == null) return;
+                    for (int cx = field.minX() >> 4; cx <= field.maxX() >> 4; cx++) {
+                        for (int cz = field.minZ() >> 4; cz <= field.maxZ() >> 4; cz++) {
+                            if (!level.getChunkSource().hasChunk(cx, cz)) {
+                                ref.value = false;
+                                return;
+                            }
+                        }
+                    }
+                    ref.value = true;
+                });
+                if (Boolean.TRUE.equals(loaded)) break;
+                if (System.currentTimeMillis() > deadline) throw new IllegalStateException("client did not load the field chunks within 10s");
+                Thread.sleep(100);
+            }
+            net.minecraft.world.level.levelgen.structure.BoundingBox site = name.modid.arena.LandArena.siteBox(origin);
+            boolean prefill = "prefill".equals(setup.memory());
+            Map<String, Object> out = AgentWebSocketServer.runOnClient(30_000, "Arena memory", ref -> {
+                try {
+                    ref.value = name.modid.vision.ArenaMemory.apply(site, prefill ? field : null);
+                } catch (RuntimeException e) {
+                    ref.value = Map.of("error", String.valueOf(e.getMessage()));
+                }
+            });
+            if (out == null) throw new IllegalStateException("arena memory update timed out");
+            Map<String, Object> result = new LinkedHashMap<>(out);
+            result.put("mode", setup.memory());
+            return result;
+        } catch (Exception e) {
+            return Map.of("error", String.valueOf(e.getMessage()));
+        }
     }
 
     private static <T> T onServer(long timeoutMs, Function<MinecraftServer, T> action) throws Exception {

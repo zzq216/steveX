@@ -63,9 +63,9 @@ export class Sandbox {
    * @param {object} [options]
    * @param {number} [options.timeoutMs=1000]          Compute 单次调用的硬超时
    * @param {number} [options.conditionTimeoutMs=50]   条件代码单次调用的硬超时（快树每 tick 都要算）
-   * @param {number} [options.maxOutputBytes=65536]
+   * @param {number} [options.maxOutputBytes=262144]
    */
-  constructor({ timeoutMs = 1000, conditionTimeoutMs = 50, maxOutputBytes = 65536 } = {}) {
+  constructor({ timeoutMs = 1000, conditionTimeoutMs = 50, maxOutputBytes = 262144 } = {}) {
     this.timeoutMs = timeoutMs
     this.conditionTimeoutMs = conditionTimeoutMs
     this.maxOutputBytes = maxOutputBytes

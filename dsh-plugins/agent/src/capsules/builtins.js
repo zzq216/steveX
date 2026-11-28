@@ -18,6 +18,9 @@ const QUERY_INPUTS = {
   fields: { type: 'list', item: 'string', required: true, hint: '投影：输出哪些路径（必填、非空）' },
   limit: { type: 'int', hint: '最多返回几条，1..512，默认 64' }
 }
+// 上面的 hint 在签名里，进内置条目的哈希：改一个字，库里钉着 core.json.query@15514cff / core.nbt.query@d6fad7bf
+// 的子树就都解析不到了。补充说明写在 entry.description（不进哈希）。limit 的实际上限见 src/nbt/query.js 的 MAX_LIMIT
+const LIMIT_NOTE = 'limit 实际可到 4096（签名里的 1..512 是旧写法），结果另有 256 KB 的字节上限'
 const QUERY_OUTPUTS = {
   result: { type: 'list', hint: '命中并投影后的记录（键 = fields 里的路径字符串）' },
   matchedCount: { type: 'number', hint: '截断前的命中总数' },
@@ -39,7 +42,7 @@ export function createBuiltins({ jsonSources = {}, visionRoot = null } = {}) {
       folder: 'code',
       entry: {
         name: 'core.json.query',
-        description: `查询白名单里的 JSON 文件（可用数据源：${jsonIds.join(' / ') || '无'}）；只出短列表`,
+        description: `查询白名单里的 JSON 文件（可用数据源：${jsonIds.join(' / ') || '无'}）；只出短列表。${LIMIT_NOTE}`,
         signature: {
           inputs: {
             path: { type: 'string', required: true, hint: '数据源标识，或 <目录源>/<相对路径>.json；不接受文件路径' },
@@ -61,7 +64,7 @@ export function createBuiltins({ jsonSources = {}, visionRoot = null } = {}) {
       folder: 'code',
       entry: {
         name: 'core.nbt.query',
-        description: '查询记忆世界落盘的 NBT（entities / containers / block_entities / biomes / terrain）；只出短列表',
+        description: `查询记忆世界落盘的 NBT（entities / containers / block_entities / biomes / terrain）；只出短列表。filters 里坐标数组（如 pos）可用 .x / .y / .z 取分量，例 { "pos.x": { "min": 0, "max": 31 } }。${LIMIT_NOTE}`,
         signature: {
           inputs: {
             path: { type: 'string', required: true, hint: NBT_SOURCES.join(' / ') },

@@ -21,6 +21,10 @@ import net.minecraft.world.entity.LivingEntity;
  * 与死亡界面的"重生"按钮完全相同（DeathScreen.java:49-52）：发 {@code PERFORM_RESPAWN}（LocalPlayer.java:323-326），
  * 服务端回 respawn 包后客户端自己关掉死亡界面（ClientPacketListener.java:1337-1339）——有服务端回读通道，走语义通道。
  *
+ * <p>{@code flags.fishing} ＝自己的浮标在外面（{@code Player.fishing}，客户端收到浮标生成时由 {@code FishingHook.setOwner} 设上、
+ * 浮标消失时清掉，FishingHook.java:519-523）；这时再按使用键是收竿（FishingRodItem.java:24-40）。原版看得到：钓竿外形会变、
+ * 浮标和鱼线也看得到。只给有没有、不给位置（弓箭训练场设计方案第五稿 Q32）。
+ *
  * <p>P3（实施细则 §2.2）补的都是人在屏幕上看得到的状态：{@code flags.onFire} ＝{@code displayFireAnimation()}
  * （火焰渲染用的同一判据，与 vision 实体摘要的 {@code onFire} 同名同义）、{@code flags.inLava}、{@code flags.inPowderSnow}、
  * {@code vitals.frozenTicks}；{@code lastDamage} ＝最近 2 秒内的受伤：服务端把伤害事件发给受伤者自己
@@ -40,7 +44,8 @@ public class PlayerApi {
         Map<String, Object> attributes,
         boolean dead, String deathMessage,
         boolean onFire, boolean inLava, boolean inPowderSnow, int frozenTicks,
-        Map<String, Object> lastDamage
+        Map<String, Object> lastDamage,
+        boolean fishing
     ) {}
 
     public static void register(Map<String, WsHandler> handlers) {
@@ -68,6 +73,7 @@ public class PlayerApi {
             flags.put("onFire",     d.onFire);
             flags.put("inLava",     d.inLava);
             flags.put("inPowderSnow", d.inPowderSnow);
+            flags.put("fishing",    d.fishing);
 
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("vitals",     vitals);
@@ -133,7 +139,8 @@ public class PlayerApi {
                 readAttributes(p),
                 p.isDeadOrDying(), deathMessage,
                 p.displayFireAnimation(), p.isInLava(), p.isInPowderSnow, p.getTicksFrozen(),
-                lastDamage(p)
+                lastDamage(p),
+                p.fishing != null
             );
         });
     }

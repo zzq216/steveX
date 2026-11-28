@@ -19,11 +19,11 @@ export class BlackboardError extends Error {
 export class Blackboard {
   /**
    * @param {object} [options]
-   * @param {number} [options.maxValueBytes=16384]  单个值序列化后的字节上限
+   * @param {number} [options.maxValueBytes=262144] 单个值序列化后的字节上限
    * @param {object} [options.initial]              初始键值
    * @param {Blackboard|null} [options.parent]      实例帧的回落帧（任务帧）
    */
-  constructor({ maxValueBytes = 16384, initial = {}, parent = null } = {}) {
+  constructor({ maxValueBytes = 262144, initial = {}, parent = null } = {}) {
     this.maxValueBytes = maxValueBytes
     this.parent = parent
     this.values = new Map()

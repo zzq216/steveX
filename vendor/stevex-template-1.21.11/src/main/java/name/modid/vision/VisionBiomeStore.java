@@ -135,6 +135,33 @@ public class VisionBiomeStore {
         }
     }
 
+    /**
+     * 陆地寻路训练场（docs/陆地寻路训练场设计方案.md Q11）：删掉一个范围内的全部群系 cell（cell 是 4×4×4，和范围相交就删），立即落盘。
+     * 场地每轮重建，agent 并没有看见这块地被换掉；判据只删"被证明消失"的格，清不掉换掉的地形，所以整块清。
+     * 渲染线程调用。@return 删掉的条数
+     */
+    public int clearBox(final String dimensionId, final net.minecraft.world.level.levelgen.structure.BoundingBox box) {
+        final Map<String, RegionBucket> regions = byDim.get(dimensionId);
+        if (regions == null) return 0;
+        final Set<String> touched = new LinkedHashSet<>();
+        int removed = 0;
+        for (Map.Entry<String, RegionBucket> re : regions.entrySet()) {
+            for (var it = re.getValue().cells.keySet().iterator(); it.hasNext(); ) {
+                final int[] q = parseCellKey(it.next());
+                if (q == null) continue;
+                final int x = QuartPos.toBlock(q[0]), y = QuartPos.toBlock(q[1]), z = QuartPos.toBlock(q[2]);
+                if (x + 3 >= box.minX() && x <= box.maxX() && y + 3 >= box.minY() && y <= box.maxY()
+                        && z + 3 >= box.minZ() && z <= box.maxZ()) {
+                    it.remove();
+                    touched.add(re.getKey());
+                    removed++;
+                }
+            }
+        }
+        if (removed > 0) writeRegions(dimensionId, touched);
+        return removed;
+    }
+
     // ==================== 内部 ====================
 
     /** 一帧候选：采样点 + 该 cell 所属区键（区内单值，故取首见代表即可）。 */

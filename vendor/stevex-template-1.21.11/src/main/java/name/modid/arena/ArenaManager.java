@@ -205,6 +205,8 @@ public final class ArenaManager {
             // 弓箭场地（弓箭方案 Q1）：工作站是本轮的标靶，位置每轮不同，由 BowArena 管
             Map.entry("bow", Blocks.TARGET),
             Map.entry("villager", Blocks.AIR),
+            // 陆地寻路场地（陆地寻路方案 Q1）：没有工作站，地形由 LandArena 每轮重建
+            Map.entry("land", Blocks.AIR),
             // 坐骑场地（坐骑方案 H1）：工作站是动物，方块位置上只留空气
             Map.entry("mount", Blocks.AIR));
 
@@ -232,7 +234,9 @@ public final class ArenaManager {
             Map.entry("book", new Site(new BlockPos(10000, 120, 10450), null)),
             Map.entry("sign", new Site(new BlockPos(10000, 120, 10480), "sign")),
             // 弓箭方案 Q1：48 格的空场地放不进 x = 10000 那一排
-            Map.entry("bow", new Site(new BlockPos(10300, 120, 10000), "bow"))));
+            Map.entry("bow", new Site(new BlockPos(10300, 120, 10000), "bow")),
+            // 陆地寻路方案 Q1：4 × 4 个区块、按区块对齐；origin 是场地西北角、平地地板的顶面
+            Map.entry("land", new Site(new BlockPos(10496, 100, 9984), "land"))));
 
     private static final int MONSTER_SWEEP_TICKS = 20;
 
@@ -504,6 +508,11 @@ public final class ArenaManager {
     /** 弓箭工作站（弓箭方案 Q1）：射击平台加空场地，布局和其他场地不同；标靶由 {@link BowArena} 管。 */
     public static boolean isBow(String station) {
         return "bow".equals(station);
+    }
+
+    /** 陆地寻路场地（陆地寻路方案）：地形由 arena/land-build 每轮重建，见 {@link LandArena}。 */
+    public static boolean isLand(String station) {
+        return "land".equals(station);
     }
 
     public static boolean isGrindstone(String station) {
@@ -919,6 +928,8 @@ public final class ArenaManager {
             case "sign" -> out.put(at, SignArena.stationState());
             // 弓箭方案 Q1：标靶每轮位置不同，完好检查由 BowArena.intact 做
             case "bow" -> { }
+            // 陆地寻路方案 Q1：没有工作站
+            case "land" -> { }
             // 制图台方案 K1：没有朝向属性
             case "cartography" -> out.put(at, Blocks.CARTOGRAPHY_TABLE.defaultBlockState());
             // 酿造台方案 P1：没有朝向属性；三个药水瓶的方块状态由酿造台自己更新，完好检查只看方块
@@ -962,6 +973,7 @@ public final class ArenaManager {
     public static void reset() {
         active = null;
         BowArena.reset();
+        LandArena.reset();
     }
 
     // ── 搭建 ─────────────────────────────────────────────────────────────
@@ -976,6 +988,8 @@ public final class ArenaManager {
         int placed = 0;
         // 弓箭方案 Q1：射击平台 + 空场地，不搭 11×11 的场内；场外平台照常
         if (isBow(station)) return BowArena.build(level, o) + buildOutside(level, arena, o);
+        // 陆地寻路方案 Q1：场地由 arena/land-build 每轮重建，这里只搭场外平台
+        if (isLand(station)) return buildOutside(level, arena, o);
         // 场内：地板 11×11，外圈屏障墙 3 格高；场内上方清空（所以箱子上方一定是空气、打得开，箱子方案 S4）。
         // 换箱子大小时，多出来的那半随场内清空改回空气
         for (int dx = -5; dx <= 5; dx++) {
@@ -1072,6 +1086,7 @@ public final class ArenaManager {
 
     private static boolean inside(MinecraftServer server, ServerPlayer player, BlockPos o) {
         if (active != null && isBow(active.stationName)) return BowArena.onPlatform(server, player, o);
+        if (active != null && isLand(active.stationName)) return LandArena.insideField(player);
         if (player.level() != server.overworld()) return false;
         int bx = player.getBlockX(), by = player.getBlockY(), bz = player.getBlockZ();
         return Math.abs(bx - o.getX()) <= 4 && Math.abs(bz - o.getZ()) <= 4 && by >= o.getY() && by <= o.getY() + 4;
@@ -1166,7 +1181,8 @@ public final class ArenaManager {
     public static Map<String, Object> prepare(MinecraftServer server, ServerPlayer player, String arena, BlockPos o, String station,
                                               List<Give> requested, List<Give> chestItems, long seed, List<String> watchIds,
                                               Expect expect, long dayTime, EnchantSetup enchantSetup, Integer requestedBeaconLevel, MountSetup mountSetup,
-                                              VillagerArena.Setup villagerSetup, Integer selectedSlot, SignArena.Setup signSetup, BowArena.Setup bowSetup) {
+                                              VillagerArena.Setup villagerSetup, Integer selectedSlot, SignArena.Setup signSetup, BowArena.Setup bowSetup,
+                                              LandArena.Setup landSetup) {
         if (active != null) throw new IllegalStateException("a run is already active in arena " + active.arena + " (call arena/finish first)");
         // 书与笔方案 J4：当前选中的快捷栏格
         if (selectedSlot != null && (selectedSlot < 0 || selectedSlot > 8)) throw new IllegalArgumentException("selectedSlot must be within 0-8: " + selectedSlot);
@@ -1190,6 +1206,9 @@ public final class ArenaManager {
         // 弓箭方案 Q3、Q9：弓箭场地一定要给标靶，别的场地不收；expect.bow 的标靶要和放的一致
         if (isBow(station) != (bowSetup != null)) throw new IllegalArgumentException(isBow(station) ? "the bow station needs bow: { targets: [{ pos: [x, y, z], face }] }" : "bow: {...} needs the bow station");
         if (bowSetup != null) BowArena.check(o, bowSetup.targets());
+        // 陆地寻路方案 §3：陆地场地一定要给 land（起点、中间点、终点），别的场地不收；场地要先 land-build
+        if (isLand(station) != (landSetup != null)) throw new IllegalArgumentException(isLand(station) ? "the land station needs land: { kind, start, yaw, points, goal }" : "land: {...} needs the land station");
+        if (landSetup != null) LandArena.check(o, landSetup);
         if (expect != null && expect.bow() != null && (bowSetup == null || !expect.bow().targets().equals(bowSetup.targets()))) throw new IllegalArgumentException("expect.bow.targets must equal bow.targets (and needs the bow station)");
         String brewProduct = null;
         String crafterProduct = null;
@@ -1330,10 +1349,12 @@ public final class ArenaManager {
         player.inventoryMenu.getCraftSlots().clearContent();
         // 弓箭方案 Q1：站在射击平台中心，朝 +x、视线水平
         if (isBow(station)) player.teleportTo(level, o.getX() + 0.5, o.getY() + 1, o.getZ() + 0.5, Set.of(), -90f, 0f, true);
+        // 陆地寻路方案 Q6：站在起点格子中心，偏航角由插件给，俯仰角 0
+        else if (landSetup != null) player.teleportTo(level, landSetup.start()[0], landSetup.start()[1], landSetup.start()[2], Set.of(), landSetup.yaw(), 0f, true);
         else teleportInside(server, player, o, isMount(station) ? mountPitch(player, o, mountSetup.animal())
                 : isVillager(station) ? villagerPitch(player, o) : stationBlock != null ? stationPitch(player, o) : 0f);
         // 3. 场内掉落物、经验球、敌对生物
-        for (Entity e : level.getEntitiesOfClass(Entity.class, box(o),
+        for (Entity e : level.getEntitiesOfClass(Entity.class, isLand(station) ? LandArena.siteAabb(o) : box(o),
                 e -> e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy || (isMount(station) && isMountEntity(e))
                         || (isVillager(station) && e instanceof Villager))) {
             e.discard();
@@ -1351,8 +1372,8 @@ public final class ArenaManager {
             villager = villagerMade.villager();
             VillagerArena.place(level, villager, at.x, at.y, at.z, 180f);
         }
-        // 4. 状态
-        player.setGameMode(GameType.SURVIVAL);
+        // 4. 状态（陆地寻路方案 Q6：冒险模式，不能挖、不能放方块；本轮结束后改回生存）
+        player.setGameMode(isLand(station) ? GameType.ADVENTURE : GameType.SURVIVAL);
         player.removeAllEffects();
         player.setHealth(player.getMaxHealth());
         player.getFoodData().setFoodLevel(20);
@@ -1412,6 +1433,8 @@ public final class ArenaManager {
             baseline.put(watchIds.get(i), value);
         }
         active = new Run(arena, o.immutable(), player.getUUID(), watch, System.currentTimeMillis(), station, stationBlock, expect);
+        // 陆地寻路方案 Q8、Q13：从玩家已在起点的这一刻开始逐 tick 记录
+        if (landSetup != null) LandArena.begin(server, player, landSetup);
         active.mapSource = mapSource;
         if (mount != null) {
             active.mountUuid = mount.getUUID();
@@ -1468,6 +1491,8 @@ public final class ArenaManager {
             bowInfo.put("selectedSlot", player.getInventory().getSelectedSlot());
             out.put("bow", bowInfo);
         }
+        // 陆地寻路方案 §3：插件用它核对场地和题目
+        if (landSetup != null) out.put("land", LandArena.describeSetup());
         // 书与笔方案 J11：插件用它核对书发对了、选中格设上了
         if (expect != null && expect.book() != null) {
             Map<String, Object> bookInfo = new LinkedHashMap<>();
@@ -1576,7 +1601,7 @@ public final class ArenaManager {
             out.put("openedAtMs", active.openedAtMs);
             out.put("stationIntact", stationIntact(level, active));
         }
-        if (active.expect != null) out.put("reachedAtMs", active.reachedAtMs);
+        if (active.expect != null || isLand(active.stationName)) out.put("reachedAtMs", active.reachedAtMs);
         ServerPlayer player = server.getPlayerList().getPlayer(active.player);
         out.put("playerOnline", player != null);
         if (player == null) return out;
@@ -1638,6 +1663,10 @@ public final class ArenaManager {
             out.put("dropped", dropped(level, active.origin));
             out.put("loaded", BowArena.loaded(player, level, box(active.origin)));
             out.put("selectedSlot", player.getInventory().getSelectedSlot());
+        }
+        if (isLand(active.stationName)) {
+            // 陆地寻路方案 Q13：开始移动、中间点、到达、受伤、掉出场地、死亡、当前位置
+            out.put("land", LandArena.describe(player));
         }
         if (isGrindstone(active.stationName)) {
             // 砂轮方案 K7、K8：物品栏（不含光标）的计数和每件的签名，光标，砂轮两个输入格（界面开着时；关界面时退回物品栏），
@@ -1768,6 +1797,7 @@ public final class ArenaManager {
     private static boolean stationIntact(ServerLevel level, Run run) {
         // 弓箭方案 Q7：标靶都还在
         if (isBow(run.stationName)) return BowArena.intact(level);
+        if (isLand(run.stationName)) return true;
         if (isAnvil(run.stationName)) return level.getBlockState(stationPos(run.origin)).is(BlockTags.ANVIL);
         // 坐骑方案 H2：动物还在（活着、在场地范围里）；鹦鹉螺组的水坑不算工作站
         if (isMount(run.stationName)) return mountOf(level, run) != null;
@@ -1784,6 +1814,14 @@ public final class ArenaManager {
     public static Map<String, Object> finish(MinecraftServer server, ServerPlayer player, BlockPos fallbackOrigin) {
         Map<String, Object> out = status(server);
         BlockPos o = active != null ? active.origin : fallbackOrigin;
+        // 陆地寻路方案 Q13：读完状态再取轨迹和每次受伤；改回生存模式、回满血（Q6）
+        if (active != null && isLand(active.stationName)) {
+            out.put("land", LandArena.finalState(player));
+            LandArena.end();
+            player.setGameMode(GameType.SURVIVAL);
+            player.resetFallDistance();
+            player.setHealth(player.getMaxHealth());
+        }
         // 告示牌方案 Q11：读完状态后清掉登记的编辑人，之后才到的改字包不再改动告示牌
         if (active != null && isSign(active.stationName)) SignArena.release(SignArena.at(server.overworld(), stationPos(o)));
         // 弓箭方案 Q8：读完状态后删掉还在飞的箭
@@ -1821,6 +1859,11 @@ public final class ArenaManager {
         if (isMount(run.stationName)) trackMount(server.overworld(), player, run);
         // 弓箭方案 Q7、Q8：箭的轨迹、飞出场地、离开平台
         if (isBow(run.stationName)) BowArena.tick(server, player);
+        // 陆地寻路方案 Q8、Q10、Q13：轨迹、开始移动、中间点、到达、掉出场地
+        if (isLand(run.stationName)) {
+            LandArena.tick(server, player);
+            if (run.reachedAtMs == null && LandArena.reached()) run.reachedAtMs = LandArena.reachedAtMs();
+        }
         if (run.station != null && run.openedAtMs == null && (isMount(run.stationName) ? opensMount(run, player.containerMenu)
                 : isVillager(run.stationName) ? opensVillager(server.overworld(), player, run) : opensStation(run.stationName, player.containerMenu))) {
             run.openedAtMs = System.currentTimeMillis();
@@ -1829,7 +1872,8 @@ public final class ArenaManager {
             run.reachedAtMs = System.currentTimeMillis();
         }
         if (++tickCounter % MONSTER_SWEEP_TICKS == 0) {
-            for (Entity e : server.overworld().getEntitiesOfClass(Entity.class, box(run.origin), e -> e instanceof Enemy)) e.discard();
+            AABB sweep = isLand(run.stationName) ? LandArena.siteAabb(run.origin) : box(run.origin);
+            for (Entity e : server.overworld().getEntitiesOfClass(Entity.class, sweep, e -> e instanceof Enemy)) e.discard();
         }
     }
 
@@ -1873,6 +1917,8 @@ public final class ArenaManager {
             case "sign" -> false;
             // 弓箭场地没有界面
             case "bow" -> false;
+            // 陆地寻路场地没有界面
+            case "land" -> false;
             default -> menu instanceof CraftingMenu;
         };
     }

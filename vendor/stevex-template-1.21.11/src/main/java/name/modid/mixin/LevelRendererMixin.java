@@ -75,6 +75,8 @@ public abstract class LevelRendererMixin {
             final CallbackInfo ci
     ) {
         DepthCapture.tryCapture(camera, projectionMatrix, modelViewMatrix);
+        // 陆地寻路训练场的观察标记（Q4b）：记下本帧的投影，HUD 用它把世界坐标换成屏幕坐标
+        name.modid.LandMarkerHud.onFrame(camera, projectionMatrix, modelViewMatrix);
     }
 
     /**

@@ -41,6 +41,9 @@ public class SteveX implements ModInitializer {
 		ServerTickEvents.END_SERVER_TICK.register(ArenaManager::onServerTick);
 		// 弓箭训练场（docs/弓箭训练场设计方案.md Q8）：登记本轮玩家射出的箭
 		ServerEntityEvents.ENTITY_LOAD.register(name.modid.arena.BowArena::onEntityLoad);
+		// 陆地寻路训练场（docs/陆地寻路训练场设计方案.md Q9）：本轮玩家的每一次受伤；死亡拦下来记 died，不真死
+		net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents.AFTER_DAMAGE.register(name.modid.arena.LandArena::onDamage);
+		net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents.ALLOW_DEATH.register(name.modid.arena.LandArena::allowDeath);
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> ArenaManager.reset());
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> ArenaCommand.register(dispatcher));
 

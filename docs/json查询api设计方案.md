@@ -42,7 +42,7 @@ body:    { host: 'json.query', literalParams: true }   ← 宿主实现（要读
 | `records` | string | 否 | 记录数组在文件里的点分路径（如 `"recipes"`）；文件根就是数组时省略 |
 | `filters` | object | 否 | 同 NBT：键 = 记录内点分路径，值 = 字面量 / `{min,max}` 区间 / 数组 = 并集；多键 AND |
 | `fields` | string[] | 是 | 投影：输出哪些路径。没有"全字段"默认值 |
-| `limit` | int | 否 | 1..512，默认 64 |
+| `limit` | int | 否 | 1..4096，默认 64（2026-11-28 从 1..512 调到 1..4096，字节预算 256 KB 不变） |
 
 比 NBT 多一个 `records`：NBT 的记录集由数据源定义死，JSON 文件的结构各不相同，需要指出"哪个数组是记录"。
 

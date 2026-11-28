@@ -71,6 +71,8 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
   const booker = picked.some(isBookRecord)
   const signer = picked.some(isSignRecord)
   const bower = picked.some(isBowRecord)
+  // 陆地寻路（陆地寻路训练场设计方案 Q15）：自己的一套分组和列
+  if (picked.some(isLandRecord)) return summarizeLand(picked.filter(isLandRecord), by === 'target' ? 'ground' : by)
   // 任务历史（任务历史方案 H10）：记录里有 assessed 字段才显示这几列
   const historyCols = picked.some((r) => r.assessed !== undefined)
   // 弓箭题（弓箭方案第三稿 Q20）：弓和弩的记录都有、又不是按武器分组时，按武器分成几张表
@@ -81,11 +83,12 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
       return { split, rows: [], total: { key: '（合计）', runs: picked.length }, by }
     }
   }
-  // 没有弓的表不显示"没拉满"的两栏（第三稿 Q20、第四稿 Q26）；只有三叉戟的表换栏名（Q26）
+  // 没有弓的表不显示"没拉满"的两栏（第三稿 Q20、第四稿 Q26）；只有三叉戟、只有钓竿的表换栏名（Q26、第五稿 Q34）
   const crossbowOnly = bower && picked.filter(isBowRecord).every((r) => bowWeapon(r) !== 'bow')
   const tridentOnly = bower && picked.filter(isBowRecord).every((r) => bowWeapon(r) === 'trident')
-  // 弓箭题（弓箭方案 Q11）：按距离分组时一行是一个标靶，不是一轮
-  if (bower && by === 'dist') return summarizeBowDist(picked)
+  const rodOnly = bower && picked.filter(isBowRecord).every((r) => bowWeapon(r) === 'fishing_rod')
+  // 弓箭题（弓箭方案 Q11）：按距离分组时一行是一个标靶，不是一轮；钓竿按 2 格一段（第五稿 Q34）
+  if (bower && by === 'dist') return summarizeBowDist(picked, rodOnly ? ROD_DIST_BANDS : DIST_BANDS)
   const group = (list) => {
     const count = (outcome) => list.filter((r) => r.outcome === outcome).length
     const success = list.filter((r) => r.outcome === 'success')
@@ -150,7 +153,7 @@ export function summarize(records, { last = null, batch = null, by = 'target' } 
     groups.get(key).push(r)
   }
   const rows = [...groups].map(([key, list]) => ({ key, ...group(list) })).sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
-  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, bower, crossbowOnly, tridentOnly, historyCols }
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, station, multi, storage, cutter, cooker, enchanter, beaconer, anviler, smither, mounter, loomer, charter, brewer, crafterer, trader, grinder, booker, signer, bower, crossbowOnly, tridentOnly, rodOnly, historyCols }
 }
 
 /** 弓箭题（弓箭方案 Q11）：一支箭是射向哪个标靶的——射中的那个，没中的取轨迹最近的那个 */
@@ -179,18 +182,20 @@ function bowStats(list) {
 }
 
 /** 武器（第三稿 Q14、Q20）：旧记录没有 weapon，按弓算 */
-const BOW_WEAPONS = ['bow', 'crossbow', 'trident']
-const WEAPON_LABEL = { bow: '弓', crossbow: '弩', trident: '三叉戟' }
+const BOW_WEAPONS = ['bow', 'crossbow', 'trident', 'fishing_rod']
+const WEAPON_LABEL = { bow: '弓', crossbow: '弩', trident: '三叉戟', fishing_rod: '钓竿' }
 const bowWeapon = (r) => r.weapon ?? 'bow'
 
 /** 离开平台另有 doomed 一栏，原因栏只列这三条 */
 const BOW_ROUND_FAULTS = ['miss', 'weak', 'unshot']
 const DIST_BANDS = [[0, 8, '8 格以内'], [8, 16, '8–16 格'], [16, 24, '16–24 格'], [24, 32, '24–32 格'], [32, 40, '32–40 格'], [40, Infinity, '40 格以上']]
-const distBand = (d) => DIST_BANDS.find(([lo, hi]) => d >= lo && d < hi)?.[2] ?? '（未记录）'
+/** 钓竿的距离分段（第五稿 Q34：射程只有十来格） */
+const ROD_DIST_BANDS = [[0, 2, '2 格以内'], [2, 4, '2–4 格'], [4, 6, '4–6 格'], [6, 8, '6–8 格'], [8, 10, '8–10 格'], [10, Infinity, '10 格以上']]
+const distBand = (d, bands = DIST_BANDS) => bands.find(([lo, hi]) => d >= lo && d < hi)?.[2] ?? '（未记录）'
 
 /** 弓箭题按距离分组（Q11）：一行是一个标靶 */
-function summarizeBowDist(picked) {
-  const units = picked.filter(isBowRecord).flatMap((r) => r.targets.map((t, i) => ({ r, i, key: distBand(t.dist) })))
+function summarizeBowDist(picked, bands = DIST_BANDS) {
+  const units = picked.filter(isBowRecord).flatMap((r) => r.targets.map((t, i) => ({ r, i, key: distBand(t.dist, bands) })))
   const group = (us) => {
     const arrows = us.flatMap(({ r, i }) => (r.arrows ?? []).filter((a) => aimedAt(a) === i))
     const firsts = us.map(({ r, i }) => firstArrowHit(r, i)).filter((x) => x !== null)
@@ -200,10 +205,90 @@ function summarizeBowDist(picked) {
       arrows: arrows.length, medianErr: median(arrows.map(arrowErr).filter(Number.isFinite))
     }
   }
-  const order = DIST_BANDS.map(([, , label]) => label)
+  const order = bands.map(([, , label]) => label)
   const keys = [...new Set(units.map((u) => u.key))].sort((a, b) => order.indexOf(a) - order.indexOf(b))
   const rows = keys.map((key) => ({ key, ...group(units.filter((u) => u.key === key)) }))
   return { rows, total: { key: '（合计）', runs: picked.length, ...group(units) }, by: 'dist', bower: true, bowDist: true }
+}
+
+// ── 陆地寻路（陆地寻路训练场设计方案 Q15）─────────────────────────────────
+
+/** 陆地寻路的记录：type 是 route / goal，有参照路线和 moveTicks 字段 */
+const isLandRecord = (r) => (r.type === 'route' || r.type === 'goal') && 'moveTicks' in r && 'reference' in r
+const LAND_GROUND_NAMES = { flat: '平地', synthetic: '模拟起伏', terrain: '真实世界' }
+const LAND_MEMORY_NAMES = { prefill: '预填', none: '不预填' }
+const LAND_DIST_BANDS = [[0, 16, '16 格以内'], [16, 24, '16–24 格'], [24, 32, '24–32 格'], [32, 48, '32–48 格'], [48, Infinity, '48 格以上']]
+const medianFloat = (values) => {
+  if (!values.length) return null
+  const s = [...values].sort((a, b) => a - b)
+  const mid = s.length >> 1
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+}
+
+function landKey(r, by) {
+  if (by === 'memory') return LAND_MEMORY_NAMES[r.memory] ?? r.memory ?? null
+  if (by === 'dist') return typeof r.dist === 'number' ? distBand(r.dist, LAND_DIST_BANDS) : null
+  if (by === 'points') return Array.isArray(r.points) ? `${r.points.length} 个点` : null
+  // 第四稿 Q20：边缘点数。第四稿之前的路线题没有这个字段，那时中间点都离边缘 ≥ 2 格，算 0 个
+  if (by === 'edge') return r.type === 'route' ? `${(r.edgePoints ?? []).length} 个靠边` : null
+  return LAND_GROUND_NAMES[r.ground] ?? r.ground ?? null
+}
+
+/**
+ * 陆地寻路的汇总（Q15）：缺省按地形分组；记录里有两种记忆模式、又不是按记忆模式分组时，按记忆模式分表
+ * （胶囊准入要求不预填的图也过门槛，先在报告里分开看，F13）。
+ */
+function summarizeLand(picked, by) {
+  const modes = ['prefill', 'none'].filter((m) => picked.some((r) => r.memory === m))
+  if (modes.length > 1 && by !== 'memory') {
+    const split = modes.map((m) => ({ title: `【记忆${LAND_MEMORY_NAMES[m]}】`, summary: summarizeLand(picked.filter((r) => r.memory === m), by) }))
+    return { split, rows: [], total: { key: '（合计）', runs: picked.length }, by }
+  }
+  const group = (list) => {
+    const count = (outcome) => list.filter((r) => r.outcome === outcome).length
+    const success = list.filter((r) => r.outcome === 'success')
+    const tokens = list.map((r) => r.tokens?.total).filter((n) => Number.isInteger(n))
+    return {
+      runs: list.length,
+      success: count('success'),
+      falseSuccess: count('false_success'),
+      failed: count('failed'),
+      timeout: count('timeout'),
+      aborted: count('aborted'),
+      fell: list.filter((r) => r.doomed === 'fell').length,
+      died: list.filter((r) => r.doomed === 'died').length,
+      skipped: list.filter((r) => (r.faults ?? []).includes('skipped')).length,
+      hurtRuns: list.filter((r) => r.hurt).length,
+      hurtSuccess: success.filter((r) => r.hurt).length,
+      medianDamage: medianFloat(list.map((r) => r.damage).filter(Number.isFinite)),
+      medianMoveTicks: median(success.map((r) => r.moveTicks).filter(Number.isFinite)),
+      medianRatio: medianFloat(success.map((r) => r.ratio).filter(Number.isFinite)),
+      medianThinkMs: median(list.map((r) => r.thinkMs).filter(Number.isFinite)),
+      medianTaskMs: median(list.map((r) => r.taskMs).filter(Number.isFinite)),
+      medianTokens: median(tokens)
+    }
+  }
+  const groups = new Map()
+  for (const r of picked) {
+    const key = landKey(r, by) ?? '（未记录）'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(r)
+  }
+  const order = by === 'dist' ? LAND_DIST_BANDS.map(([, , label]) => label) : by === 'ground' || !['memory', 'dist', 'points', 'edge'].includes(by) ? Object.values(LAND_GROUND_NAMES) : null
+  const rows = [...groups].map(([key, list]) => ({ key, ...group(list) }))
+    .sort((a, b) => (order ? order.indexOf(a.key) - order.indexOf(b.key) : a.key.localeCompare(b.key)))
+  return { rows, total: { key: '（合计）', ...group(picked) }, by, lander: true, router: picked.some((r) => r.type === 'route') }
+}
+
+/** 陆地寻路的表（Q15）：到达率、提前结束、受伤、用时（tick）、用时 ÷ 参照用时、开始移动前的时间 */
+function formatLand({ rows, total, by, router }) {
+  const head = [{ memory: '记忆', dist: '距离', points: '中间点', edge: '边缘点' }[by] ?? '地形', '轮数', '到达率', '虚报', '失败', '超时', '中止', '掉出场地', '死亡',
+    ...(router ? ['跳过点'] : []), '受伤轮次', '到达但受伤', '掉血中位', '用时中位(tick)', '用时/参照中位', '开始移动前中位', '任务中位', 'token中位']
+  const ratio = (v) => (Number.isFinite(v) ? v.toFixed(2) : '-')
+  const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.fell, r.died,
+    ...(router ? [r.skipped] : []), pct(r.hurtRuns, r.runs), r.hurtSuccess, Number.isFinite(r.medianDamage) ? r.medianDamage.toFixed(1) : '-',
+    r.medianMoveTicks ?? '-', ratio(r.medianRatio), secs(r.medianThinkMs), secs(r.medianTaskMs), r.medianTokens ?? '-'].join('\t')
+  return [head.join('\t'), ...rows.map(line), line(total)].join('\n')
 }
 
 /** 切石题的记录：materials 是 [{ id, family, styles }]（合成题的材料字段叫 items） */
@@ -359,11 +444,12 @@ function portionsKey(r) {
 
 const BY_LABEL = { target: '目标', shape: '形状', portions: 'n/m', task: '取放/关系', chest: '箱子', stack: '堆叠上限', fill: '每格数量', targets: '目标数', materials: '材料种数', styles: '样式数', yield: '每次产出', family: '材料家族', station: '炉子', band: '燃料档', kind: '物品类别', slot: '目标档', enchantment: '目标附魔', effect: '目标效果', level: '底座等级', payment: '付款物品', item: '物品', second: '第二件', tasks: '题数', pattern: '纹饰样式', material: '纹饰材料', group: '组', animal: '动物', banners: '底色种数', color: '颜色', ops: '步数', scale: '开局缩放等级', spare: '余量', ingredient: '材料', bottle: '瓶子', cells: '配方格数', k: '交易笔数', profession: '职业', chain: '串联', curses: '诅咒', hand: '书在不在手上', edits: '改几行', dist: '距离', weapon: '武器' }
 
-export function formatSummary({ split = null, rows, total, by = 'target', crossbowOnly = false, tridentOnly = false, station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, bower = false, bowDist = false, historyCols = false }) {
+export function formatSummary({ split = null, rows, total, by = 'target', crossbowOnly = false, tridentOnly = false, rodOnly = false, station = false, multi = false, storage = false, cutter = false, cooker = false, enchanter = false, beaconer = false, anviler = false, smither = false, mounter = false, loomer = false, charter = false, brewer = false, crafterer = false, trader = false, grinder = false, booker = false, signer = false, bower = false, bowDist = false, historyCols = false, lander = false, router = false }) {
   if (split) return split.map(({ title, summary }) => `${title}\n${formatSummary(summary)}`).join('\n\n')
   if (total.runs === 0) return '没有训练记录'
+  if (lander) return formatLand({ rows, total, by, router })
   if (bowDist) return formatBowDist({ rows, total })
-  if (bower) return formatBow({ rows, total, by, historyCols, crossbowOnly, tridentOnly })
+  if (bower) return formatBow({ rows, total, by, historyCols, crossbowOnly, tridentOnly, rodOnly })
   if (signer) return formatSign({ rows, total, by, historyCols })
   if (booker) return formatBook({ rows, total, by, historyCols })
   if (grinder) return formatGrindstone({ rows, total, by, historyCols })
@@ -470,14 +556,15 @@ const errText = (v) => (Number.isFinite(v) ? v.toFixed(2) : '-')
 
 /**
  * 弓箭题的表（弓箭方案 Q11）：一行一组轮次；结果列之后是两种提前结束、各原因的轮数，再是按箭、按标靶算的命中和偏差。
- * 没有弓的记录时不显示"没拉满"的两栏（第三稿 Q20）；只有三叉戟的记录时，"箭用完""箭没射完""箭命中率"换成三叉戟的说法（第四稿 Q26）。
+ * 没有弓的记录时不显示"没拉满"的两栏（第三稿 Q20）；只有三叉戟的记录时，"箭用完""箭没射完""箭命中率"换成三叉戟的说法（第四稿 Q26）；
+ * 只有钓竿的记录时换成"次数用完""没抛完""命中率"（第五稿 Q34）。
  */
-function formatBow({ rows, total, by, historyCols, crossbowOnly = false, tridentOnly = false }) {
+function formatBow({ rows, total, by, historyCols, crossbowOnly = false, tridentOnly = false, rodOnly = false }) {
   const faults = crossbowOnly ? BOW_ROUND_FAULTS.filter((f) => f !== 'weak') : BOW_ROUND_FAULTS
-  const faultName = (f) => (tridentOnly && f === 'unshot' ? '三叉戟没掷完' : BOW_FAULT_NAMES[f])
-  const head = [by === 'targets' ? '标靶数' : BY_LABEL[by] ?? '目标', '轮数', '全中率', '虚报', '失败', '超时', '中止', '丢失', '离开平台', tridentOnly ? '三叉戟用完' : '箭用完',
+  const faultName = (f) => (f === 'unshot' && tridentOnly ? '三叉戟没掷完' : f === 'unshot' && rodOnly ? '没抛完' : BOW_FAULT_NAMES[f])
+  const head = [by === 'targets' ? '标靶数' : BY_LABEL[by] ?? '目标', '轮数', '全中率', '虚报', '失败', '超时', '中止', '丢失', '离开平台', tridentOnly ? '三叉戟用完' : rodOnly ? '次数用完' : '箭用完',
     ...faults.map(faultName),
-    tridentOnly ? '命中率' : '箭命中率', '首箭命中率', '偏差中位', ...(crossbowOnly ? [] : ['没拉满的箭']), '达成中位', '任务中位', 'token中位',
+    tridentOnly || rodOnly ? '命中率' : '箭命中率', '首箭命中率', '偏差中位', ...(crossbowOnly ? [] : ['没拉满的箭']), '达成中位', '任务中位', 'token中位',
     ...(historyCols ? ['mod调用中位', '评估提出问题', '有前驱', '前驱问题解决'] : [])]
   const line = (r) => [r.key, r.runs, pct(r.success, r.runs), r.falseSuccess, r.failed, r.timeout, r.aborted, r.lost, r.bow.doomedLeft, r.bow.doomedOut,
     ...faults.map((f) => r.bow.faults[f]),

@@ -21,7 +21,8 @@
 		"LlamaAccessor",
 		"BrewingStandAccessor",
 		"BrewingBrewMixin",
-		"AbstractArrowHitMixin"
+		"AbstractArrowHitMixin",
+		"FishingHookHitMixin"
 	],
 	"client": [
 		"LevelRendererMixin",
